@@ -1,0 +1,99 @@
+[project]
+name = "voitta-bookmarklet-backend"
+version = "0.1.0"
+description = "FastAPI backend for the Voitta bookmarklet chat pane (Anthropic + OpenAI + Gemini)."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "sse-starlette>=2.1",
+  # Outbound HTTP from backend tools (provider downloads, web_fetch).
+  "httpx>=0.28",
+  # LLM providers
+  "anthropic>=0.40",
+  "openai>=1.50",
+  "google-genai>=0.3",
+  # RAG
+  "chromadb>=0.5.20",
+  "bm25s>=0.2.6",
+  "PyStemmer>=2.2.0; platform_system != 'Windows'",
+  # HoloViz stack — Panel renders the in-pane report iframe; HoloViews
+  # and hvplot are the canonical chart libraries in user report scripts
+  # (Panel pulls Bokeh in transitively, but not HoloViews).
+  "panel>=1.5",
+  # Mounts Panel apps into FastAPI (websocket + Bokeh session machinery).
+  # Required for live drag/drop on EditableTemplate; static .save() can't
+  # commit drag positions without the Bokeh comm round-trip.
+  "bokeh-fastapi>=0.0.5",
+  "holoviews>=1.20",
+  "hvplot>=0.10",
+  # User compute / report scripts: ctx.image() accepts matplotlib Figures
+  # and PIL Images; both must be importable from the script body.
+  "matplotlib>=3.8",
+  "pillow>=10.0",
+  # df.to_markdown() (frequent in LLM-authored compute scripts) requires
+  # tabulate as an optional pandas extra. Without it, scripts crash with
+  # ModuleNotFoundError mid-run.
+  "tabulate>=0.9",
+  # web_fetch tool: PDF text extraction for arbitrary web PDFs. Pure
+  # Python, no system deps.
+  "pypdf>=5.0",
+  # Scientific data formats — needed by user compute scripts that pull
+  # HDF5 / netCDF artefacts out of python_storage. All ship binary
+  # wheels for macOS/arm64 + Linux/x86_64 so no system-level HDF5 is
+  # required at install time (the bundled libhdf5 inside the wheels is
+  # used). hdf5plugin registers the compression filters (Blosc, LZ4,
+  # BZIP2, ZSTD, etc.) that h5py / tables / netCDF4 / h5netcdf / xarray
+  # need to read filter-using files; importing it once is enough.
+  "h5py>=3.10",
+  "tables>=3.9",
+  "netCDF4>=1.6",
+  "hdf5plugin>=4.3",
+  "h5netcdf>=1.3",
+  "xarray>=2024.1",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+# `pip install -e ".[desktop]"` enables the menu-bar / .app build flow.
+# rumps gives us NSStatusBar without writing PyObjC by hand; pyobjc-*
+# frameworks are pulled in transitively but listed explicitly so the
+# py2app collector sees them. py2app itself is the bundler.
+desktop = [
+  "rumps>=0.4.0",
+  "pyobjc-framework-Cocoa>=10.0",
+  # briefcase replaces py2app as the .app builder. Picked it over py2app
+  # because py2app's macholib step fails on macOS 15 Sequoia with a
+  # kernel-level "Operation not permitted" on dylib rewrites that no
+  # userspace shim could lift. Briefcase builds via a different path
+  # (pre-relocated CPython support package + bundled deps) that
+  # sidesteps the install_name_tool problem entirely.
+  "briefcase>=0.4.1",
+]
+
+[project.scripts]
+voitta-desktop = "app.desktop:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+
+# Briefcase config (project_name, bundle, sources, requires, …) lives at
+# the repo root in `pyproject.toml`. That's intentional: briefcase writes
+# `build/` and `dist/` next to its manifest, so we keep the redistributable
+# artefacts at the top of the repo instead of buried in backend/.
+# See `pyproject.toml` and `build_app.sh` at the repo root.
