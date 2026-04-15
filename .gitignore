@@ -1,0 +1,85 @@
+# env / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.egg
+
+# RAG indexes (rebuildable from docs/ via rag/build_rag.py and from
+# libs-info/panel/ via rag/build_panel_rag.py)
+rag/.chroma/
+rag/.bm25/
+rag/.chroma_panel/
+rag/.bm25_panel/
+
+# Server-side snapshot cache (provider download tools, e.g.
+# drive_download_to_python_storage)
+python_storage/
+
+# User-defined Python scripts (run_compute + define_report tools).
+# Ignore *contents* (not the dirs themselves) so individual adapters
+# can be re-included with !-patterns below.
+scripts/compute/*
+scripts/reports/*
+# Shipped adapters that wrap permanent backend modules.
+!scripts/compute/a4db_parse/
+!scripts/compute/dat_parse/
+!scripts/reports/a4db_3d/
+!scripts/reports/dat_curves/
+
+# TLS material
+backend/certs/*.pem
+
+# Frontend build artefacts (when the frontend lands)
+frontend/node_modules/
+frontend/dist/
+
+# Briefcase / .app build outputs at the repo root + nested per-package.
+/build/
+/dist/
+/wheels/
+backend/build/
+backend/logs/
+# Resources auto-staged into src/voitta/resources/ by build_app.sh
+# (sourced from frontend/dist/ and backend/certs/, plus the curated
+# docs / rag_scripts / seed_scripts the installer copies out at
+# first launch).
+/src/voitta/resources/frontend_dist/
+/src/voitta/resources/default_certs/
+/src/voitta/resources/docs/
+/src/voitta/resources/rag_scripts/
+/src/voitta/resources/seed_scripts/
+/src/voitta/resources/plugins/
+# Briefcase log dir (created on errors).
+/logs/
+
+# Plugin overlays. Every plugin lives under /plugins/<name>/ and is
+# gitignored by default — the convention is "drop a plugin folder,
+# voitta core picks it up at startup, source code stays out of the
+# OSS tree". The canonical reference plugin (google) is the lone
+# carve-out so a fresh clone has a working integration to study.
+#
+# Pattern note: ``/plugins/*`` excludes children but NOT the parent
+# directory itself, which is what we need — once the parent is excluded
+# git refuses to re-include any descendants. See "It is not possible to
+# re-include a file if a parent directory of that file is excluded" in
+# `man gitignore`.
+/plugins/*
+!/plugins/google/
+!/plugins/ebay/
+
+# Generated icon assets — `tools/generate_icon.py` rebuilds them
+# from the colours and font choices in that script. The intermediate
+# iconset PNGs are tracked-out; the final .icns is too (it's binary
+# and we'd rather rebuild than diff a binary blob in PRs).
+/icons/voitta.iconset/
+/icons/voitta.icns
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
