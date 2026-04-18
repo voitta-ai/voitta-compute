@@ -1,0 +1,1096 @@
+/* Voitta bookmarklet pane styles. Loaded as a `?raw` import into the
+   Shadow DOM so they never touch the host page. All color/typography
+   tokens come from `theme.css` — swap that file to rebrand. */
+
+:host {
+  all: initial;
+}
+* {
+  box-sizing: border-box;
+}
+
+.root {
+  font-family: var(--voitta-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--voitta-text);
+}
+
+/* ─── floating handle (visible only when closed) ─────────────────────────── */
+.handle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 60px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-bg);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--voitta-shadow-handle);
+  transition: background 0.15s ease, opacity 0.18s ease;
+  padding: 0;
+}
+.handle:hover {
+  background: #1e293b;
+}
+.root[data-open="true"] .handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ─── drawer ─────────────────────────────────────────────────────────────── */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: var(--voitta-pane-width);
+  max-width: 92vw;
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  border-left: 1px solid var(--voitta-border);
+  box-shadow: var(--voitta-shadow);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.root[data-open="true"] .drawer {
+  transform: translateX(0);
+}
+.root[data-resizing="true"] .drawer {
+  transition: none;
+}
+
+/* ─── left-edge resize grip ──────────────────────────────────────────────── */
+.resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 1;
+  user-select: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.resizer:hover {
+  background: var(--voitta-accent-tint);
+}
+.root[data-resizing="true"] .resizer {
+  background: var(--voitta-accent-tint);
+}
+
+/* ─── header ─────────────────────────────────────────────────────────────── */
+header {
+  padding: 10px 14px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--voitta-header-rule);
+  flex-shrink: 0;
+}
+header .brand-mark {
+  color: var(--voitta-header-icon);
+  font-size: 14px;
+  line-height: 1;
+}
+header .brand-name {
+  font-family: var(--voitta-font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+}
+header .spacer {
+  flex: 1;
+}
+header .hbtn {
+  background: transparent;
+  border: none;
+  color: var(--voitta-header-fg);
+  font: 16px/1 var(--voitta-font-sans);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--voitta-radius-sm);
+}
+header .hbtn:hover {
+  background: var(--voitta-header-btn-bg-hover);
+}
+header .hbtn.active {
+  background: var(--voitta-header-btn-bg-hover);
+}
+
+/* provider chip — current provider name; click to open Settings */
+header .provider-chip {
+  font: 600 10px/1 var(--voitta-font-sans);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  background: var(--voitta-header-btn-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-btn-bg-hover);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+header .provider-chip:hover {
+  background: var(--voitta-header-btn-bg-hover);
+}
+
+/* ─── messages ───────────────────────────────────────────────────────────── */
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.empty {
+  margin: auto;
+  text-align: center;
+  color: var(--voitta-text-muted);
+  padding: 24px 16px;
+}
+.empty .badge {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.msg {
+  max-width: 92%;
+  word-wrap: break-word;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.msg.user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--voitta-user-bubble);
+  color: var(--voitta-user-bubble-fg);
+  white-space: pre-wrap;
+}
+.msg.assistant {
+  align-self: flex-start;
+  max-width: 95%;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-border);
+}
+.msg.error {
+  align-self: stretch;
+  background: var(--voitta-error-bg);
+  color: var(--voitta-error-fg);
+  border: 1px solid var(--voitta-error-border);
+  white-space: pre-wrap;
+}
+
+/* assistant turn = vertical stack of items (text bubbles, tool blocks) */
+.turn.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+  min-width: 0;
+}
+.turn.assistant.streaming .msg.assistant:last-child {
+  border-color: var(--voitta-accent-tint);
+}
+.turn.assistant .msg.assistant {
+  align-self: flex-start;
+}
+
+/* sequential tool-call blocks (collapsible `<details>`) */
+.tool-line {
+  align-self: flex-start;
+  max-width: 95%;
+  background: #f4f4f4;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--voitta-text);
+}
+.tool-line .sym {
+  font-weight: 700;
+  margin-right: 4px;
+}
+.tool-line .name {
+  font-weight: 600;
+}
+.tool-line .extra {
+  color: var(--voitta-text-muted);
+  margin-left: 4px;
+  font-weight: normal;
+}
+.tool-line summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  outline: none;
+}
+.tool-line summary::-webkit-details-marker {
+  display: none;
+}
+.tool-line summary::before {
+  content: "▸ ";
+  color: var(--voitta-text-faint);
+  font-size: 10px;
+}
+.tool-line[open] summary::before {
+  content: "▾ ";
+}
+.tool-line.status-running {
+  background: var(--voitta-warn-bg);
+  border-color: var(--voitta-warn-border);
+  color: var(--voitta-warn-fg);
+}
+.tool-line.status-running .sym {
+  animation: voitta-pulse 1.2s ease-in-out infinite;
+}
+.tool-line.status-ok {
+  background: #f4f4f4;
+  border-color: #e0e0e0;
+  color: var(--voitta-text);
+}
+.tool-line.status-ok .sym {
+  color: var(--voitta-ok-fg);
+}
+.tool-line.status-error {
+  background: var(--voitta-error-bg);
+  border-color: var(--voitta-error-border);
+  color: var(--voitta-error-fg);
+}
+.tool-line.status-error .sym {
+  color: var(--voitta-error-fg);
+}
+.tool-line .tool-body {
+  margin: 6px 0 0;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  overflow: auto;
+  max-height: 240px;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--voitta-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes voitta-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.dots {
+  display: inline-block;
+  color: var(--voitta-text-faint);
+  letter-spacing: 2px;
+}
+
+/* Rotating Claude-Code-style "thinking" verb shown next to the streaming
+   indicator. Italic + muted; the trailing .dots inherit the existing
+   muted styling so they sit visually next to the verb. */
+.spinner-verb {
+  display: inline-block;
+  margin-top: 6px;
+  font-style: italic;
+  color: var(--voitta-text-faint);
+  font-size: 13px;
+}
+.spinner-verb .dots {
+  margin-left: 2px;
+}
+
+/* ─── floating report handle (visible only when report is collapsed) ─────── */
+/* Mirror of `.handle` (chat): same vertical position, opposite edge. The
+   chat handle docks to the right; this one to the left. They never share
+   a horizontal slice of screen so equal Y is fine. */
+.report-handle {
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 60px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-bg);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--voitta-shadow-handle);
+  transition: background 0.15s ease;
+  padding: 0;
+  z-index: 1; /* above the report-pane stacking even though pane is hidden */
+}
+.report-handle:hover {
+  background: #1e293b;
+}
+
+/* ─── report pane (left of chat drawer) ──────────────────────────────────── */
+/* Hosts a HoloViz Panel report in an iframe. The `right` offset is set
+   inline by the component so it leaves room for the chat drawer; when the
+   drawer is closed it stretches to the right edge. */
+.report-pane {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--voitta-surface);
+  border-right: 1px solid var(--voitta-border);
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  z-index: 0; /* inside .root which already has page-top z-index */
+  /* Slide-in/out animation, mirroring `.drawer` (the chat). The drawer
+     translates X from +100% (off the right) to 0; the report does the
+     same from -100% (off the left). Same easing + duration so the two
+     panes feel coordinated when both transition together. */
+  transform: translateX(0);
+  transition: transform 0.25s ease;
+}
+.report-pane.is-collapsed {
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+.report-pane .report-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Padding + border copied from the global `header` rule so the report
+     header matches the chat header's overall height. The 18px title
+     font (matching .brand-name) is what drives the content line-height
+     to align with the chat header's "Voitta" label. */
+  padding: 10px 14px;
+  background: var(--voitta-header-bg);
+  color: #fff;
+  border-bottom: 1px solid var(--voitta-header-rule);
+  flex-shrink: 0;
+  font-size: 13px;
+}
+.report-pane .report-title {
+  font-family: var(--voitta-font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+.report-pane .report-id {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 30%;
+}
+.report-pane .spacer {
+  flex: 1;
+}
+.report-pane .report-close,
+.report-pane .report-edit,
+.report-pane .report-action {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  width: 28px;
+  height: 24px;
+  border-radius: 4px;
+  font: 16px/1 system-ui, sans-serif;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.report-pane .report-close:hover,
+.report-pane .report-edit:hover,
+.report-pane .report-action:hover {
+  background: var(--voitta-accent);
+  border-color: var(--voitta-accent);
+}
+.report-pane .report-edit.is-active {
+  background: var(--voitta-accent);
+  border-color: var(--voitta-accent);
+}
+.report-pane .report-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* ─── plot cards (Chart.js) ──────────────────────────────────────────────── */
+.plot-card {
+  align-self: stretch;
+  background: var(--voitta-surface);
+  border: 1px solid #d8d8d8;
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  margin: 0 0 6px;
+}
+.plot-card .plot-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+.plot-card.kind-heatmap .plot-canvas-wrap {
+  background: #fafafa;
+  border-radius: 4px;
+}
+
+/* small markdown blocks emitted by buffer_eval draw.text or
+   run_compute's ctx.text() */
+.rich-text {
+  align-self: stretch;
+  background: #f8f8f8;
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+
+/* images emitted by run_compute's ctx.image() — backend serves the file
+   from /api/script-output/<run_id>/<file>, MessageList resolves the
+   URL against the bookmarklet's backend origin */
+.rich-image {
+  align-self: stretch;
+  margin: 0 0 6px;
+  padding: 6px;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+}
+.rich-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.rich-image figcaption {
+  margin: 4px 6px 0;
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* log panes from buffer_eval */
+.rich-log {
+  align-self: stretch;
+  background: #1e1e1e;
+  color: #ddd;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  margin: 0 0 6px;
+}
+.rich-log summary {
+  cursor: pointer;
+  color: #cfd8dc;
+  user-select: none;
+  padding: 2px 0;
+}
+.rich-log pre {
+  margin: 4px 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ─── markdown ───────────────────────────────────────────────────────────── */
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+.markdown p {
+  margin: 0.45em 0;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin: 0.7em 0 0.3em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.markdown h1 {
+  font-size: 1.2em;
+}
+.markdown h2 {
+  font-size: 1.12em;
+}
+.markdown h3 {
+  font-size: 1.05em;
+}
+.markdown ul,
+.markdown ol {
+  margin: 0.3em 0;
+  padding-left: 1.5em;
+}
+.markdown li {
+  margin: 0.1em 0;
+}
+.markdown blockquote {
+  margin: 0.4em 0;
+  padding: 0 0.7em;
+  border-left: 3px solid var(--voitta-accent);
+  color: #555;
+}
+.markdown code {
+  font: 0.9em/1.4 ui-monospace, Menlo, Consolas, monospace;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.05em 0.32em;
+  border-radius: 3px;
+}
+.markdown pre {
+  background: var(--voitta-header-bg);
+  color: #eee;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.88em;
+}
+.markdown a {
+  color: #1766c4;
+  text-decoration: underline;
+}
+.markdown table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.95em;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid #ddd;
+  padding: 3px 7px;
+  text-align: left;
+}
+.markdown th {
+  background: #f4f4f4;
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--voitta-border);
+  margin: 0.6em 0;
+}
+.markdown img {
+  max-width: 100%;
+}
+
+/* ─── composer ───────────────────────────────────────────────────────────── */
+.composer {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--voitta-border);
+  background: var(--voitta-surface);
+  flex-shrink: 0;
+}
+.composer-input {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  padding: 7px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  height: 56px;
+  min-height: 36px;
+  max-height: 160px;
+  background: #fff;
+  color: var(--voitta-header-bg);
+}
+.composer-input:focus {
+  outline: none;
+  border-color: var(--voitta-accent);
+  box-shadow: 0 0 0 2px var(--voitta-accent-tint);
+}
+.send-btn {
+  background: var(--voitta-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0 14px;
+  font: 600 13px var(--voitta-font-sans);
+  cursor: pointer;
+  align-self: flex-end;
+  height: 36px;
+}
+.send-btn:hover {
+  background: var(--voitta-accent-hover);
+}
+.send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.send-btn.stop {
+  background: #5b2d5b;
+}
+.send-btn.stop:hover {
+  background: #4a234a;
+}
+
+/* ─── settings view ──────────────────────────────────────────────────────── */
+.view-settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  background: var(--voitta-bg);
+}
+.view-settings label {
+  display: block;
+  margin-top: 12px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #1f2937;
+  letter-spacing: 0.02em;
+}
+.view-settings label:first-of-type {
+  margin-top: 0;
+}
+.view-settings input[type="text"],
+.view-settings input[type="number"],
+.view-settings select {
+  width: 100%;
+  padding: 7px 10px;
+  margin-top: 4px;
+  border: 1px solid #d1d5db;
+  border-radius: 5px;
+  font: inherit;
+  background: #fff;
+  color: var(--voitta-header-bg);
+}
+/* Mask API keys without using type=password (avoids Chrome's
+   "Save password?" prompt). */
+.view-settings input.secret {
+  -webkit-text-security: disc;
+  text-security: disc;
+}
+.view-settings input:focus,
+.view-settings select:focus {
+  outline: none;
+  border-color: var(--voitta-accent);
+  box-shadow: 0 0 0 2px var(--voitta-accent-tint);
+}
+.view-settings .muted {
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.view-settings .scope {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+.view-settings .scope code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.05em 0.32em;
+  border-radius: 3px;
+}
+.view-settings .actions {
+  margin-top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.view-settings .save-btn {
+  padding: 8px 16px;
+  background: var(--voitta-accent);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font: 600 13px var(--voitta-font-sans);
+  cursor: pointer;
+}
+.view-settings .save-btn:hover {
+  background: var(--voitta-accent-hover);
+}
+.view-settings .save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.view-settings .status {
+  font-size: 12px;
+  min-height: 1.4em;
+  color: var(--voitta-ok-fg);
+}
+.view-settings .status.err {
+  color: var(--voitta-error-fg);
+}
+
+/* ─── logs view (header ≡ button toggles into this) ──────────────────────── */
+.view-logs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #1e1e1e;
+  color: #ddd;
+  font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+}
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #2a2a2a;
+  border-bottom: 1px solid #000;
+  flex-shrink: 0;
+  font-family: var(--voitta-font-sans);
+  font-size: 11px;
+}
+.logs-toolbar .logs-title {
+  color: #cfd8dc;
+  font-weight: 600;
+}
+.logs-toolbar .logs-count {
+  color: var(--voitta-text-faint);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  font-size: 10px;
+}
+.logs-toolbar .spacer {
+  flex: 1;
+}
+.logs-toolbar button {
+  background: #3a3a3a;
+  color: #ddd;
+  border: 1px solid #555;
+  padding: 3px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+}
+.logs-toolbar button:hover {
+  background: #4a4a4a;
+}
+.logs-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.logs-body .empty {
+  color: var(--voitta-text-muted);
+  padding: 20px 0;
+  text-align: center;
+}
+.log-line {
+  padding: 1px 0 3px;
+  border-bottom: 1px solid #2a2a2a;
+}
+.log-line .head {
+  display: block;
+}
+.log-line .body {
+  margin: 2px 0 0 16px;
+  color: #c0c4c8;
+  font-size: 10px;
+  background: #15191e;
+  border-left: 2px solid #444;
+  padding: 4px 6px;
+  border-radius: 0 3px 3px 0;
+  max-height: 200px;
+  overflow: auto;
+}
+.log-line.log-error .head {
+  color: #ff8080;
+}
+.log-line.log-error .body {
+  border-left-color: #ff5050;
+}
+.log-line.log-warn .head {
+  color: #ffcc66;
+}
+.log-line.log-warn .body {
+  border-left-color: #d49b3a;
+}
+.log-line.log-info .head {
+  color: #ddd;
+}
+
+/* ─── server artifacts (Finder-like floating window) ─────────────────────── */
+.artifacts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none; /* let clicks pass through; modal grabs its own */
+  font-family: var(--voitta-font-sans);
+}
+.artifacts-modal {
+  position: absolute;
+  background: var(--voitta-surface);
+  border: 1px solid #d4d4d8;
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* Drag handle: titlebar gets the move cursor (except over its buttons). */
+.artifacts-modal .artifacts-titlebar {
+  cursor: grab;
+  user-select: none;
+}
+.artifacts-modal .artifacts-titlebar:active {
+  cursor: grabbing;
+}
+.artifacts-modal .artifacts-titlebar button,
+.artifacts-modal .artifacts-titlebar .dot {
+  cursor: pointer;
+}
+
+/* Resize handles — invisible strips around the window. */
+.rh {
+  position: absolute;
+  z-index: 1;
+}
+.rh-n { top: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rh-s { bottom: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rh-e { top: 6px; right: -3px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rh-w { top: 6px; left: -3px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rh-nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+.rh-ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+.rh-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+.rh-se {
+  bottom: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  /* Subtle SE corner grip — gives a visual cue without being noisy. */
+  background:
+    linear-gradient(135deg, transparent 0 55%, #b9bcc1 55% 60%, transparent 60% 70%, #b9bcc1 70% 75%, transparent 75% 85%, #b9bcc1 85% 90%, transparent 90%);
+  border-bottom-right-radius: 10px;
+}
+.artifacts-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, #f3f3f3, #e6e6e6);
+  border-bottom: 1px solid #d4d4d8;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.artifacts-traffic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+.artifacts-traffic .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}
+.artifacts-traffic .dot-red {
+  background: #ff5f57;
+  cursor: pointer;
+}
+.artifacts-traffic .dot-yellow {
+  background: #febc2e;
+}
+.artifacts-traffic .dot-green {
+  background: #28c840;
+}
+.artifacts-title {
+  font-weight: 600;
+  color: var(--voitta-text);
+  letter-spacing: 0.02em;
+}
+.artifacts-titlebar .spacer {
+  flex: 1;
+}
+.art-btn {
+  background: #fff;
+  border: 1px solid #c4c4c4;
+  color: var(--voitta-text);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font: 11px/1 var(--voitta-font-sans);
+  cursor: pointer;
+}
+.art-btn:hover {
+  background: #f1f1f1;
+  border-color: #9c9c9c;
+}
+.art-btn-close {
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 8px;
+}
+
+/* Shared 3-column grid: name (flex) | size (right) | mtime (right). Both
+   the header strip and every row use the same template so things actually
+   align. */
+.artifacts-columns,
+.art-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px 130px;
+  align-items: center;
+}
+.artifacts-columns {
+  padding: 6px 14px 6px 0;
+  background: #f3f3f3;
+  border-bottom: 1px solid #d4d4d8;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--voitta-text-muted);
+  flex-shrink: 0;
+}
+.art-col-name {
+  padding-left: 8px;
+}
+.art-col-size,
+.art-col-mtime {
+  text-align: right;
+}
+
+.artifacts-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+  font-size: 12px;
+}
+
+.art-row {
+  padding: 0 14px 0 0;
+  border-bottom: 1px solid #f4f4f5;
+  cursor: default;
+  user-select: none;
+  height: 24px;
+}
+.art-row:nth-child(even) {
+  background: #fafafa;
+}
+.art-row.art-dir {
+  cursor: pointer;
+}
+.art-row:hover {
+  background: #e8f0fe;
+}
+.art-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  padding-right: 8px;
+}
+.art-twisty {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--voitta-text-muted);
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.art-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.art-name {
+  color: var(--voitta-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.art-row.art-dir .art-name {
+  font-weight: 600;
+}
+.art-badge {
+  font-size: 10px;
+  color: #4b5563;
+  background: #eef2f7;
+  border: 1px solid #dbe2ea;
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+  height: 14px;
+  display: inline-block;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.art-size {
+  text-align: right;
+  font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: #4b5563;
+}
+.art-mtime {
+  text-align: right;
+  font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--voitta-text-muted);
+}
+
+.artifacts-footer {
+  padding: 6px 12px;
+  border-top: 1px solid #ececec;
+  background: #fafafa;
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  flex-shrink: 0;
+}
+.art-status {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--voitta-text-muted);
+}
+.art-status-err {
+  color: var(--voitta-error-fg);
+}
