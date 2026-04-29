@@ -1,0 +1,13 @@
+#!/bin/bash
+export BOKEH_ALLOW_WS_ORIGIN=*
+echo '' >> panel/template/base.py
+echo 'BasicTemplate.param.site_url.default="./"' >> panel/template/base.py
+export DISPLAY=:99.0
+export PYVISTA_OFF_SCREEN=true
+export PYVISTA_USE_IPYVTK=true
+export PYVISTA_PLOT_THEME=document
+Xvfb :99 -screen 0 1280x1024x24 > /dev/null 2>&1 &
+sleep 3
+jupyter trust examples/**/*.ipynb
+jupyter trust examples/**/**/*.ipynb
+exec "$@"

@@ -1,0 +1,363 @@
+import type {StyleSheetLike} from "@bokehjs/core/dom"
+import * as DOM from "@bokehjs/core/dom"
+import {Container} from "@bokehjs/core/layout/grid"
+import type * as p from "@bokehjs/core/properties"
+import {GridAlignmentLayout} from "@bokehjs/models/layouts/alignments"
+import {LayoutDOMView} from "@bokehjs/models/layouts/layout_dom"
+import type {UIElementView} from "@bokehjs/models/ui/ui_element"
+
+import {Column, ColumnView} from "./column"
+
+import card_css from "styles/models/card.css"
+
+const CHEVRON_RIGHT = `
+<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-chevron-right"><path stroke="none" d="M0 0h12v12H0z" fill="none"/><path d="M9 6l6 6l-6 6" /></svg>
+`
+
+const CHEVRON_DOWN = `
+<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-chevron-down"><path stroke="none" d="M0 0h12v12H0z" fill="none"/><path d="M6 9l6 6l6 -6" /></svg>
+`
+
+export class CardView extends ColumnView {
+  declare model: Card
+
+  button_el: HTMLButtonElement
+  header_el: HTMLElement
+  visible_child_views: Map<UIElementView, boolean> = new Map()
+  protected _updating_child_visibility: Set<UIElementView> = new Set()
+  protected _child_visible_callbacks: Map<UIElementView, () => void> = new Map()
+
+  readonly collapsed_style = new DOM.InlineStyleSheet()
+
+  override connect_signals(): void {
+    super.connect_signals()
+
+    const {active_header_background, collapsed, header_background, header_color, hide_header} = this.model.properties
+    this.on_change(collapsed, () => this._collapse())
+    this.on_change([header_color, hide_header], () => this.render())
+
+    this.on_change([active_header_background, collapsed, header_background], () => {
+      const header_background = this.header_background
+      if (header_background == null) {
+        return
+      }
+      this.child_views[0].el.style.backgroundColor = header_background
+      this.header_el.style.backgroundColor = header_background
+    })
+
+    for (const child_view of this.child_views.slice(1)) {
+      this._register_child_view(child_view)
+    }
+  }
+
+  override stylesheets(): StyleSheetLike[] {
+    return [...super.stylesheets(), card_css]
+  }
+
+  protected override *_stylesheets(): Iterable<DOM.StyleSheetLike> {
+    yield* super._stylesheets()
+    yield this.collapsed_style
+  }
+
+  get header_background(): string | null {
+    let header_background = this.model.header_background
+    if (!this.model.collapsed && this.model.active_header_background) {
+      header_background = this.model.active_header_background
+    }
+    return header_background
+  }
+
+  override render(): void {
+    this.empty()
+
+    if (this.model.collapsed) {
+      this.collapsed_style.replace(":host", {
+        height: "fit-content",
+        flex: "none",
+      })
+    }
+
+    this._update_stylesheets()
+    this._update_css_classes()
+    this._apply_styles()
+    this._apply_visible()
+
+    this.class_list.add(...this.css_classes())
+
+    const {button_css_classes, header_color, header_tag, header_css_classes} = this.model
+
+    const header_background = this.header_background
+    const header = this.child_views[0]
+
+    let header_el
+    if (this.model.collapsible) {
+      this.button_el = DOM.button({class: header_css_classes})
+      const icon = DOM.div({class: button_css_classes})
+      icon.innerHTML = this.model.collapsed ? CHEVRON_RIGHT : CHEVRON_DOWN
+      this.button_el.appendChild(icon)
+      this.button_el.style.backgroundColor = header_background != null ? header_background : ""
+      header.el.style.backgroundColor = header_background != null ? header_background : ""
+      this.button_el.appendChild(header.el)
+      this.button_el.addEventListener("click", (e: MouseEvent) => this._toggle_button(e))
+      this.button_el.addEventListener("keyup", (e: KeyboardEvent) => {
+        if (e.code === "Space") {
+          for (const el of e.composedPath()) {
+            if (el instanceof HTMLInputElement) {
+              e.preventDefault()
+              return
+            }
+          }
+        }
+      })
+      header_el = this.button_el
+    } else {
+      header_el = DOM.create_element((header_tag as any), {class: header_css_classes})
+      header_el.style.backgroundColor = header_background != null ? header_background : ""
+      header_el.appendChild(header.el)
+    }
+    this.header_el = header_el
+
+    if (!this.model.hide_header) {
+      header_el.style.color = header_color != null ? header_color : ""
+      this.shadow_el.appendChild(header_el)
+      header.render()
+      header.r_after_render()
+    }
+
+    for (const child_view of this.child_views.slice(1)) {
+      this._register_child_view(child_view)
+      this._apply_child_visible(child_view)
+      this.shadow_el.appendChild(child_view.el)
+      child_view.render()
+      child_view.r_after_render()
+    }
+  }
+
+  override async update_children(): Promise<void> {
+    await this.build_child_views()
+    const child_views = new Set(this.child_views.slice(1))
+    for (const child_view of this.visible_child_views.keys()) {
+      if (!child_views.has(child_view)) {
+        this._unregister_child_view(child_view)
+      }
+    }
+    for (const child_view of child_views) {
+      this._register_child_view(child_view)
+    }
+    this.render()
+    this.invalidate_layout()
+  }
+
+  override _update_layout(): void {
+    super._update_layout()
+
+    this.style.append(":host", {
+      flex_direction: this._direction,
+      gap: DOM.px(this.model.spacing),
+    })
+
+    const layoutable = new Container<LayoutDOMView>()
+    let r0 = 0
+    let c0 = 0
+
+    for (let i = 0; i < this.child_views.length; i++) {
+      const view = this.child_views[i]
+      if (!(view instanceof LayoutDOMView)) {
+        continue
+      }
+
+      const is_row = i == 0
+      const sizing = view.box_sizing()
+      const flex = (() => {
+        const policy = is_row ? sizing.width_policy : sizing.height_policy
+        const size = is_row ? sizing.width : sizing.height
+        const basis = size != null ? DOM.px(size) : "auto"
+        switch (policy) {
+          case "auto":
+          case "fixed": return `0 0 ${basis}`
+          case "fit": return "1 1 auto"
+          case "min": return "0 1 auto"
+          case "max": return "1 0 0px"
+        }
+      })()
+
+      const align_self = (() => {
+        const policy = is_row ? sizing.height_policy : sizing.width_policy
+        switch (policy) {
+          case "auto":
+          case "fixed":
+          case "fit":
+          case "min": return is_row ? sizing.valign : sizing.halign
+          case "max": return "stretch"
+        }
+      })()
+
+      view.parent_style.append(":host", {flex, align_self})
+
+      // undo `width/height: 100%` and let `align-self: stretch` do the work
+      if (is_row) {
+        if (sizing.height_policy == "max") {
+          view.parent_style.append(":host", {height: "auto"})
+        }
+      } else {
+        if (sizing.width_policy == "max") {
+          view.parent_style.append(":host", {width: "auto"})
+        }
+      }
+
+      if (view.layout != null) {
+        layoutable.add({r0, c0, r1: r0 + 1, c1: c0 + 1}, view)
+
+        if (is_row) {
+          c0 += 1
+        } else {
+          r0 += 1
+        }
+      }
+    }
+
+    if (layoutable.size != 0) {
+      this.layout = new GridAlignmentLayout(layoutable)
+      this.layout.set_sizing()
+    } else {
+      delete this.layout
+    }
+  }
+
+  _toggle_button(e: MouseEvent): void {
+    const is_panel_widget = (el: EventTarget): boolean =>
+      el instanceof HTMLInputElement || (
+        el instanceof HTMLElement &&
+	Array.from(el.classList).some((c) => c.startsWith("bk-panel-models-widgets-")))
+
+    for (const el of e.composedPath()) {
+      // If the click came from any Panel widget in the header, don't toggle.
+      if (is_panel_widget(el)) {
+        return
+      }
+    }
+    this.model.collapsed = !this.model.collapsed
+  }
+
+  _collapse(): void {
+    for (const child_view of this.child_views.slice(1)) {
+      this._register_child_view(child_view)
+      if (this.model.collapsed) {
+        this.shadow_el.removeChild(child_view.el)
+        this._set_child_visible(child_view, false)
+      } else {
+        this.shadow_el.appendChild(child_view.el)
+        this._apply_child_visible(child_view)
+        child_view.r_after_render()
+      }
+    }
+    if (this.model.collapsed) {
+      this.collapsed_style.replace(":host", {
+        height: "fit-content",
+        flex: "none",
+      })
+    } else {
+      this.collapsed_style.clear()
+    }
+    this.button_el.children[0].innerHTML = this.model.collapsed ? CHEVRON_RIGHT : CHEVRON_DOWN
+    this.invalidate_layout()
+  }
+
+  protected _set_child_visible(child_view: UIElementView, visible: boolean): void {
+    if (child_view.model.visible == visible) {
+      return
+    }
+    this._updating_child_visibility.add(child_view)
+    try {
+      child_view.model.visible = visible
+    } finally {
+      this._updating_child_visibility.delete(child_view)
+    }
+  }
+
+  protected _apply_child_visible(child_view: UIElementView): void {
+    const desired_visible = this.visible_child_views.get(child_view) ?? child_view.model.visible
+    this.visible_child_views.set(child_view, desired_visible)
+    this._set_child_visible(child_view, desired_visible && !this.model.collapsed)
+  }
+
+  protected _register_child_view(child_view: UIElementView): void {
+    if (this.visible_child_views.has(child_view)) {
+      return
+    }
+    this.visible_child_views.set(child_view, child_view.model.visible)
+    const {visible} = child_view.model.properties
+    const callback = () => {
+      if (this._updating_child_visibility.has(child_view)) {
+        return
+      }
+      const desired_visible = child_view.model.visible
+      this.visible_child_views.set(child_view, desired_visible)
+      if (this.model.collapsed && desired_visible) {
+        this._set_child_visible(child_view, false)
+      }
+    }
+    this._child_visible_callbacks.set(child_view, callback)
+    this.on_change(visible, callback)
+  }
+
+  protected _unregister_child_view(child_view: UIElementView): void {
+    const callback = this._child_visible_callbacks.get(child_view)
+    if (callback != null) {
+      child_view.model.properties.visible.change.disconnect(callback)
+      this._child_visible_callbacks.delete(child_view)
+    }
+    this.visible_child_views.delete(child_view)
+    this._updating_child_visibility.delete(child_view)
+  }
+
+  protected override _create_element(): HTMLElement {
+    return DOM.create_element((this.model.tag as any), {class: this.css_classes()})
+  }
+}
+
+export namespace Card {
+  export type Attrs = p.AttrsOf<Props>
+
+  export type Props = Column.Props & {
+    active_header_background: p.Property<string | null>
+    button_css_classes: p.Property<string[]>
+    collapsed: p.Property<boolean>
+    collapsible: p.Property<boolean>
+    header_background: p.Property<string | null>
+    header_color: p.Property<string | null>
+    header_css_classes: p.Property<string[]>
+    header_tag: p.Property<string>
+    hide_header: p.Property<boolean>
+    tag: p.Property<string>
+  }
+}
+
+export interface Card extends Card.Attrs {}
+
+export class Card extends Column {
+  declare properties: Card.Props
+
+  constructor(attrs?: Partial<Card.Attrs>) {
+    super(attrs)
+  }
+
+  static override __module__ = "panel.models.layout"
+
+  static {
+    this.prototype.default_view = CardView
+
+    this.define<Card.Props>(({List, Bool, Nullable, Str}) => ({
+      active_header_background: [ Nullable(Str), null ],
+      button_css_classes:       [ List(Str),      [] ],
+      collapsed:                [ Bool,          true ],
+      collapsible:              [ Bool,          true ],
+      header_background:        [ Nullable(Str), null ],
+      header_color:             [ Nullable(Str), null ],
+      header_css_classes:       [ List(Str),      [] ],
+      header_tag:               [ Str,          "div" ],
+      hide_header:              [ Bool,         false ],
+      tag:                      [ Str,          "div" ],
+    }))
+  }
+}

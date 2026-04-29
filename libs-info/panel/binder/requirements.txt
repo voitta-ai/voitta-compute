@@ -1,0 +1,7 @@
+-e .[all_pip,build]
+-e binder/jupyter-panel-apps-server/.
+pyecharts
+xlsxwriter
+pyarrow
+jupyter_bokeh
+jupyter-vscode-proxy
