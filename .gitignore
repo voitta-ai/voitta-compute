@@ -1,0 +1,37 @@
+# env / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.egg
+
+# RAG indexes (rebuildable from docs/ via rag/build_rag.py and from
+# libs-info/panel/ via rag/build_panel_rag.py)
+rag/.chroma/
+rag/.bm25/
+rag/.chroma_panel/
+rag/.bm25_panel/
+
+# Server-side snapshot cache (provider download tools, e.g.
+# drive_download_to_python_storage)
+python_storage/
+
+# User-defined Python scripts (run_compute + define_report tools)
+scripts/compute/
+scripts/reports/
+
+# TLS material
+backend/certs/*.pem
+
+# Frontend build artefacts (when the frontend lands)
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,66 @@
+/* Voitta theme tokens.
+ *
+ * Single source of truth for the in-pane visual identity. To rebrand
+ * the widget — change the values here and nothing else. Every other
+ * stylesheet should reference these via `var(--voitta-…)`; literal
+ * hex codes outside this file are bugs.
+ *
+ * Palette inspired by https://voitta.ai/ (sober monochrome with a
+ * deep-slate header for presence; near-black accent on white surfaces).
+ *
+ * Typography: 'Open Sans' for UI; 'Cormorant Garamond' for the brand
+ * wordmark in the header. Both are loaded from Google Fonts in
+ * `widget.tsx` so the widget doesn't depend on the host page's fonts.
+ */
+
+:host {
+  /* ── Surfaces ─────────────────────────────────────────────────── */
+  --voitta-bg:        #ffffff;   /* drawer body                 */
+  --voitta-surface:   #fafafa;   /* slightly elevated card / row */
+  --voitta-border:    #e8e8e8;
+  --voitta-divider:   #e8e8e8;
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --voitta-text:      #1a1a1a;
+  --voitta-text-muted:#666666;
+  --voitta-text-faint:#9ca3af;
+
+  /* ── Accent (CTAs, pills, focused borders) ───────────────────── */
+  --voitta-accent:        #1a1a1a;
+  --voitta-accent-hover:  #333333;
+  --voitta-accent-fg:     #ffffff;
+  --voitta-accent-tint:   rgba(26, 26, 26, 0.12);
+
+  /* ── Header strip (gives the drawer presence vs. the host) ───── */
+  --voitta-header-bg:     #0f172a;
+  --voitta-header-fg:     #f1f5f9;
+  --voitta-header-rule:   #f1f5f9;
+  --voitta-header-icon:   #f1f5f9;
+  --voitta-header-btn-bg: rgba(241, 245, 249, 0.08);
+  --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.16);
+
+  /* ── Conversation bubbles ────────────────────────────────────── */
+  --voitta-user-bubble:   #f1f5f9;
+  --voitta-user-bubble-fg:#1a1a1a;
+
+  /* ── Status colours ──────────────────────────────────────────── */
+  --voitta-warn-bg:       #fff7e6;
+  --voitta-warn-border:   #fcd9a3;
+  --voitta-warn-fg:       #92400e;
+  --voitta-error-bg:      #fef2f2;
+  --voitta-error-border:  #fecaca;
+  --voitta-error-fg:      #b91c1c;
+  --voitta-ok-fg:         #047857;
+
+  /* ── Shape ───────────────────────────────────────────────────── */
+  --voitta-pane-width:    400px;
+  --voitta-radius:        6px;
+  --voitta-radius-sm:     4px;
+  --voitta-shadow:        -8px 0 24px rgba(15, 23, 42, 0.12);
+  --voitta-shadow-handle: -3px 2px 10px rgba(15, 23, 42, 0.22);
+
+  /* ── Typography ──────────────────────────────────────────────── */
+  --voitta-font-sans:    "Open Sans", system-ui, -apple-system, sans-serif;
+  --voitta-font-display: "Cormorant Garamond", Georgia, serif;
+  --voitta-font-mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
