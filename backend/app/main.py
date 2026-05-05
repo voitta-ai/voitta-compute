@@ -694,6 +694,38 @@ async def google_oauth_callback(
     )
 
 
+@app.get("/api/google/config")
+async def google_oauth_get_config() -> dict:
+    """Return the saved OAuth client_id/client_secret for the Settings
+    UI to prefill its Configure form. Localhost-only, same trust
+    boundary as GET /api/settings."""
+    from app.services import google_oauth
+
+    return google_oauth.get_client_config()
+
+
+@app.post("/api/google/configure")
+async def google_oauth_set_config(request: Request) -> dict:
+    """Persist a new clientId/clientSecret pair. If the user was
+    connected, the existing tokens get revoked + cleared (they belong
+    to the old client). Body: ``{"clientId": "...", "clientSecret": "..."}``."""
+    from app.services import google_oauth
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    cid = body.get("clientId")
+    csec = body.get("clientSecret")
+    try:
+        await google_oauth.set_client_credentials(cid or "", csec or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, **google_oauth.status()}
+
+
 @app.post("/api/google/disconnect")
 async def google_oauth_disconnect() -> dict:
     """Revoke + clear stored tokens. Drive tools become hidden from

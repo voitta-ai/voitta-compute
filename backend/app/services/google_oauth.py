@@ -100,6 +100,46 @@ def get_client_credentials() -> tuple[str, str] | None:
     return None
 
 
+def get_client_config() -> dict[str, str]:
+    """Raw saved client_id/client_secret for the Settings UI prefill.
+    Empty strings if not yet set. Localhost-only endpoint, so returning
+    the secret value is acceptable — same trust boundary as the LLM
+    API keys already exposed via ``GET /api/settings``."""
+    oauth = _settings().get("googleOAuth") or {}
+    return {
+        "clientId": str(oauth.get("clientId") or ""),
+        "clientSecret": str(oauth.get("clientSecret") or ""),
+    }
+
+
+async def set_client_credentials(client_id: str, client_secret: str) -> None:
+    """Persist a new client_id/client_secret pair.
+
+    If the user was already connected, revoke + clear the existing
+    tokens first — they were issued against the OLD client and become
+    invalid (or, worse, would silently keep working against the wrong
+    project). Single-account, single-credential model: changing creds
+    means starting the connection over.
+    """
+    if not isinstance(client_id, str) or not client_id.strip():
+        raise ValueError("client_id is required")
+    if not isinstance(client_secret, str) or not client_secret.strip():
+        raise ValueError("client_secret is required")
+
+    if is_connected():
+        await disconnect()
+
+    s = _settings()
+    oauth = s.get("googleOAuth") or {}
+    oauth["clientId"] = client_id.strip()
+    oauth["clientSecret"] = client_secret.strip()
+    # disconnect() above already cleared any tokens; be defensive in
+    # case the call path ever changes.
+    oauth.pop("tokens", None)
+    s["googleOAuth"] = oauth
+    user_settings.write(s)
+
+
 def _get_tokens() -> dict | None:
     oauth = _settings().get("googleOAuth") or {}
     tok = oauth.get("tokens")
