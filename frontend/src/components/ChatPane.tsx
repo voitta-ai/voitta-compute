@@ -303,6 +303,28 @@ export function ChatPane({ backendOrigin }: Props) {
           onError: (err) => {
             log.error("chat", err.message || "stream error", err);
             setError(err.message || "stream error");
+            // Preserve whatever the assistant streamed before the error
+            // (most commonly the iteration-limit cut-off). Mirrors stop():
+            // finalise any still-running tool as halted, commit the partial
+            // turn so it stays visible AND in the conversation context, and
+            // only THEN clear the streaming buffer. Without this commit, the
+            // next user turn loses the partial assistant work.
+            const partialItems = itemsRef.current.map((it) =>
+              it.kind === "tool" && it.status === "running"
+                ? {
+                    ...it,
+                    status: "error" as const,
+                    error_message: err.message || "stream error",
+                  }
+                : it,
+            );
+            if (partialItems.length) {
+              const content = itemsToContent(partialItems);
+              setMessages((m) => [
+                ...m,
+                { role: "assistant", content, items: partialItems },
+              ]);
+            }
             setStreaming(false);
             setItems([]);
           },

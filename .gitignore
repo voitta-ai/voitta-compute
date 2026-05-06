@@ -19,9 +19,14 @@ rag/.bm25_panel/
 # drive_download_to_python_storage)
 python_storage/
 
-# User-defined Python scripts (run_compute + define_report tools)
-scripts/compute/
-scripts/reports/
+# User-defined Python scripts (run_compute + define_report tools).
+# Ignore *contents* (not the dirs themselves) so individual adapters
+# can be re-included with !-patterns below.
+scripts/compute/*
+scripts/reports/*
+# Shipped adapters that wrap permanent backend modules.
+!scripts/compute/a4db_parse/
+!scripts/reports/a4db_3d/
 
 # TLS material
 backend/certs/*.pem
