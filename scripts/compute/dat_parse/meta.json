@@ -1,0 +1,12 @@
+{
+  "name": "dat_parse",
+  "kind": "compute",
+  "created_at": "2026-05-07T17:03:19Z",
+  "updated_at": "2026-05-07T19:00:02Z",
+  "code_bytes": 707,
+  "last_run_at": "2026-05-07T19:00:02Z",
+  "last_run_ok": false,
+  "last_run_id": "392ea89a",
+  "last_run_elapsed_s": 0.32,
+  "last_run_error": "Traceback (most recent call last):\n  File \"/Users/roman/DEVEL/voitta-bookmarklet/backend/app/services/scripts.py\", line 318, in _run_compute_blocking\n    return fn(ctx, args)\n           ^^^^^^^^^^^^^\n  File \"<compute>\", line 5, in run\n  File \"/Users/roman/DEVEL/voitta-bookmarklet/backend/app/services/scripts.py\", line 223, in dataframe\n    raise FileNotFoundError(\nFileNotFoundError: snapshot 'py_7dbfe230' has no curves.pkl (kind not 'curves'?)\n"
+}

@@ -1,9 +1,14 @@
-"""Google Drive tools — read-only, OAuth-backed.
+"""Google Drive tools — read-only, OAuth-backed (plus one no-OAuth
+fallback).
 
-Five LLM-facing tools, all server-side (no browser involvement). All
-gated behind ``visibility_check=google_oauth.is_connected`` so they
-only appear in the LLM's tool list once the user has signed in via
-the Settings panel.
+Six LLM-facing tools. The first five are server-side and gated behind
+``visibility_check=google_oauth.is_connected`` so they only appear in
+the LLM's tool list once the user has signed in via the Settings panel.
+The sixth (``drive_pickup_to_python_storage``) is a hybrid fallback
+that drives the user's logged-in browser to download a file and watches
+the Downloads folder — visible only when OAuth is **not** connected
+and the user has explicitly opted in via the
+``driveDownloadViaPickup`` flag in Settings.
 
 Verb_noun naming, JSON envelopes with ``ok`` + uniform error fields,
 pagination via opaque ``cursor``, snapshot handles for content.
@@ -26,6 +31,12 @@ pagination via opaque ``cursor``, snapshot handles for content.
       format (txt / pdf / docx / html / md / csv / tsv / xlsx / png).
       ``format`` defaults pick the most useful representation per
       mimeType.
+  • drive_pickup_to_python_storage(file_id, name?, timeout_s?)
+      No-OAuth fallback. Opens the Drive download URL in a new tab
+      (uses the user's existing Google session) and moves the
+      resulting file out of ``~/Downloads`` (configurable) into
+      python_storage. Visible only when OAuth is not connected AND
+      the user enabled the pickup flag in Settings.
 
 By design, no tool returns file CONTENT to the LLM context. The LLM
 gets metadata + a python_storage handle; actual content reads happen
@@ -49,7 +60,8 @@ from typing import Any
 
 import httpx
 
-from app.services import google_oauth, python_storage
+from app.services import drive_pickup, google_oauth, python_storage, user_settings
+from app.tools.browser import BrowserToolError, call_browser
 from app.tools.registry import ToolCtx, ToolSpec, registry
 
 
@@ -1016,6 +1028,492 @@ registry.register(
         handler=_drive_export,
         side="server",
         visibility_check=google_oauth.is_connected,
+    )
+)
+
+
+# ---- drive_pickup_to_python_storage --------------------------------------
+#
+# Hacky fallback path used when OAuth isn't connected. The user opted in
+# via the Settings panel; we drive their *logged-in* browser to download
+# the file (no API token involved) and then move it out of their
+# Downloads folder into python_storage. See services/drive_pickup.py for
+# the directory-watching mechanics and the unavoidable race conditions.
+
+
+def _pickup_visible() -> bool:
+    """Tool gate: pickup is only exposed when (a) OAuth is NOT connected
+    AND (b) the user has explicitly enabled it in Settings. Both checks
+    happen on every chat turn (cheap)."""
+    if google_oauth.is_connected():
+        return False
+    try:
+        blob = user_settings.read()
+    except Exception:
+        return False
+    return bool(blob.get("driveDownloadViaPickup"))
+
+
+_DEFAULT_PICKUP_DIR = "~/Downloads"
+
+# The Drive interstitial (consent / virus-scan / sign-in) can stall the
+# download for tens of seconds; 120 s gives the user a comfortable window
+# to click through.
+_PICKUP_TIMEOUT_S = 120.0
+
+
+import logging  # noqa: E402
+
+_drive_pickup_logger = logging.getLogger("app.drive_pickup")
+
+
+async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
+    file_id = (args.get("file_id") or "").strip()
+    pick_filename = (args.get("pick_filename") or "").strip() or None
+    if not file_id and not pick_filename:
+        return {
+            "ok": False,
+            "error": "invalid_args",
+            "message": "file_id (or pick_filename, for adopt mode) required",
+        }
+    name_hint = (args.get("name") or "").strip() or None
+    timeout_s = float(args.get("timeout_s") or _PICKUP_TIMEOUT_S)
+    timeout_s = max(5.0, min(600.0, timeout_s))
+
+    # Capture every progress line for inclusion in the result envelope —
+    # the chat UI doesn't surface tool stdout, so without this the user
+    # has no way to see *why* the watcher waited (interstitial click,
+    # partial sibling deferral, slow connection, etc). Mirror to the
+    # Python logger so it also appears in the backend's stdout.
+    progress_log: list[str] = []
+
+    def _log(msg: str) -> None:
+        ts = time.strftime("%H:%M:%S")
+        progress_log.append(f"{ts}  {msg}")
+        _drive_pickup_logger.info(msg)
+
+    settings_blob = user_settings.read()
+    dl_dir_str = (
+        (settings_blob.get("pickupDownloadsDir") or "").strip()
+        or _DEFAULT_PICKUP_DIR
+    )
+    dl_dir = drive_pickup.expand_dir(dl_dir_str)
+    if not dl_dir.is_dir():
+        return {
+            "ok": False,
+            "error": "downloads_dir_missing",
+            "message": (
+                f"Downloads directory {dl_dir!s} does not exist. "
+                "Update `pickupDownloadsDir` in Settings or create the path."
+            ),
+        }
+
+    started = time.time()
+    _log(
+        f"pickup start: file_id={file_id or '(adopt-mode)'} "
+        f"name_hint={name_hint!r} pick_filename={pick_filename!r} "
+        f"dir={dl_dir!s}"
+    )
+
+    # ---- adopt-only path (skip browser trigger) ---------------------------
+    # Used when the user already downloaded the file and just wants us to
+    # move it into python_storage. ``pick_filename`` adopts a specific
+    # file by exact name; without it but with ``name`` we look for a
+    # unique recent match.
+    if pick_filename and not file_id:
+        target = dl_dir / pick_filename
+        if not target.is_file():
+            _log(f"pick_filename {pick_filename!r} not found in {dl_dir!s}")
+            return {
+                "ok": False,
+                "error": "pick_filename_not_found",
+                "message": f"{pick_filename!r} is not a file in {dl_dir!s}.",
+                "downloads_dir": str(dl_dir),
+                "progress_log": progress_log,
+            }
+        _log(f"adopt-pick: moving {target!s} into python_storage")
+        return _adopt_from_path(
+            target, dl_dir, file_id="", started=started, via="adopt_pick",
+            progress_log=progress_log,
+        )
+
+    # ---- normal path: trigger + watch -------------------------------------
+    baseline = drive_pickup.snapshot_listing(dl_dir)
+    download_url = drive_pickup.drive_uc_download_url(file_id)
+    _log(f"baseline: {len(baseline)} files in {dl_dir!s}")
+
+    # Anchor-click trigger: no popup, no new tab, just a download. The
+    # Save-As dialog appears only when the user has Chrome's "Ask where
+    # to save each file" pref on — that's a browser setting we can't
+    # override. The watcher handles however the file lands.
+    _log(f"trigger_download: {download_url}")
+    try:
+        await call_browser(
+            "trigger_download",
+            {"url": download_url, "filename": name_hint or ""},
+            ctx,
+        )
+    except BrowserToolError as exc:
+        _log(f"trigger_download failed: {exc.kind}: {exc!s}")
+        # Surface the URL in the error envelope so the LLM can render it
+        # as a clickable hyperlink for the user — manual click + the
+        # adopt fallback below recovers the flow.
+        return {
+            "ok": False,
+            "error": "browser_primitive_failed",
+            "kind": exc.kind,
+            "message": str(exc),
+            "manual_download_url": download_url,
+            "manual_instructions": (
+                f"Open this URL in your browser, save the file to "
+                f"{dl_dir!s}, then call this tool again with "
+                f"`pick_filename` set to whatever name appears in the "
+                "folder."
+            ),
+            "progress_log": progress_log,
+        }
+
+    picked = await drive_pickup.wait_for_new_file(
+        dl_dir, baseline, timeout_s=timeout_s, name_hint=name_hint, log=_log,
+    )
+
+    # ---- timeout fallback: scan recent matching files --------------------
+    # The watcher only sees files that didn't exist at baseline. If the
+    # user already had the file there (e.g. earlier retry) or the
+    # download was in flight before we started the timer, the watcher
+    # misses it. Sweep recent files matching the hint to recover.
+    used_fallback = False
+    candidates_meta: list[dict[str, Any]] = []
+    if picked is None and (name_hint or pick_filename):
+        if pick_filename:
+            target = dl_dir / pick_filename
+            if target.is_file():
+                picked = target
+                used_fallback = True
+                _log(f"timeout fallback: adopting pick_filename {target!s}")
+        else:
+            recent = drive_pickup.find_recent_matching(dl_dir, name_hint or "")
+            candidates_meta = [
+                {
+                    "filename": p.name,
+                    "size": p.stat().st_size,
+                    "mtime": round(p.stat().st_mtime, 2),
+                }
+                for p in recent[:10]
+            ]
+            _log(
+                f"timeout fallback: scanning recent matches for {name_hint!r} "
+                f"→ {len(recent)} hit(s)"
+            )
+            if len(recent) == 1:
+                picked = recent[0]
+                used_fallback = True
+                _log(f"timeout fallback: adopting unique match {picked.name!r}")
+            elif len(recent) > 1:
+                _log(
+                    f"timeout fallback: ambiguous match — {len(recent)} files "
+                    f"need disambiguation via pick_filename"
+                )
+                return {
+                    "ok": False,
+                    "error": "ambiguous_match",
+                    "message": (
+                        f"{len(recent)} files in {dl_dir!s} match "
+                        f"{name_hint!r} and were modified in the last 10 "
+                        "minutes. Re-call with `pick_filename` set to one "
+                        "of the candidates below."
+                    ),
+                    "candidates": candidates_meta,
+                    "downloads_dir": str(dl_dir),
+                    "elapsed_s": round(time.time() - started, 2),
+                    "progress_log": progress_log,
+                }
+
+    if picked is None:
+        return {
+            "ok": False,
+            "error": "pickup_timeout",
+            "message": (
+                f"No matching file appeared in {dl_dir!s} within "
+                f"{timeout_s:.0f}s. If Chrome popped a Save-As dialog, "
+                "the user may not have completed it. Either: (a) call "
+                "this tool again with `pick_filename` once the file "
+                "lands, or (b) ask the user to disable Chrome's "
+                "'Ask where to save each file' preference."
+            ),
+            "manual_download_url": download_url,
+            "downloads_dir": str(dl_dir),
+            "elapsed_s": round(time.time() - started, 2),
+            "progress_log": progress_log,
+        }
+
+    return _adopt_from_path(
+        picked, dl_dir, file_id=file_id, started=started,
+        via="adopt_fallback" if used_fallback else "watch",
+        progress_log=progress_log,
+    )
+
+
+def _sniff_soundcheck(path: Path) -> str | None:
+    """Return the SoundCheck cluster type ("DAT"/"WFM"/"RES") if this
+    is a SoundCheck binary, else ``None``. Cheap header peek so we can
+    tell the LLM "use dat_parse" instead of leaving it to scan strings.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8 + 4 + 16)
+    except OSError:
+        return None
+    if len(head) < 28:
+        return None
+    tag = head[8:24].decode("ascii", errors="replace").rstrip()
+    return {"Data": "DAT", "Waveform": "WFM", "Result": "RES"}.get(tag)
+
+
+def _try_auto_parse_soundcheck(snap_dir: str, log: Any = None) -> dict[str, Any] | None:
+    """If the file in ``snap_dir`` is a SoundCheck binary, run the
+    canonical parser and write the same artefacts ``dat_parse`` would.
+
+    Critical to call this *before* returning from the pickup tool — the
+    LLM has demonstrated a tendency to roll its own byte-decoder via
+    ``run_compute`` when handed a raw SoundCheck snapshot. Pre-parsing
+    closes that loophole and returns the parsed summary directly.
+    Parser failures are non-fatal — the snapshot still exists and the
+    LLM can fall back to ``dat_parse`` manually.
+    """
+    try:
+        from app.services import soundcheck_dat
+        dat_path = soundcheck_dat.find_dat_in_dir(snap_dir)
+    except Exception:
+        return None
+    try:
+        return soundcheck_dat.parse_dat_to_snapshot(dat_path, snap_dir, log=log)
+    except Exception as exc:  # pragma: no cover — parser failure
+        if log is not None:
+            log(f"auto-parse failed: {type(exc).__name__}: {exc}")
+        return {"auto_parse_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _adopt_from_path(
+    src: Path, dl_dir: Path, *, file_id: str, started: float, via: str,
+    progress_log: list[str] | None = None,
+) -> dict[str, Any]:
+    """Move ``src`` into python_storage and return the standard envelope.
+
+    ``put_file(move=True)`` does a ``shutil.move`` (rename when possible,
+    copy+unlink otherwise). The copy+unlink fallback silently swallows
+    unlink errors if the copy succeeded but the source remove failed —
+    which leaves an orphan in Downloads. We post-verify and force-remove
+    so the contract "source goes away after a successful pickup" holds
+    even on the rare cross-volume / locked-file path.
+    """
+    soundcheck_kind = _sniff_soundcheck(src)
+    snap = python_storage.put_file(
+        src_path=src,
+        original_name=src.name,
+        kind="soundcheck_dat" if soundcheck_kind else "drive_file",
+        meta={
+            "origin": python_storage.make_origin(
+                source="google_drive_pickup",
+                account=None,
+                path=None,
+                file_id=file_id or None,
+                host="drive.google.com",
+                url=(
+                    f"https://drive.google.com/file/d/{file_id}/view"
+                    if file_id
+                    else None
+                ),
+                extra={
+                    "pickup_dir": str(dl_dir),
+                    "picked_filename": src.name,
+                    "pickup_mode": via,
+                },
+            ),
+            "drive_file_id": file_id or None,
+            "via_pickup": True,
+            "pickup_mode": via,
+        },
+        move=True,
+    )
+
+    cleanup_error: str | None = None
+    if src.exists():
+        try:
+            src.unlink()
+        except OSError as exc:
+            cleanup_error = f"{type(exc).__name__}: {exc}"
+
+    out: dict[str, Any] = {
+        "ok": cleanup_error is None,
+        "file_id": file_id or None,
+        "handle": snap["handle"],
+        "stored_name": snap["meta"].get("stored_name"),
+        "path": snap["path"],
+        "bytes": (snap["files"][0] or {}).get("bytes") if snap.get("files") else None,
+        "picked_filename": src.name,
+        "downloads_dir": str(dl_dir),
+        "removed_from_downloads": not src.exists(),
+        "elapsed_s": round(time.time() - started, 2),
+        "via_pickup": True,
+        "pickup_mode": via,
+    }
+    if soundcheck_kind:
+        # Auto-run the canonical SoundCheck parser. Returning a parsed
+        # summary instead of raw bytes is the only reliable way to stop
+        # the LLM from rolling its own bit-banger via run_compute. We
+        # leave the detected_format hint in case auto-parse misses (e.g.
+        # exotic future variant).
+        out["detected_format"] = f"soundcheck_{soundcheck_kind.lower()}"
+
+        def _parse_log(msg: str) -> None:
+            if progress_log is not None:
+                progress_log.append(f"  parse: {msg}")
+
+        parse_summary = _try_auto_parse_soundcheck(snap["path"], log=_parse_log)
+        if parse_summary and "auto_parse_error" not in parse_summary:
+            out["auto_parsed"] = True
+            out["parse_summary"] = {
+                k: v for k, v in parse_summary.items()
+                if k in ("kind", "n_items", "cluster_versions",
+                         "curve_kinds", "n_unique_serials",
+                         "unique_unit_triples", "all_clean_parses",
+                         "first_curve_name", "elapsed_s")
+            }
+            # Tell the LLM exactly what to do next — a single tool call
+            # away from a rendered plot. Keep the "do not hand-decode"
+            # warning since pickup-then-roll-own happened in practice.
+            out["next_action"] = (
+                f"File is already parsed — {parse_summary.get('n_items')} "
+                f"curves into `dat_curves.json` + `curves.pkl` in the "
+                f"snapshot dir. To visualise: "
+                f"`show_holoviz_report(name=\"dat_curves\")`. "
+                f"DO NOT re-parse with a custom compute script."
+            )
+        else:
+            # Fallback: parser unavailable / failed. Surface the
+            # canonical compute-script call as a directive.
+            err_note = (
+                parse_summary.get("auto_parse_error")
+                if parse_summary else "parser not invoked"
+            )
+            out["auto_parsed"] = False
+            out["auto_parse_error"] = err_note
+            out["next_action"] = (
+                f"This is a SoundCheck {soundcheck_kind} binary. Call "
+                f"`run_compute(name=\"dat_parse\", args={{\"snapshot\": "
+                f"\"{snap['handle']}\"}})` — the parser is in "
+                f"`backend/app/services/soundcheck_dat.py` and handles "
+                f"DAT v2/v3/v6 + WFM + RES. DO NOT write a custom byte "
+                f"decoder."
+            )
+    if progress_log is not None:
+        out["progress_log"] = progress_log
+    if cleanup_error is not None:
+        out["error"] = "downloads_cleanup_failed"
+        out["message"] = (
+            f"File copied into python_storage as {snap['handle']!r}, "
+            f"but the original {src!s} could not be removed: "
+            f"{cleanup_error}. Delete it manually."
+        )
+    return out
+
+
+registry.register(
+    ToolSpec(
+        name="drive_pickup_to_python_storage",
+        description=(
+            "Hacky fallback for downloading a Drive file when Google OAuth "
+            "is NOT connected. Triggers a download via an `<a download>` "
+            "click (no popup, no new tab) — your existing Google session "
+            "handles the auth — then watches the configured Downloads "
+            "folder for the resulting file and moves it into "
+            "python_storage.\n"
+            "\n"
+            "Three modes:\n"
+            "  • `file_id` only — trigger a download and watch.\n"
+            "  • `file_id` + `name` — same, but the watcher prefers files "
+            "    whose name matches the hint (token-overlap), AND if the "
+            "    watch window times out it falls back to scanning recent "
+            "    (last 10 min) matching files — recovering from previous "
+            "    failed retries that left the file already in Downloads.\n"
+            "  • `pick_filename` only — adopt-mode: skip the trigger, "
+            "    move the named file from Downloads into python_storage. "
+            "    Use this when the user has manually downloaded the file.\n"
+            "\n"
+            "Visible only when (a) OAuth is not connected AND (b) the user "
+            "enabled `driveDownloadViaPickup` in Settings. Downloads dir "
+            "is configurable via `pickupDownloadsDir` (default `~/Downloads`).\n"
+            "\n"
+            "Caveats:\n"
+            "  • Save-As dialog: if the user has Chrome's 'Ask where to "
+            "    save each file' preference on, a system dialog appears "
+            "    and the user must click Save. We can't override that. "
+            "    Either ask them to disable the pref or use adopt-mode.\n"
+            "  • Racy. If `name` is missing and the user downloads "
+            "    something else during the watch window, we may pick the "
+            "    wrong file. Always pass `name` when you have it.\n"
+            "  • Multiple-match ambiguity: if the timeout-fallback finds "
+            "    several recent files matching `name`, the tool returns "
+            "    `error: 'ambiguous_match'` with a `candidates` list — "
+            "    re-call with `pick_filename` set to one of them.\n"
+            "  • No Drive API metadata: only filename + byte count.\n"
+            "\n"
+            "Returns `{handle, stored_name, path, bytes, picked_filename, "
+            "pickup_mode}` on success. Feed `handle` into `run_compute`.\n"
+            "\n"
+            "Auto-parsing: if the file sniffs as a SoundCheck binary "
+            "(.dat / .wfm / .res), the canonical parser runs immediately "
+            "and the response includes `parse_summary` (curve_kinds, "
+            "serials, units) plus a `next_action` directive. **Do not "
+            "write a custom byte decoder** — `dat_parse` and the "
+            "`dat_curves` Panel report are the only supported analysis "
+            "paths."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": (
+                        "Drive file ID. Even without API access you can "
+                        "extract this from a share URL "
+                        "(`drive.google.com/file/d/<file_id>/view`). "
+                        "Required unless `pick_filename` is set."
+                    ),
+                },
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Expected filename (or substring). Used to "
+                        "disambiguate during the watch window AND as the "
+                        "name-hint for the timeout fallback scan. Always "
+                        "pass when known."
+                    ),
+                },
+                "pick_filename": {
+                    "type": "string",
+                    "description": (
+                        "Adopt mode: exact filename in the Downloads "
+                        "directory to move into python_storage. Skips "
+                        "the browser trigger. Use after an "
+                        "`ambiguous_match` error or when the user has "
+                        "downloaded the file manually."
+                    ),
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "minimum": 5,
+                    "maximum": 600,
+                    "default": 120,
+                    "description": "How long to wait for the file to land. Default 120 s.",
+                },
+            },
+            "additionalProperties": False,
+        },
+        handler=_drive_pickup,
+        side="hybrid",
+        visibility_check=_pickup_visible,
     )
 )
 

@@ -49,6 +49,15 @@ export interface Settings {
   // the tool from the LLM (e.g. on a host where you don't want any
   // outbound traffic to third parties).
   webFetch: boolean;
+  // Hacky no-OAuth Drive download fallback. When true AND Google OAuth
+  // is NOT connected, the LLM gets `drive_pickup_to_python_storage`
+  // which opens the Drive download URL in a new tab and watches the
+  // configured Downloads directory for the resulting file. Default OFF
+  // — racy, only opt in if you know what you're doing.
+  driveDownloadViaPickup: boolean;
+  // Where the pickup tool watches for downloaded files. Tilde and env
+  // vars are expanded server-side. Empty string → ~/Downloads.
+  pickupDownloadsDir: string;
 }
 
 export const MODELS_BY_PROVIDER: Record<ProviderId, string[]> = {
@@ -89,6 +98,8 @@ export const DEFAULT_SETTINGS: Settings = {
   maxToolIterations: 25,
   jsCompute: false,
   webFetch: true,
+  driveDownloadViaPickup: false,
+  pickupDownloadsDir: "~/Downloads",
 };
 
 const listeners = new Set<(s: Settings) => void>();
@@ -210,6 +221,11 @@ function sanitise(s: Settings): Settings {
     // Default-on: an undefined value (older blob) → true. Only an
     // explicit `false` keeps it off.
     webFetch: s.webFetch !== false,
+    driveDownloadViaPickup: !!s.driveDownloadViaPickup,
+    pickupDownloadsDir:
+      typeof s.pickupDownloadsDir === "string" && s.pickupDownloadsDir.trim()
+        ? s.pickupDownloadsDir.trim()
+        : DEFAULT_SETTINGS.pickupDownloadsDir,
   };
 }
 

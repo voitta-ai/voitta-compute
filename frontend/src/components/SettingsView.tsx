@@ -304,6 +304,49 @@ export function SettingsView({ backendOrigin }: Props) {
 
       <GoogleDriveSection backendOrigin={backendOrigin} />
 
+      <label
+        style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "12px" }}
+      >
+        <input
+          type="checkbox"
+          checked={!!draft.driveDownloadViaPickup}
+          onChange={(e) =>
+            patch({
+              driveDownloadViaPickup: (e.currentTarget as HTMLInputElement).checked,
+            })
+          }
+        />
+        <span>Drive download via Downloads-folder pickup (no OAuth)</span>
+      </label>
+      <p class="muted">
+        Off by default. Hacky workaround for when you don't want to set up
+        Google OAuth: the LLM gets a <code>drive_pickup_to_python_storage</code>
+        tool that opens the Drive download URL in a new tab (your existing
+        Google session does the auth) and then watches the directory below for
+        the resulting file. Visible to the LLM only when this is on AND OAuth
+        is <i>not</i> connected. Racy by design — concurrent downloads can be
+        misattributed.
+      </p>
+
+      <label htmlFor="pickupDownloadsDir">Downloads folder to watch</label>
+      <input
+        id="pickupDownloadsDir"
+        type="text"
+        value={draft.pickupDownloadsDir}
+        placeholder="~/Downloads"
+        onInput={(e) =>
+          patch({
+            pickupDownloadsDir: (e.currentTarget as HTMLInputElement).value,
+          })
+        }
+        disabled={!draft.driveDownloadViaPickup}
+      />
+      <p class="muted">
+        Default <code>~/Downloads</code>. Tilde and environment variables are
+        expanded server-side. Only used when the pickup option above is
+        enabled.
+      </p>
+
       <p class="scope">
         Stored on the local backend at <code>~/.config/voitta-bookmarklet/settings.json</code> —
         shared across every host the bookmarklet runs on.

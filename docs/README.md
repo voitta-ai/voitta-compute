@@ -18,6 +18,7 @@ exposes it via the local hybrid (dense + BM25) RAG index built by
 | [08-drive-tools.md](08-drive-tools.md) | Google Drive provider — listing, search, download, export |
 | [09-panel-threejs-reports.md](09-panel-threejs-reports.md) | Interactive 3D / WebGL reports — iframe layout, postMessage relay, geometry pipeline |
 | [10-a4db-files.md](10-a4db-files.md) | `.a4db` (ANSA / Animator crash database) — HDF5 schema, topology gotchas, rogue-element culling, animation pipeline |
+| [12-dat-files.md](12-dat-files.md) | SoundCheck `.dat` / `.wfm` / `.res` (Listen, Inc.) — version dispatch, title parsing, end-to-end curves pipeline |
 
 ## How the agent uses these files
 

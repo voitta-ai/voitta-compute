@@ -17,6 +17,87 @@ registerPrimitive("get_url", async () => ({
   title: document.title,
 }));
 
+// ---- trigger_download ------------------------------------------------------
+//
+// Used by the Drive pickup fallback. Fires a download via the anchor-
+// click trick: an `<a download>` element navigates to the URL, the
+// browser sees `Content-Disposition: attachment` from the server (e.g.
+// drive.google.com/uc?export=download) and saves the file directly —
+// no new tab, no popup-blocker interception.
+//
+// The Save-As dialog will still appear if the user has Chrome's "Ask
+// where to save each file before downloading" preference enabled. We
+// can't override that from the page; it's a browser setting.
+
+registerPrimitive("trigger_download", async (rawArgs) => {
+  const url = String(rawArgs.url ?? "");
+  if (!url) throw new PrimitiveError("invalid_args", "url is required");
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new PrimitiveError("invalid_url", `not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new PrimitiveError(
+      "unsupported_scheme",
+      `only http(s) URLs allowed; got ${parsed.protocol}`,
+    );
+  }
+  const filename = String(rawArgs.filename ?? "");
+  const a = document.createElement("a");
+  a.href = url;
+  // Empty `download` lets the server's Content-Disposition decide the
+  // filename. Setting a value forces it (used when we have a name hint).
+  if (filename) a.download = filename;
+  else a.setAttribute("download", "");
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+  }, 1000);
+  return { ok: true, url, filename: filename || null };
+});
+
+// ---- open_url_in_new_tab ---------------------------------------------------
+//
+// Used by the Drive pickup fallback (when OAuth isn't connected). Pops
+// `url` in a new tab so the user's existing Google session handles the
+// download. Returns whether window.open succeeded — popup blockers can
+// intercept this when the call isn't tied to a user gesture, in which
+// case we surface the failure so the caller can ask the user to allow
+// pop-ups for this origin.
+
+registerPrimitive("open_url_in_new_tab", async (rawArgs) => {
+  const url = String(rawArgs.url ?? "");
+  if (!url) throw new PrimitiveError("invalid_args", "url is required");
+  // Restrict to http/https — refuse javascript:/data: URIs even though
+  // the backend won't generate them, since this primitive can be invoked
+  // from anywhere on the bridge.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new PrimitiveError("invalid_url", `not a valid URL: ${url}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new PrimitiveError(
+      "unsupported_scheme",
+      `only http(s) URLs allowed; got ${parsed.protocol}`,
+    );
+  }
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) {
+    throw new PrimitiveError(
+      "popup_blocked",
+      "browser blocked window.open — allow pop-ups for this origin and retry",
+    );
+  }
+  return { ok: true, url };
+});
+
 // ---- read_selection --------------------------------------------------------
 
 registerPrimitive("read_selection", async () => {
