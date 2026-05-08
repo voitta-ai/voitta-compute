@@ -152,8 +152,38 @@ def _is_multiprocessing_child() -> bool:
     return False
 
 
+def _launch_diag(stage: str) -> None:
+    """Same shape as voitta/__main__.py's diagnostic logger — append
+    a JSON record to ``voitta-launch.log``. Duplicated here (not
+    imported) because importing ``voitta.__main__`` would re-run its
+    top-level code in this process."""
+    try:
+        import datetime, json
+        env_root = os.environ.get("VOITTA_PROJECT_ROOT")
+        if env_root:
+            base = env_root
+        else:
+            base = os.path.expanduser(
+                "~/Library/Application Support/Voitta Bookmarklet"
+            )
+        os.makedirs(base, exist_ok=True)
+        record = {
+            "ts": datetime.datetime.now().isoformat(timespec="milliseconds"),
+            "stage": stage,
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
+            "argv": sys.argv,
+        }
+        with open(os.path.join(base, "voitta-launch.log"), "a") as f:
+            f.write(json.dumps(record) + "\n")
+    except Exception:
+        pass
+
+
 def main() -> int:
+    _launch_diag("desktop_launcher_main_entered")
     if _is_multiprocessing_child():
+        _launch_diag("desktop_launcher_caught_mp_child_BAILING")
         # Don't start uvicorn or rumps in a worker — let the
         # ``multiprocessing.freeze_support()`` call in ``__main__``
         # handle the bootstrap. Returning 0 lets the spawn protocol

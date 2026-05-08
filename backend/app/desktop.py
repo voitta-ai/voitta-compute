@@ -83,6 +83,16 @@ def _start_uvicorn(log: logging.Logger) -> threading.Thread:
     handler doesn't have to coordinate shutdown — the OS reaps the
     thread when the main process exits."""
 
+    # Diagnostic — log every entry to this function with a stack
+    # trace, so when we see two "uvicorn started:" lines in voitta.log
+    # we know exactly which call path led to each.
+    import os, traceback
+    log.info(
+        "_start_uvicorn called from pid=%d ppid=%d; stack:\n%s",
+        os.getpid(), os.getppid(),
+        "".join(traceback.format_stack(limit=8)),
+    )
+
     import uvicorn  # local import: keeps rumps cold-start fast
     from app.main import app as fastapi_app
 
