@@ -14,6 +14,27 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# ─── flags ────────────────────────────────────────────────────────────────
+# --http : skip HTTPS even when certs are provisioned. Useful when you
+#          don't want to dance with browser trust warnings during
+#          frontend development at http://localhost:5173 (the bookmarklet
+#          loader auto-matches scheme).
+FORCE_HTTP=0
+for arg in "$@"; do
+  case "$arg" in
+    --http) FORCE_HTTP=1 ;;
+    -h|--help)
+      sed -n '2,15p' "$0"
+      echo
+      echo "Flags:"
+      echo "  --http   skip HTTPS, run plain http://"
+      exit 0 ;;
+    *)
+      echo "[run.sh] unknown arg: $arg" >&2
+      exit 2 ;;
+  esac
+done
+
 # ─── cert provisioning helpers ────────────────────────────────────────────
 #
 # Goal: a fresh-clone, fresh-laptop user can run `./run.sh` and end up
@@ -158,15 +179,20 @@ PY
 # loopback default. Set VOITTA_RUN_HOST=127.0.0.1 to opt out.
 HOST="${VOITTA_RUN_HOST:-0.0.0.0}"
 
-# Best-effort: if cert is missing, try to provision it. Failure here
-# falls through to the HTTP fallback below — explicit, never aborts.
-ensure_cert || true
+# Best-effort: if cert is missing AND we want HTTPS, try to provision it.
+# Failure here falls through to the HTTP fallback below — explicit, never
+# aborts.
+if [ "$FORCE_HTTP" -eq 0 ]; then
+  ensure_cert || true
+fi
 
 ARGS=(--host "$HOST" --port "$PORT" --reload)
 
-if [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
+if [ "$FORCE_HTTP" -eq 0 ] && [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
   ARGS+=(--ssl-certfile "$CERT_PATH" --ssl-keyfile "$KEY_PATH")
   echo "[run.sh] HTTPS on https://$HOST:$PORT"
+elif [ "$FORCE_HTTP" -eq 1 ]; then
+  echo "[run.sh] HTTP on http://$HOST:$PORT  (--http forced)"
 else
   echo "[run.sh] HTTP on http://$HOST:$PORT  (cert at $CERT_PATH not found)"
 fi
