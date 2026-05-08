@@ -35,6 +35,34 @@ backend/certs/*.pem
 frontend/node_modules/
 frontend/dist/
 
+# Briefcase / .app build outputs at the repo root + nested per-package.
+/build/
+/dist/
+/wheels/
+backend/build/
+backend/logs/
+# Resources auto-staged into src/voitta/resources/ by build_app.sh
+# (sourced from frontend/dist/ and backend/certs/, plus the curated
+# docs / rag_scripts / seed_scripts the installer copies out at
+# first launch).
+/src/voitta/resources/frontend_dist/
+/src/voitta/resources/default_certs/
+/src/voitta/resources/docs/
+/src/voitta/resources/rag_scripts/
+/src/voitta/resources/seed_scripts/
+# Briefcase log dir (created on errors).
+/logs/
+
+# Local research / sample binaries — never committed.
+/s_research/
+
+# Generated icon assets — `tools/generate_icon.py` rebuilds them
+# from the colours and font choices in that script. The intermediate
+# iconset PNGs are tracked-out; the final .icns is too (it's binary
+# and we'd rather rebuild than diff a binary blob in PRs).
+/icons/voitta.iconset/
+/icons/voitta.icns
+
 # OS / editor
 .DS_Store
 .idea/

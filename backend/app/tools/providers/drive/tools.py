@@ -1115,6 +1115,24 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
         f"dir={dl_dir!s}"
     )
 
+    # Compute the URL up-front so we can include it in EVERY response
+    # path (success, timeout, ambiguous, browser failure). When Drive
+    # serves the "couldn't scan for viruses" interstitial, the user has
+    # to click "Download anyway" manually — having a direct clickable
+    # link in chat saves them digging through the address bar.
+    download_url_advance = (
+        drive_pickup.drive_uc_download_url(file_id) if file_id else None
+    )
+
+    # Modal id pairs the in-page download iframe with the watcher loop.
+    # The × button on the modal POSTs to /api/drive-pickup/cancel which
+    # flips this flag; the watcher polls and exits with
+    # ``error: 'user_cancelled'`` instead of a stale 120 s timeout. The
+    # backend also calls ``close_download_modal(modal_id)`` to dismiss
+    # the iframe automatically on watcher success.
+    import secrets
+    modal_id = secrets.token_hex(8)
+
     # ---- adopt-only path (skip browser trigger) ---------------------------
     # Used when the user already downloaded the file and just wants us to
     # move it into python_storage. ``pick_filename`` adopts a specific
@@ -1142,19 +1160,34 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
     download_url = drive_pickup.drive_uc_download_url(file_id)
     _log(f"baseline: {len(baseline)} files in {dl_dir!s}")
 
-    # Anchor-click trigger: no popup, no new tab, just a download. The
-    # Save-As dialog appears only when the user has Chrome's "Ask where
-    # to save each file" pref on — that's a browser setting we can't
-    # override. The watcher handles however the file lands.
-    _log(f"trigger_download: {download_url}")
+    # In-page modal iframe trigger. The user sees a centred dialog
+    # rendered over their Drive folder containing Drive's download
+    # endpoint inside an iframe. For small files served directly the
+    # iframe response carries Content-Disposition: attachment and
+    # Chrome detaches it as a download (modal stays open with a brief
+    # blank iframe — user closes manually). For files behind the
+    # "couldn't scan for viruses" interstitial the iframe shows the
+    # "Download anyway" button — user clicks it, download fires,
+    # watcher catches. Either way the user never leaves the Drive
+    # folder tab and never sees a popup-blocked notification.
+    _log(f"download_in_modal: {download_url} (modal_id={modal_id})")
+    _log(
+        "  if a 'Download anyway' button appears in the modal, click it — "
+        "the watcher will pick the file up automatically and dismiss the modal."
+    )
+    drive_pickup.register_modal(modal_id)
     try:
         await call_browser(
-            "trigger_download",
-            {"url": download_url, "filename": name_hint or ""},
+            "download_in_modal",
+            {
+                "url": download_url,
+                "filename": name_hint or "",
+                "modal_id": modal_id,
+            },
             ctx,
         )
     except BrowserToolError as exc:
-        _log(f"trigger_download failed: {exc.kind}: {exc!s}")
+        _log(f"download_in_modal failed: {exc.kind}: {exc!s}")
         # Surface the URL in the error envelope so the LLM can render it
         # as a clickable hyperlink for the user — manual click + the
         # adopt fallback below recovers the flow.
@@ -1175,7 +1208,27 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
 
     picked = await drive_pickup.wait_for_new_file(
         dl_dir, baseline, timeout_s=timeout_s, name_hint=name_hint, log=_log,
+        cancel_check=lambda: drive_pickup.is_cancelled(modal_id),
     )
+
+    # User cancelled via the modal × button. Tear down server state +
+    # tell the LLM what happened so it stops chasing this file. We
+    # don't try to dismiss the modal — the user already did.
+    if picked is None and drive_pickup.is_cancelled(modal_id):
+        drive_pickup.clear_cancel(modal_id)
+        return {
+            "ok": False,
+            "error": "user_cancelled",
+            "message": (
+                f"User dismissed the download modal for {name_hint or file_id!r}. "
+                "Either they decided not to download, or the file already "
+                "landed and they tidied up. Don't retry without explicit "
+                "user instruction."
+            ),
+            "downloads_dir": str(dl_dir),
+            "elapsed_s": round(time.time() - started, 2),
+            "progress_log": progress_log,
+        }
 
     # ---- timeout fallback: scan recent matching files --------------------
     # The watcher only sees files that didn't exist at baseline. If the
@@ -1214,6 +1267,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
                     f"timeout fallback: ambiguous match — {len(recent)} files "
                     f"need disambiguation via pick_filename"
                 )
+                drive_pickup.clear_cancel(modal_id)
                 return {
                     "ok": False,
                     "error": "ambiguous_match",
@@ -1230,6 +1284,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
                 }
 
     if picked is None:
+        drive_pickup.clear_cancel(modal_id)
         return {
             "ok": False,
             "error": "pickup_timeout",
@@ -1247,10 +1302,22 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
             "progress_log": progress_log,
         }
 
+    # Watcher succeeded — dismiss the modal automatically before
+    # surfacing the result. Best-effort: a primitive failure here is
+    # purely cosmetic (the user can still click ×), so we swallow it.
+    drive_pickup.clear_cancel(modal_id)
+    try:
+        await call_browser(
+            "close_download_modal", {"modal_id": modal_id}, ctx,
+        )
+    except BrowserToolError as exc:
+        _log(f"close_download_modal failed (non-fatal): {exc.kind}: {exc!s}")
+
     return _adopt_from_path(
         picked, dl_dir, file_id=file_id, started=started,
         via="adopt_fallback" if used_fallback else "watch",
         progress_log=progress_log,
+        manual_url=download_url_advance,
     )
 
 
@@ -1297,6 +1364,7 @@ def _try_auto_parse_soundcheck(snap_dir: str, log: Any = None) -> dict[str, Any]
 def _adopt_from_path(
     src: Path, dl_dir: Path, *, file_id: str, started: float, via: str,
     progress_log: list[str] | None = None,
+    manual_url: str | None = None,
 ) -> dict[str, Any]:
     """Move ``src`` into python_storage and return the standard envelope.
 
@@ -1409,6 +1477,8 @@ def _adopt_from_path(
             )
     if progress_log is not None:
         out["progress_log"] = progress_log
+    if manual_url is not None:
+        out["manual_download_url"] = manual_url
     if cleanup_error is not None:
         out["error"] = "downloads_cleanup_failed"
         out["message"] = (

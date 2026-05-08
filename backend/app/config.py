@@ -14,12 +14,26 @@ travels with each chat request as a per-request body field.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# When running from source: repo root.
+# When running from a frozen .app bundle (py2app): everything python-side
+# lives inside Contents/Resources, but most of those paths are read-only.
+# The desktop entrypoint sets ``VOITTA_PROJECT_ROOT`` to a writable
+# directory under ``~/Library/Application Support/Voitta`` before any
+# ``app.*`` module is imported, so config / python_storage / scripts etc.
+# all land there. When the env var is unset (normal `uvicorn app.main:app`
+# from a checkout) we keep the old "two parents up from this file"
+# behaviour.
+_env_root = os.environ.get("VOITTA_PROJECT_ROOT")
+if _env_root:
+    PROJECT_ROOT = Path(_env_root).expanduser().resolve()
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 ProviderId = Literal["anthropic", "openai", "gemini"]

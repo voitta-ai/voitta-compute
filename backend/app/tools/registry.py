@@ -137,6 +137,13 @@ class ToolRegistry:
                 error={"kind": "unknown_tool", "message": f"no tool named {name!r}"},
             )
         started = time.monotonic()
+
+        # Activity registry — drives the menu bar's color-coded icon.
+        # Begin/end is bracketed around the whole handler, so concurrent
+        # tools all show their state simultaneously (the priority logic
+        # in app.activity picks the most-significant one for display).
+        from app import activity
+        activity_token = activity.begin(activity.classify(name), detail=name)
         try:
             value = await spec.handler(args or {}, ctx)
         except Exception as exc:
@@ -146,6 +153,8 @@ class ToolRegistry:
                 error={"kind": type(exc).__name__, "message": str(exc)},
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
+        finally:
+            activity.end(activity_token)
         return ToolResult(
             ok=True,
             result=value,

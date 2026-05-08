@@ -319,6 +319,36 @@ header .provider-chip:hover {
   margin-left: 2px;
 }
 
+/* ─── floating report handle (visible only when report is collapsed) ─────── */
+/* Mirror of `.handle` (chat): same vertical position, opposite edge. The
+   chat handle docks to the right; this one to the left. They never share
+   a horizontal slice of screen so equal Y is fine. */
+.report-handle {
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 60px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-bg);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--voitta-shadow-handle);
+  transition: background 0.15s ease;
+  padding: 0;
+  z-index: 1; /* above the report-pane stacking even though pane is hidden */
+}
+.report-handle:hover {
+  background: #1e293b;
+}
+
 /* ─── report pane (left of chat drawer) ──────────────────────────────────── */
 /* Hosts a HoloViz Panel report in an iframe. The `right` offset is set
    inline by the component so it leaves room for the chat drawer; when the
@@ -335,20 +365,37 @@ header .provider-chip:hover {
   flex-direction: column;
   pointer-events: auto;
   z-index: 0; /* inside .root which already has page-top z-index */
+  /* Slide-in/out animation, mirroring `.drawer` (the chat). The drawer
+     translates X from +100% (off the right) to 0; the report does the
+     same from -100% (off the left). Same easing + duration so the two
+     panes feel coordinated when both transition together. */
+  transform: translateX(0);
+  transition: transform 0.25s ease;
+}
+.report-pane.is-collapsed {
+  transform: translateX(-100%);
+  pointer-events: none;
 }
 .report-pane .report-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  /* Padding + border copied from the global `header` rule so the report
+     header matches the chat header's overall height. The 18px title
+     font (matching .brand-name) is what drives the content line-height
+     to align with the chat header's "Voitta" label. */
+  padding: 10px 14px;
   background: var(--voitta-header-bg);
   color: #fff;
-  border-bottom: 3px solid var(--voitta-accent);
+  border-bottom: 1px solid var(--voitta-header-rule);
   flex-shrink: 0;
   font-size: 13px;
 }
 .report-pane .report-title {
+  font-family: var(--voitta-font-display);
   font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

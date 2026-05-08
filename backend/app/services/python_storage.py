@@ -42,9 +42,10 @@ from typing import Any
 META_VALUE_CAP = 20
 
 
-# /Users/roman/DEVEL/voitta-bookmarklet/backend/app/services/python_storage.py
-# parents[3] = voitta-bookmarklet (project root).
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# Mirror app.config.PROJECT_ROOT so packaged (.app) and dev modes agree
+# on where mutable state lives. See app/config.py for the env-var override.
+from app.config import PROJECT_ROOT  # noqa: E402
+
 STORAGE_ROOT = PROJECT_ROOT / "python_storage"
 
 

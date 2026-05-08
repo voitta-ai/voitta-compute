@@ -43,6 +43,48 @@ def _noop_log(_msg: str) -> None:
     pass
 
 
+# ---- modal cancellation registry -------------------------------------------
+#
+# When the pickup tool opens an in-page modal iframe, it registers a
+# ``modal_id`` here. The modal's × button does a fetch back to
+# ``/api/drive-pickup/cancel`` which calls :func:`set_cancelled`; the
+# watcher loop polls :func:`is_cancelled` and short-circuits. The flag
+# is cleared by :func:`clear_cancel` once the tool exits, regardless of
+# success / cancel / timeout, so a stale modal_id can't poison a future
+# pickup with the same id (collisions don't happen — modal_ids are
+# 16-char hex tokens — but defence in depth).
+
+_cancel_flags: dict[str, bool] = {}
+
+
+def register_modal(modal_id: str) -> None:
+    """Mark ``modal_id`` as a live pickup awaiting cancel signals.
+
+    Idempotent — repeated calls reset the flag to False, which is the
+    same state a brand-new registration starts in.
+    """
+    _cancel_flags[modal_id] = False
+
+
+def set_cancelled(modal_id: str) -> bool:
+    """Mark ``modal_id`` cancelled. Returns True if the flag was actually
+    flipped (caller can use this to dedupe duplicate cancel POSTs)."""
+    if modal_id not in _cancel_flags:
+        return False
+    if _cancel_flags[modal_id]:
+        return False
+    _cancel_flags[modal_id] = True
+    return True
+
+
+def is_cancelled(modal_id: str) -> bool:
+    return _cancel_flags.get(modal_id, False)
+
+
+def clear_cancel(modal_id: str) -> None:
+    _cancel_flags.pop(modal_id, None)
+
+
 # Markers used by Chrome (.crdownload) and Firefox (.part) for in-flight
 # downloads. We don't want to grab these — wait for the final filename.
 _PARTIAL_SUFFIXES = (".crdownload", ".part", ".tmp", ".download")
@@ -189,6 +231,7 @@ async def wait_for_new_file(
     name_hint: str | None = None,
     quiescence_s: float = _DEFAULT_QUIESCENCE_S,
     log: LogFn = _noop_log,
+    cancel_check: "Callable[[], bool] | None" = None,
 ) -> Path | None:
     """Poll ``dir_path`` until a new file appears AND has been quiescent
     (size + mtime stable) for ``quiescence_s``. Returns the path or
@@ -221,6 +264,14 @@ async def wait_for_new_file(
     )
 
     while time.monotonic() < deadline:
+        # User-initiated cancellation via the modal's × button. Returning
+        # None (with the cancel flag observable to the caller) lets the
+        # tool surface ``error: 'user_cancelled'`` instead of a vanilla
+        # timeout.
+        if cancel_check is not None and cancel_check():
+            log("watch cancelled by user")
+            return None
+
         now = time.monotonic()
         candidates: list[tuple[int, str, Path]] = []  # (score, name, path)
         partials_now: list[str] = []

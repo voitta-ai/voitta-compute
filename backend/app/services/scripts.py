@@ -54,8 +54,14 @@ from pathlib import Path
 from typing import Any
 
 
-# Project layout — same conventions as services/python_storage.py.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# Project layout — same conventions as services/python_storage.py:
+# anchor at ``app.config.PROJECT_ROOT`` so packaged (.app) and dev
+# modes both write to a directory the user owns. Computing parents from
+# ``__file__`` lands inside the read-only .app Resources bundle on
+# packaged installs, which fails with EROFS the moment we try to
+# create scripts/compute/<slug>/.
+from app.config import PROJECT_ROOT  # noqa: E402
+
 SCRIPTS_ROOT = PROJECT_ROOT / "scripts"
 SCRIPTS_COMPUTE = SCRIPTS_ROOT / "compute"
 SCRIPTS_REPORTS = SCRIPTS_ROOT / "reports"

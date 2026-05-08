@@ -22,7 +22,11 @@ from app.routes.providers import router as providers_router
 from app.routes.tools import router as tools_router
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Mirror app.config.PROJECT_ROOT so packaged (.app) and dev modes
+# resolve resources to the same place. config picks up the env-var
+# override `VOITTA_PROJECT_ROOT` set by the desktop launcher.
+from app.config import PROJECT_ROOT  # noqa: E402
+
 FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 
@@ -724,6 +728,28 @@ async def google_oauth_set_config(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **google_oauth.status()}
+
+
+@app.post("/api/drive-pickup/cancel")
+async def drive_pickup_cancel(request: Request) -> dict:
+    """User clicked × on the Drive download modal — flip the cancel flag.
+
+    The pickup tool's watcher polls ``drive_pickup.is_cancelled(modal_id)``
+    on every tick and returns immediately when this is set. Body shape:
+    ``{"modal_id": "<16-hex>"}``. Idempotent — repeated POSTs for the
+    same id return ``{ok: true, was_pending: false}``.
+    """
+    from app.services import drive_pickup
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    modal_id = (body or {}).get("modal_id")
+    if not isinstance(modal_id, str) or not modal_id:
+        raise HTTPException(status_code=400, detail="modal_id required")
+    flipped = drive_pickup.set_cancelled(modal_id)
+    return {"ok": True, "modal_id": modal_id, "was_pending": flipped}
 
 
 @app.post("/api/google/disconnect")

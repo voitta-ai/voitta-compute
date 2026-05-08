@@ -60,6 +60,24 @@ dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
 ]
+# `pip install -e ".[desktop]"` enables the menu-bar / .app build flow.
+# rumps gives us NSStatusBar without writing PyObjC by hand; pyobjc-*
+# frameworks are pulled in transitively but listed explicitly so the
+# py2app collector sees them. py2app itself is the bundler.
+desktop = [
+  "rumps>=0.4.0",
+  "pyobjc-framework-Cocoa>=10.0",
+  # briefcase replaces py2app as the .app builder. Picked it over py2app
+  # because py2app's macholib step fails on macOS 15 Sequoia with a
+  # kernel-level "Operation not permitted" on dylib rewrites that no
+  # userspace shim could lift. Briefcase builds via a different path
+  # (pre-relocated CPython support package + bundled deps) that
+  # sidesteps the install_name_tool problem entirely.
+  "briefcase>=0.4.1",
+]
+
+[project.scripts]
+voitta-desktop = "app.desktop:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -73,3 +91,9 @@ include = ["app*"]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 asyncio_mode = "auto"
+
+# Briefcase config (project_name, bundle, sources, requires, …) lives at
+# the repo root in `pyproject.toml`. That's intentional: briefcase writes
+# `build/` and `dist/` next to its manifest, so we keep the redistributable
+# artefacts at the top of the repo instead of buried in backend/.
+# See `pyproject.toml` and `build_app.sh` at the repo root.

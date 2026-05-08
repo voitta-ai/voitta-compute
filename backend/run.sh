@@ -146,11 +146,17 @@ if [ ! -d .venv ]; then
 fi
 
 # Pull canonical config from app/config.py — one source of truth.
-read -r HOST PORT CERT_PATH KEY_PATH <<<"$(./.venv/bin/python - <<'PY'
+read -r _HOST PORT CERT_PATH KEY_PATH <<<"$(./.venv/bin/python - <<'PY'
 from app.config import HOST, PORT, TLS_CERT_PATH, TLS_KEY_PATH
 print(HOST, PORT, TLS_CERT_PATH, TLS_KEY_PATH)
 PY
 )"
+
+# Bind on all interfaces — config.py defaults to 127.0.0.1, this dev
+# script overrides so the backend is reachable from a phone / VM /
+# coworker's browser on the same LAN. Production .app keeps the
+# loopback default. Set VOITTA_RUN_HOST=127.0.0.1 to opt out.
+HOST="${VOITTA_RUN_HOST:-0.0.0.0}"
 
 # Best-effort: if cert is missing, try to provision it. Failure here
 # falls through to the HTTP fallback below — explicit, never aborts.

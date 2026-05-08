@@ -131,6 +131,14 @@ export function ChatPane({ backendOrigin }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [activeReport, setActiveReport] = useState<ReportInfo | null>(null);
+  // Two states for the report pane:
+  //   • activeReport === null   → no report (no iframe mounted)
+  //   • activeReport && !collapsed → fully visible
+  //   • activeReport && collapsed  → iframe stays mounted under display:none,
+  //                                   handle button is shown to re-expand
+  // Tracking these separately keeps the Panel/Bokeh session alive across
+  // collapse/expand without re-running the report.
+  const [reportCollapsed, setReportCollapsed] = useState(false);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
   const brand = BRAND;
   const abortRef = useRef<AbortController | null>(null);
@@ -191,7 +199,13 @@ export function ChatPane({ backendOrigin }: Props) {
   // the left-side ReportPane. Calling with `null` would hide it, but we
   // currently only call with a report; the user closes via the × button.
   useEffect(() => {
-    setReportSink((info) => setActiveReport(info));
+    setReportSink((info) => {
+      setActiveReport(info);
+      // A freshly-shown report should always be visible; otherwise an
+      // earlier "collapse" persists across navigations and the user
+      // sees nothing happen when the LLM calls show_holoviz_report.
+      setReportCollapsed(false);
+    });
     return () => setReportSink(null);
   }, []);
 
@@ -407,9 +421,36 @@ export function ChatPane({ backendOrigin }: Props) {
       {activeReport && (
         <ReportPane
           info={activeReport}
-          onClose={() => setActiveReport(null)}
+          onCollapse={() => setReportCollapsed(true)}
+          collapsed={reportCollapsed}
           drawerWidth={reportRightOffset}
         />
+      )}
+      {activeReport && reportCollapsed && (
+        <button
+          class="report-handle"
+          type="button"
+          title={
+            activeReport.title
+              ? `Reopen report: ${activeReport.title}`
+              : "Reopen collapsed report"
+          }
+          aria-label="Reopen collapsed report"
+          onClick={() => setReportCollapsed(false)}
+        >
+          {/* Document/report glyph — distinct from the chat handle's
+              speech-bubble icon so the two are visually distinguishable
+              when both are docked. */}
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path
+              d="M6 3h9l4 4v14H6z M14 3v5h5"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
       )}
       {artifactsOpen && (
         <ArtifactsView

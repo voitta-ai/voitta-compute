@@ -23,8 +23,35 @@ from pathlib import Path
 from typing import Any
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3].parent
-RAG_DIR = REPO_ROOT / "rag"
+from app.config import PROJECT_ROOT
+
+# In source-checkout mode PROJECT_ROOT is the repo root, so rag/ already
+# exists with the dev's pre-built indexes. In packaged-.app mode
+# PROJECT_ROOT is the user data dir (writable) and rag/ is created here
+# at first-launch by the installer. Either way, rag_query reads from
+# the same place — keeps the runtime path resolution flat.
+RAG_DIR = PROJECT_ROOT / "rag"
+
+
+def docs_source_dir() -> Path:
+    """Return the read-only docs/ directory the indexer should walk.
+
+    Source-checkout: ``<repo>/docs/``. Packaged .app: the docs are
+    staged into ``src/voitta/resources/docs/`` by ``build_app.sh``,
+    which briefcase auto-includes as package data; we resolve via
+    importing ``voitta``.
+    """
+    candidate = PROJECT_ROOT / "docs"
+    if candidate.is_dir():
+        return candidate
+    try:
+        import voitta
+        bundled = Path(voitta.__file__).resolve().parent / "resources" / "docs"
+        if bundled.is_dir():
+            return bundled
+    except ImportError:
+        pass
+    return Path(__file__).resolve().parents[4] / "docs"
 
 
 @dataclass(frozen=True)

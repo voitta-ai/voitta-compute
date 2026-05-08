@@ -26,7 +26,13 @@ interface ReportInfo {
 
 interface Props {
   info: ReportInfo;
-  onClose: () => void;
+  // Collapse to a handle. The iframe stays mounted under display:none
+  // so the Bokeh session, scroll position, and any in-iframe widget
+  // state survive. We don't expose a separate "destroy" path — the
+  // iframe is cheap and re-opening via show_holoviz_report would
+  // otherwise re-run the report unnecessarily.
+  onCollapse: () => void;
+  collapsed: boolean;
   drawerWidth: number;
 }
 
@@ -39,7 +45,7 @@ function withEditable(url: string, on: boolean): string {
   return url + (url.includes("?") ? "&" : "?") + "editable=true";
 }
 
-export function ReportPane({ info, onClose, drawerWidth }: Props) {
+export function ReportPane({ info, onCollapse, collapsed, drawerWidth }: Props) {
   const title = info.title || `Report ${info.report_id || "(unnamed)"}`;
   const [editing, setEditing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -116,9 +122,15 @@ export function ReportPane({ info, onClose, drawerWidth }: Props) {
 
   return (
     <section
-      class="report-pane"
+      class={`report-pane${collapsed ? " is-collapsed" : ""}`}
       role="complementary"
       aria-label={title}
+      // Slide off-screen via CSS transform when collapsed (see
+      // .report-pane.is-collapsed in styles.css). Transform-based hiding
+      // keeps the iframe document alive — Bokeh session, scroll position,
+      // any in-iframe widget state survive collapse/expand cycles, just
+      // like display:none would, but with a slide animation that mirrors
+      // the chat drawer.
       style={{ right: `${drawerWidth}px` }}
     >
       <header class="report-header">
@@ -180,9 +192,9 @@ export function ReportPane({ info, onClose, drawerWidth }: Props) {
         <button
           class="report-close"
           type="button"
-          title="Close report"
-          aria-label="Close report"
-          onClick={onClose}
+          title="Collapse report (reopen from the handle on the left edge)"
+          aria-label="Collapse report"
+          onClick={onCollapse}
         >
           ×
         </button>
