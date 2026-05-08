@@ -140,7 +140,9 @@ export async function bootstrapSettings(origin: string): Promise<Settings> {
   try {
     const res = await fetch(`${backendOrigin}/api/settings`, {
       method: "GET",
-      credentials: "omit",
+      // ``include`` so the auth cookie attaches in non-localhost mode.
+      // GET /api/settings is gated; the chat won't bootstrap without it.
+      credentials: "include",
     });
     if (!res.ok) {
       log.warn("settings", "GET /api/settings failed", { status: res.status });
@@ -181,7 +183,7 @@ async function putToBackend(s: Settings): Promise<void> {
     const res = await fetch(`${backendOrigin}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      credentials: "omit",
+      credentials: "include",
       body: JSON.stringify(s),
       keepalive: true,
     });

@@ -170,6 +170,7 @@ function buildDownloadModal(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ modal_id: modalId, reason }),
+        credentials: "include",
         keepalive: true,
       }).catch(() => {});
     }

@@ -44,6 +44,27 @@ HOST = "127.0.0.1"
 PORT = 12358
 
 
+# Auth gate. ``LOCALHOST_MODE`` skips auth entirely — the bookmarklet
+# can talk to the backend with no credentials. Anything else (LAN /
+# WAN deployment) requires the user to enter ``API_KEY`` once via the
+# widget's login screen, which sets a session cookie. The cookie
+# applies to subsequent requests automatically — fetch, EventSource,
+# and report iframes all rely on the same path.
+#
+# LOCALHOST_MODE flips when run.sh / app launcher pass ``--localhost``;
+# we model it as a default-on env-var override here so it survives
+# uvicorn's --reload restart without re-passing CLI flags.
+LOCALHOST_MODE = os.environ.get("VOITTA_LOCALHOST_MODE", "1") == "1"
+
+# The shared secret. Eventually replaced by Google OAuth, but for v1
+# the user types this into the login dialog. Falls back to a fixed
+# placeholder so dev environments don't need any extra setup.
+API_KEY = os.environ.get("VOITTA_API_KEY", "314159")
+
+# Cookie name we set after a successful POST /api/auth/login.
+AUTH_COOKIE_NAME = "voitta_auth"
+
+
 def _detect_cert_pair() -> tuple[Path, Path]:
     """Locate an mkcert-generated cert/key pair under backend/certs/.
 

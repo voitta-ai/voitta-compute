@@ -131,6 +131,7 @@ export async function streamChat(
     headers: { "content-type": "application/json", accept: "text/event-stream" },
     body: JSON.stringify(body),
     signal,
+    credentials: "include",
   });
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
@@ -232,6 +233,7 @@ export async function fetchProviderModels(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ provider, api_key: apiKey }),
     signal,
+    credentials: "include",
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

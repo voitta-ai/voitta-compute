@@ -20,20 +20,32 @@ cd "$(dirname "$0")"
 #          frontend development at http://localhost:5173 (the bookmarklet
 #          loader auto-matches scheme).
 FORCE_HTTP=0
+LOCALHOST_MODE=0
 for arg in "$@"; do
   case "$arg" in
     --http) FORCE_HTTP=1 ;;
+    --localhost) LOCALHOST_MODE=1 ;;
     -h|--help)
       sed -n '2,15p' "$0"
       echo
       echo "Flags:"
-      echo "  --http   skip HTTPS, run plain http://"
+      echo "  --http        skip HTTPS, run plain http://"
+      echo "  --localhost   skip the API-key gate (loopback-only deployments)"
       exit 0 ;;
     *)
       echo "[run.sh] unknown arg: $arg" >&2
       exit 2 ;;
   esac
 done
+
+# Tell config.py whether to enforce auth. Always set explicitly so a
+# stale value in the calling shell doesn't carry over to a re-run.
+export VOITTA_LOCALHOST_MODE=$LOCALHOST_MODE
+if [ "$LOCALHOST_MODE" -eq 1 ]; then
+  echo "[run.sh] LOCALHOST_MODE: on (no API key required)"
+else
+  echo "[run.sh] LOCALHOST_MODE: off (clients must POST /api/auth/login)"
+fi
 
 # ─── cert provisioning helpers ────────────────────────────────────────────
 #

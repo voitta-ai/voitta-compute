@@ -189,6 +189,20 @@ def main() -> int:
         # handle the bootstrap. Returning 0 lets the spawn protocol
         # tear down the child if it ever reaches us.
         return 0
+
+    # ``--localhost`` flag: skip the API-key gate. Default for the .app
+    # is "on" (loopback-only listener, single user) so the user is not
+    # prompted on every launch. To run the .app in LAN-shared mode,
+    # launch from Terminal: ``open -a 'Voitta Bookmarklet' --args --no-localhost``
+    # (or set VOITTA_LOCALHOST_MODE=0 in the environment).
+    if "--no-localhost" in sys.argv:
+        os.environ["VOITTA_LOCALHOST_MODE"] = "0"
+    elif "--localhost" in sys.argv:
+        os.environ["VOITTA_LOCALHOST_MODE"] = "1"
+    else:
+        # Frozen .app default = on. Source-checkout default = on too,
+        # so test runs don't break unexpectedly.
+        os.environ.setdefault("VOITTA_LOCALHOST_MODE", "1")
     if _is_frozen():
         user_root = _prepare_user_data_dir()
         os.environ["VOITTA_PROJECT_ROOT"] = str(user_root)

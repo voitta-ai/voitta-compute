@@ -408,7 +408,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
   async function refresh() {
     try {
       const r = await fetch(`${backendOrigin}/api/google/status`, {
-        credentials: "omit",
+        credentials: "include",
       });
       if (!r.ok) throw new Error(`status ${r.status}`);
       setStatus((await r.json()) as GoogleStatus);
@@ -469,7 +469,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
     try {
       const r = await fetch(`${backendOrigin}/api/google/disconnect`, {
         method: "POST",
-        credentials: "omit",
+        credentials: "include",
       });
       if (!r.ok) throw new Error(`status ${r.status}`);
       await refresh();
@@ -591,7 +591,7 @@ function ConfigureForm({
   // require re-typing the other.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${backendOrigin}/api/google/config`, { credentials: "omit" })
+    fetch(`${backendOrigin}/api/google/config`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`status ${r.status}`))))
       .then((c: GoogleClientConfig) => {
         if (cancelled) return;
@@ -684,7 +684,7 @@ function ConfigureForm({
     try {
       const r = await fetch(`${backendOrigin}/api/google/configure`, {
         method: "POST",
-        credentials: "omit",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientId: clientId.trim(),

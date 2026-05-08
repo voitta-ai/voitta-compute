@@ -32,14 +32,88 @@ FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
 
 app = FastAPI(title="Voitta Bookmarklet Backend", version="0.1.0")
 
+# CORS. ``allow_credentials=True`` is required so cookies set by
+# /api/auth/login round-trip on subsequent fetches from the host page
+# (drive.google.com etc → 127.0.0.1:12358 is cross-origin). The CORS
+# spec forbids ``*`` together with credentials, so we echo the request
+# Origin via a regex match instead — semantically equivalent for our
+# threat model since auth is the cookie, not the origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origin_regex=".*",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+
+# ---- auth gate -------------------------------------------------------------
+#
+# When LOCALHOST_MODE is on (the default for the .app), every request
+# passes. Otherwise we require the request to carry the auth cookie set
+# by ``POST /api/auth/login``, OR the route to be in the open-allowlist
+# (widget bootstrap + the auth endpoints themselves).
+#
+# Allowlist routes:
+#   GET /widget.js              bookmarklet has to load before login
+#   GET /widget.js.map          dev-mode source map
+#   POST /api/auth/login        the login endpoint itself
+#   GET  /api/auth/status       cheap "are we authed?" probe
+#   POST /api/auth/logout       not auth-gated by spec (anyone can quit)
+#   GET  /healthz               opt-in liveness check
+#
+# Everything else (chat, tools, RAG, Drive, reports, scripts) is gated.
+
+_AUTH_OPEN_ROUTES = frozenset({
+    "GET /widget.js",
+    "GET /widget.js.map",
+    "POST /api/auth/login",
+    "GET /api/auth/status",
+    "POST /api/auth/logout",
+    "GET /healthz",
+})
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    from app import config as _cfg
+
+    # Always pass in localhost mode — current production .app default.
+    if _cfg.LOCALHOST_MODE:
+        return await call_next(request)
+
+    # CORS preflight — the browser hasn't attached cookies yet, and
+    # blocking it kills every cross-origin call. The CORSMiddleware
+    # above answers it; let the request through.
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
+    key = f"{request.method} {request.url.path}"
+    if key in _AUTH_OPEN_ROUTES:
+        return await call_next(request)
+
+    cookie = request.cookies.get(_cfg.AUTH_COOKIE_NAME)
+    if cookie and cookie == _cfg.API_KEY:
+        return await call_next(request)
+
+    # Bearer header for non-browser callers (curl / sdk).
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        if auth_header[7:].strip() == _cfg.API_KEY:
+            return await call_next(request)
+
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "unauthenticated",
+            "message": (
+                "This Voitta backend is running in LAN mode and requires "
+                "an API key. POST /api/auth/login with body "
+                "{\"api_key\": \"...\"} to get a session cookie."
+            ),
+        },
+    )
 
 
 # Chrome's Private Network Access (PNA) gate. When a public origin (e.g.
@@ -750,6 +824,82 @@ async def drive_pickup_cancel(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="modal_id required")
     flipped = drive_pickup.set_cancelled(modal_id)
     return {"ok": True, "modal_id": modal_id, "was_pending": flipped}
+
+
+# ---- auth routes ----------------------------------------------------------
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request) -> dict:
+    """Tell the bookmarklet whether it needs to show the login screen.
+
+    ``localhost_mode`` is True when the backend is running in
+    "skip auth" mode — frontend should mount the chat directly.
+    Otherwise ``authenticated`` reflects the cookie state.
+    """
+    from app import config as _cfg
+
+    cookie = request.cookies.get(_cfg.AUTH_COOKIE_NAME)
+    return {
+        "localhost_mode": _cfg.LOCALHOST_MODE,
+        "authenticated": (cookie is not None and cookie == _cfg.API_KEY),
+    }
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request) -> JSONResponse:
+    """Validate an API key and set the session cookie.
+
+    Body: ``{"api_key": "..."}``. Wrong key → 401. Right key → 200 with
+    ``Set-Cookie`` header. Cookie is HttpOnly + SameSite=None so it
+    rides on cross-origin fetches and EventSource and iframe loads
+    from any host page the bookmarklet runs on.
+    """
+    from app import config as _cfg
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be an object")
+    submitted = (body.get("api_key") or "").strip()
+    if not submitted:
+        raise HTTPException(status_code=400, detail="api_key required")
+
+    if submitted != _cfg.API_KEY:
+        return JSONResponse(
+            status_code=401,
+            content={"ok": False, "error": "invalid_api_key"},
+        )
+
+    response = JSONResponse({"ok": True, "authenticated": True})
+    # SameSite=None requires Secure (TLS). The .app and run.sh both
+    # serve HTTPS by default. ``--http`` mode is loopback-only so
+    # SameSite=Lax is fine there; we fall back when the request is
+    # http://. ``HttpOnly`` blocks document.cookie reads — the
+    # widget instead checks /api/auth/status for the auth bit.
+    is_https = request.url.scheme == "https"
+    response.set_cookie(
+        _cfg.AUTH_COOKIE_NAME,
+        _cfg.API_KEY,
+        httponly=True,
+        secure=is_https,
+        samesite="none" if is_https else "lax",
+        max_age=60 * 60 * 24 * 30,  # 30 days
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout() -> JSONResponse:
+    """Clear the session cookie. Idempotent; always returns 200."""
+    from app import config as _cfg
+
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(_cfg.AUTH_COOKIE_NAME, path="/")
+    return response
 
 
 @app.post("/api/google/disconnect")

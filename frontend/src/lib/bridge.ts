@@ -101,7 +101,11 @@ export function startBridge(backendOrigin: string): void {
     }
 
     const url = `${backendOrigin}/tools/inbox?session_id=${SESSION_ID}`;
-    const es = new EventSource(url);
+    // ``withCredentials: true`` so cookies (incl. the auth session
+    // cookie set by /api/auth/login) ride on the SSE connection in
+    // non-localhost mode. In localhost mode the auth gate is bypassed
+    // server-side so this is a harmless no-op.
+    const es = new EventSource(url, { withCredentials: true });
     currentEs = es;
 
     es.addEventListener("ready", () => {
@@ -290,6 +294,8 @@ async function runCall(
       call_id: payload.call_id,
       ...envelope,
     }),
+    // Cookie-based auth in non-localhost mode; harmless in localhost mode.
+    credentials: "include",
   }).catch((err) => {
     log.warn("bridge", "POST /tools/result failed", {
       call_id: payload.call_id,
@@ -330,6 +336,7 @@ async function postRegister(backendOrigin: string): Promise<void> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
+    credentials: "include",
   });
   if (!res.ok) {
     log.warn("bridge", `register HTTP ${res.status}`, { sessionId: SESSION_ID });

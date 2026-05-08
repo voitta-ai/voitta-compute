@@ -390,7 +390,10 @@ export function ArtifactsView({ backendOrigin, onClose }: Props) {
     setLoading(true);
     setErr(null);
     try {
-      const resp = await fetch(backendOrigin + "/api/artifacts", { method: "GET" });
+      const resp = await fetch(backendOrigin + "/api/artifacts", {
+        method: "GET",
+        credentials: "include",
+      });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const body: ArtifactsResponse = await resp.json();
       setData(body);
