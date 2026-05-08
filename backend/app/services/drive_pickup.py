@@ -371,11 +371,22 @@ async def wait_for_new_file(
     return None
 
 
-def drive_uc_download_url(file_id: str) -> str:
+def drive_uc_download_url(file_id: str, *, account_index: int | None = None) -> str:
     """Public Drive URL that, when opened in the user's browser tab,
     triggers a normal HTML download via the user's existing Google
-    session cookies. ``confirm=t`` skips the virus-scan interstitial
-    for files > ~100 MB."""
-    return (
-        f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
-    )
+    session cookies.
+
+    ``confirm=t`` skips the virus-scan interstitial for files > ~100 MB.
+
+    ``account_index`` corresponds to the ``/u/<N>/`` segment in the
+    user's current Drive URL — the zero-indexed slot among logged-in
+    Google accounts. We forward it as ``authuser=N`` so Drive resolves
+    the request against the SAME account whose folder the user is
+    currently viewing. Without this, multi-account browsers default to
+    account 0, which 403s when the file is shared only with another
+    logged-in account.
+    """
+    params = f"export=download&id={file_id}&confirm=t"
+    if account_index is not None:
+        params += f"&authuser={int(account_index)}"
+    return f"https://drive.google.com/uc?{params}"

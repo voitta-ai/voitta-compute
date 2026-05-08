@@ -1115,13 +1115,27 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
         f"dir={dl_dir!s}"
     )
 
+    # Match the Google account context to the one the user is currently
+    # viewing in Drive. Multi-account browsers default Drive download
+    # URLs to authuser=0; if the file is shared only with another logged-
+    # in account, the silent default 403s. We pull /u/<N>/ from the
+    # active tab's URL via the same browser primitive
+    # ``drive_get_page_context`` uses, then forward as ``authuser=N``.
+    # Returns None on /file/d/<id>/ pages (no /u/<N>/ slot present) —
+    # in that case we omit authuser and let Drive pick its default.
+    from app.tools.providers.drive.context import get_active_account_index
+    account_index = await get_active_account_index(ctx)
+    if account_index is not None:
+        _log(f"matched account_index={account_index} from active Drive tab URL")
+
     # Compute the URL up-front so we can include it in EVERY response
     # path (success, timeout, ambiguous, browser failure). When Drive
     # serves the "couldn't scan for viruses" interstitial, the user has
     # to click "Download anyway" manually — having a direct clickable
     # link in chat saves them digging through the address bar.
     download_url_advance = (
-        drive_pickup.drive_uc_download_url(file_id) if file_id else None
+        drive_pickup.drive_uc_download_url(file_id, account_index=account_index)
+        if file_id else None
     )
 
     # Modal id pairs the in-page download iframe with the watcher loop.
@@ -1157,7 +1171,9 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
 
     # ---- normal path: trigger + watch -------------------------------------
     baseline = drive_pickup.snapshot_listing(dl_dir)
-    download_url = drive_pickup.drive_uc_download_url(file_id)
+    download_url = drive_pickup.drive_uc_download_url(
+        file_id, account_index=account_index,
+    )
     _log(f"baseline: {len(baseline)} files in {dl_dir!s}")
 
     # In-page modal iframe trigger. The user sees a centred dialog

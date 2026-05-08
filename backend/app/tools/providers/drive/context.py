@@ -55,6 +55,31 @@ def _flatten_qs(qs: dict[str, list[str]]) -> dict[str, Any]:
     return {k: (v[0] if len(v) == 1 else v) for k, v in qs.items()}
 
 
+async def get_active_account_index(ctx: ToolCtx) -> int | None:
+    """Best-effort: which ``/u/<N>/`` slot is the user's current Drive
+    URL? Returns ``None`` if the bridge isn't available, the URL isn't
+    a recognised Drive route, or the URL has no ``/u/N/`` segment
+    (single-account browsers omit it; treat as account 0 — but we
+    return None so the caller can decide whether to omit ``authuser``
+    entirely).
+    """
+    try:
+        url_info = await call_browser("get_url", {}, ctx)
+    except BrowserToolError:
+        return None
+    href = str(url_info.get("href") or "")
+    pathname = urlparse(href).path or "/"
+    for rx in (_FOLDER_RE, _VIEW_RE):
+        m = rx.match(pathname)
+        if m and m.group(1):
+            try:
+                return int(m.group(1))
+            except (TypeError, ValueError):
+                return None
+    # /file/d/<id>/... has no /u/N/ slot; nothing to return.
+    return None
+
+
 async def _drive_page_context(args: dict[str, Any], ctx: ToolCtx) -> dict[str, Any]:
     try:
         url_info = await call_browser("get_url", {}, ctx)
