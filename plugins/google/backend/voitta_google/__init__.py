@@ -14,7 +14,7 @@ Three layers:
     Host-gated AND visible only while OAuth is off.
 """
 
-from app.tools.providers.drive import (  # noqa: F401
+from voitta_google import (  # noqa: F401
     context,
     page_scrape,
     tools,

@@ -162,18 +162,85 @@ def merge_blocks(
     return out
 
 
-def chunk_file(path: Path, *, target: int, overlap: int, minimum: int, hard_max: int) -> list[Chunk]:
+def chunk_file(
+    path: Path,
+    *,
+    target: int,
+    overlap: int,
+    minimum: int,
+    hard_max: int,
+    base_dir: Path | None = None,
+) -> list[Chunk]:
+    """Chunk one .md file. ``base_dir`` overrides the path used to
+    compute the chunk's ``file`` field; defaults to ``DOCS_DIR`` for
+    backwards compatibility with anyone who calls this directly."""
     text = path.read_text(encoding="utf-8")
     blocks = split_into_blocks(text)
     merged = merge_blocks(blocks, target=target, overlap=overlap, minimum=minimum, hard_max=hard_max)
-    rel = str(path.relative_to(DOCS_DIR))
+    if base_dir is not None:
+        try:
+            rel = str(path.relative_to(base_dir))
+        except ValueError:
+            rel = str(path)
+    else:
+        rel = str(path.relative_to(DOCS_DIR))
     return [
         Chunk(file=rel, chunk_id=i, char_start=s, char_end=e, text=t)
         for i, (s, e, t) in enumerate(merged)
     ]
 
 
+def _candidate_plugin_roots() -> list[Path]:
+    """Every directory we'd accept as a parent of plugin folders.
+
+    Source-checkout: ``<repo>/plugins``. Packaged .app: the briefcase
+    bundle stages plugins under ``src/voitta/resources/plugins`` (see
+    ``build_app.sh``). Both paths are tried; whichever exists wins.
+    """
+    out: list[Path] = []
+    repo = REPO_ROOT / "plugins"
+    if repo.is_dir():
+        out.append(repo)
+    try:
+        import voitta as _voitta  # type: ignore[import-not-found]
+        res = Path(_voitta.__file__).resolve().parent / "resources" / "plugins"
+        if res.is_dir() and res not in out:
+            out.append(res)
+    except Exception:
+        pass
+    return out
+
+
+def _discover_plugin_docs() -> list[tuple[Path, Path]]:
+    """Return ``[(base_dir, md_path), ...]`` for every plugin's docs/.
+
+    ``base_dir`` is the *plugins root* (one level above each plugin) so
+    the chunk's relative path comes out as ``<name>/docs/foo.md`` —
+    flat enough that the LLM can identify the source plugin at a
+    glance, doesn't include a long bundle prefix.
+    """
+    out: list[tuple[Path, Path]] = []
+    for plugins_root in _candidate_plugin_roots():
+        for plugin_dir in sorted(plugins_root.iterdir()):
+            if not plugin_dir.is_dir() or plugin_dir.name.startswith("."):
+                continue
+            docs_dir = plugin_dir / "docs"
+            if not docs_dir.is_dir():
+                continue
+            for md in sorted(docs_dir.rglob("*.md")):
+                if md.is_file():
+                    out.append((plugins_root, md))
+    return out
+
+
 def discover_docs() -> list[Path]:
+    """Backwards-compatible: returns just the core docs/ paths.
+
+    Plugin docs are surfaced separately via ``_discover_plugin_docs``
+    (kept private because the rebuild loop in main() handles them with
+    a different base_dir). External callers using this function aren't
+    affected.
+    """
     return sorted(p for p in DOCS_DIR.rglob("*.md") if p.is_file())
 
 
@@ -279,6 +346,25 @@ def main(argv: list[str] | None = None) -> int:
         )
         chunks.extend(cs)
         print(f"  {f.relative_to(DOCS_DIR)}: {len(cs)} chunks")
+
+    # Plugin docs — every plugin's docs/ tree gets indexed into the same
+    # corpus. Rel paths are ``plugins/<name>/docs/<file>.md`` so search
+    # hits self-identify by source.
+    plugin_pairs = _discover_plugin_docs()
+    if plugin_pairs:
+        print(f"plugins: {len(plugin_pairs)} markdown file(s) across "
+              f"{len({p[1].parent for p in plugin_pairs})} plugin(s)")
+        for base, md in plugin_pairs:
+            cs = chunk_file(
+                md,
+                target=args.target,
+                overlap=args.overlap,
+                minimum=args.minimum,
+                hard_max=args.hard_max,
+                base_dir=base,
+            )
+            chunks.extend(cs)
+            print(f"  {md.relative_to(base)}: {len(cs)} chunks")
 
     print(f"total chunks: {len(chunks)}")
     print()

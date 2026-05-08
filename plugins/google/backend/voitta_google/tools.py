@@ -1123,7 +1123,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
     # ``drive_get_page_context`` uses, then forward as ``authuser=N``.
     # Returns None on /file/d/<id>/ pages (no /u/<N>/ slot present) —
     # in that case we omit authuser and let Drive pick its default.
-    from app.tools.providers.drive.context import get_active_account_index
+    from voitta_google.context import get_active_account_index
     account_index = await get_active_account_index(ctx)
     if account_index is not None:
         _log(f"matched account_index={account_index} from active Drive tab URL")

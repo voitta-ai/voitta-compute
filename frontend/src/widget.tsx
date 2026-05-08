@@ -2,8 +2,16 @@ import { render } from "preact";
 import { ChatPane } from "./components/ChatPane";
 import { startBridge } from "./lib/bridge";
 import { log } from "./lib/logger";
-import "./lib/primitives"; // side-effect: registers the browser primitives
+import "./lib/primitives"; // side-effect: registers the core browser primitives
 import "./lib/primitives-buffers"; // side-effect: registers buffer + plot + eval primitives
+
+// Plugin frontends — every ``plugins/<name>/frontend/widget.ts`` is
+// glob-imported so its ``registerPrimitive`` calls run at module load.
+// ``eager: true`` makes Vite inline the modules into our bundle rather
+// than chunk-split them, which keeps the bookmarklet a single file.
+// Adding a plugin = creating ``plugins/<name>/frontend/widget.ts``;
+// no edits to this file required.
+import.meta.glob("../../plugins/*/frontend/widget.ts", { eager: true });
 import themeCss from "./theme.css?raw";
 import widgetCss from "./styles.css?raw";
 

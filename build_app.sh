@@ -188,10 +188,38 @@ for s in a4db_3d dat_curves; do
     cp -R "$ROOT/scripts/reports/$s" "$ROOT/src/voitta/resources/seed_scripts/reports/"
   fi
 done
+# Plugins. Each plugin's whole tree gets staged into the bundle so the
+# packaged .app can run their backend Python (sys.path injection at
+# first launch), bundle their frontend widget.ts (already done at
+# build time via Vite glob), and index their docs into RAG. Whatever's
+# in $ROOT/plugins is copied verbatim — gitignore only governs what
+# the OSS REPO tracks; the bundle ships whatever the local tree has.
+rm -rf "$ROOT/src/voitta/resources/plugins" 2>/dev/null || true
+if [ -d "$ROOT/plugins" ]; then
+  mkdir -p "$ROOT/src/voitta/resources/plugins"
+  cp -R "$ROOT/plugins/." "$ROOT/src/voitta/resources/plugins/"
+fi
+
+# Plugin seed scripts — same idea as core seed_scripts, but pulled
+# from each plugin's scripts/{compute,reports}/. Extra subdirectories
+# (e.g. nested docs of compute scripts) are preserved.
+for plugin_dir in "$ROOT/plugins"/*; do
+  [ -d "$plugin_dir" ] || continue
+  for kind in compute reports; do
+    src="$plugin_dir/scripts/$kind"
+    [ -d "$src" ] || continue
+    for entry in "$src"/*; do
+      [ -d "$entry" ] || continue
+      cp -R "$entry" "$ROOT/src/voitta/resources/seed_scripts/$kind/"
+    done
+  done
+done
+
 # Strip the per-run state out of the staged copies — meta.json's
 # last_run fields are dev-machine artefacts and shouldn't ship.
 find "$ROOT/src/voitta/resources/seed_scripts" -type d -name "runs" -prune -exec rm -rf {} +
 find "$ROOT/src/voitta/resources/seed_scripts" -type d -name "__pycache__" -prune -exec rm -rf {} +
+find "$ROOT/src/voitta/resources/plugins" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
 # briefcase create — downloads CPython support package, installs deps
 # into the bundle's standalone Python (idempotent if no spec changes).

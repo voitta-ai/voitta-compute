@@ -31,7 +31,7 @@ from typing import Callable
 #   bottom-up by dep tree (scipy/pandas before things that depend on
 #   them; bokeh before panel; chromadb last because it pulls the
 #   biggest grpc/onnxruntime stack).
-HEAVY_PACKAGES: list[tuple[str, str]] = [
+_CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("scipy",         "scipy>=1.11"),
     ("pandas",        "pandas"),
     ("matplotlib",    "matplotlib>=3.8"),
@@ -47,6 +47,60 @@ HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("xarray",        "xarray>=2024.1"),
     ("chromadb",      "chromadb>=0.5.20"),
 ]
+
+
+def _plugin_dependencies() -> list[tuple[str, str]]:
+    """Walk every plugin's manifest.json and collect its
+    ``python_dependencies`` entries.
+
+    Plugins declare deps as ``[{"import": "pyarrow", "spec":
+    "pyarrow>=15.0"}, ...]``. We dedupe by import name so two plugins
+    asking for the same package don't double-install.
+    """
+    import json as _json
+
+    seen: dict[str, str] = {}  # import_name -> spec
+    # Two layouts: source-checkout /plugins, and bundle's
+    # src/voitta/resources/plugins. Same as the discovery loader.
+    candidate_dirs: list[Path] = []
+    here = Path(__file__).resolve()
+    repo_root = here.parents[2]
+    for d in (repo_root / "plugins",):
+        if d.is_dir():
+            candidate_dirs.append(d)
+    try:
+        import voitta as _voitta
+        bundled = Path(_voitta.__file__).resolve().parent / "resources" / "plugins"
+        if bundled.is_dir() and bundled not in candidate_dirs:
+            candidate_dirs.append(bundled)
+    except Exception:
+        pass
+
+    for plugins_root in candidate_dirs:
+        for plugin_dir in plugins_root.iterdir():
+            if not plugin_dir.is_dir() or plugin_dir.name.startswith("."):
+                continue
+            mf = plugin_dir / "manifest.json"
+            if not mf.is_file():
+                continue
+            try:
+                manifest = _json.loads(mf.read_text())
+            except Exception:
+                continue
+            for d in manifest.get("python_dependencies") or []:
+                if not isinstance(d, dict):
+                    continue
+                name = d.get("import")
+                spec = d.get("spec") or name
+                if isinstance(name, str) and isinstance(spec, str):
+                    seen.setdefault(name, spec)
+    return list(seen.items())
+
+
+# Plugins extend the install set without editing core. Order: core
+# packages first (heavier deps the plugin packages will resolve
+# against), then plugin extras.
+HEAVY_PACKAGES: list[tuple[str, str]] = _CORE_HEAVY_PACKAGES + _plugin_dependencies()
 
 # Cute rotating commentary for the progress window — one line per
 # heavy package, with a fallback for anything not in this map. Keeps

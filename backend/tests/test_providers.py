@@ -56,10 +56,13 @@ def test_drive_action_tools_are_visibility_gated_not_host_gated():
         )
 
 
-def test_no_simr_or_salesforce_or_ucp_tools():
-    """Defensive: these should never have been ported into the Voitta repo."""
+def test_only_canonical_provider_tools_in_oss_tree():
+    """Voitta core ships with the Google plugin only. Other tool
+    families belong in private plugin overlays under /plugins/<name>/
+    which are gitignored. This guards against accidental upstreaming
+    of provider-specific tools."""
     names = _registered().names()
-    forbidden = ("workitem", "ucp", "salesforce", "force_com", "datastudio")
+    forbidden = ("workitem", "force_com")
     for f in forbidden:
         assert not any(f in n.lower() for n in names), (
             f"forbidden tool family '{f}' present: "

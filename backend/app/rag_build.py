@@ -201,13 +201,19 @@ def build(progress_cb: ProgressCb) -> bool:
         chroma_dir.parent.mkdir(parents=True, exist_ok=True)
 
         files = build_rag.discover_docs()
-        if not files:
+        plugin_pairs: list = []
+        try:
+            plugin_pairs = build_rag._discover_plugin_docs()
+        except Exception:
+            # Older build_rag.py without plugin support — degrade silently.
+            plugin_pairs = []
+        if not files and not plugin_pairs:
             progress_cb(0, 1, "RAG: no .md files under docs/", "!!!")
             return False
 
-        # Total ticks: one per file (chunking) + embedding phase + bm25
-        # phase + manifest.
-        total = len(files) + 3
+        # Total ticks: one per file (core + plugin chunking) + embedding
+        # phase + bm25 phase + manifest.
+        total = len(files) + len(plugin_pairs) + 3
 
         chunks: list = []
         for i, f in enumerate(files):
@@ -223,6 +229,25 @@ def build(progress_cb: ProgressCb) -> bool:
                 i, total,
                 f"Indexing docs: {f.name} ({len(cs)} chunks)",
                 f"docs/{f.name}: {len(cs)} chunks",
+            )
+
+        # Plugin docs — same chunking pass, but rel paths are stamped
+        # ``plugins/<name>/docs/<file>.md`` so RAG hits self-identify.
+        offset = len(files)
+        for j, (base, md) in enumerate(plugin_pairs):
+            cs = build_rag.chunk_file(
+                md,
+                target=build_rag.DEFAULT_TARGET,
+                overlap=build_rag.DEFAULT_OVERLAP,
+                minimum=build_rag.DEFAULT_MIN,
+                hard_max=build_rag.HARD_MAX,
+                base_dir=base,
+            )
+            chunks.extend(cs)
+            progress_cb(
+                offset + j, total,
+                f"Indexing plugin docs: {md.name} ({len(cs)} chunks)",
+                f"{md.relative_to(base)}: {len(cs)} chunks",
             )
 
         if not chunks:
