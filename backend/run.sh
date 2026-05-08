@@ -20,17 +20,19 @@ cd "$(dirname "$0")"
 #          frontend development at http://localhost:5173 (the bookmarklet
 #          loader auto-matches scheme).
 FORCE_HTTP=0
-LOCALHOST_MODE=0
+LOCALHOST_MODE=0  # off by default — server runs require login
 for arg in "$@"; do
   case "$arg" in
     --http) FORCE_HTTP=1 ;;
     --localhost) LOCALHOST_MODE=1 ;;
+    --no-localhost) LOCALHOST_MODE=0 ;;  # explicit no-op alias for symmetry with the .app launcher
     -h|--help)
       sed -n '2,15p' "$0"
       echo
       echo "Flags:"
-      echo "  --http        skip HTTPS, run plain http://"
-      echo "  --localhost   skip the API-key gate (loopback-only deployments)"
+      echo "  --http           skip HTTPS, run plain http://"
+      echo "  --localhost      skip the API-key gate (loopback-only deployments)"
+      echo "  --no-localhost   require login (default; alias for symmetry with the .app)"
       exit 0 ;;
     *)
       echo "[run.sh] unknown arg: $arg" >&2

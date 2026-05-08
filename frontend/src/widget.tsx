@@ -1,5 +1,6 @@
 import { render } from "preact";
-import { App } from "./App";
+import { ChatPane } from "./components/ChatPane";
+import { startBridge } from "./lib/bridge";
 import { log } from "./lib/logger";
 import "./lib/primitives"; // side-effect: registers the browser primitives
 import "./lib/primitives-buffers"; // side-effect: registers buffer + plot + eval primitives
@@ -72,8 +73,11 @@ export function mount(): void {
 
   const backendOrigin = detectBackendOrigin();
   log.info("widget", "mount", { backendOrigin });
-  // App resolves auth status, then renders either LoginView or
-  // ChatPane and starts the SSE bridge once the user is authed
-  // (or in localhost mode where auth is bypassed).
-  render(<App backendOrigin={backendOrigin} />, mountPoint);
+  render(<ChatPane backendOrigin={backendOrigin} />, mountPoint);
+
+  // Open the server↔browser tool channel. ChatPane handles the auth
+  // gate inline (login form rendered in the drawer body when needed),
+  // so the bridge can start unconditionally — gated routes will 401
+  // until the user submits the key, which is fine.
+  startBridge(backendOrigin);
 }

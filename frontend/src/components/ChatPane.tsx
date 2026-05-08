@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { streamChat, type ChatMessage, type TurnItem } from "../lib/api";
+import { fetchAuthStatus, loginWithApiKey } from "../lib/auth";
 import { getSessionId } from "../lib/bridge";
 import { log } from "../lib/logger";
 import type { RichOutput } from "../lib/plot-spec";
@@ -131,6 +132,32 @@ export function ChatPane({ backendOrigin }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const [activeReport, setActiveReport] = useState<ReportInfo | null>(null);
+
+  // Auth state. ``needsAuth`` flips to true when the backend is in
+  // non-localhost mode AND the user hasn't logged in yet — we render
+  // a login prompt inside the existing chat view in that case rather
+  // than mounting a separate top-level page.
+  const [needsAuth, setNeedsAuth] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAuthStatus(backendOrigin)
+      .then((s) => {
+        if (cancelled) return;
+        setNeedsAuth(!(s.localhostMode || s.authenticated));
+        setAuthChecked(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Fail open — assume localhost mode if the probe itself
+        // dies. The chat will surface the underlying error on its
+        // first request.
+        setAuthChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backendOrigin]);
   // Two states for the report pane:
   //   • activeReport === null   → no report (no iframe mounted)
   //   • activeReport && !collapsed → fully visible
@@ -555,7 +582,13 @@ export function ChatPane({ backendOrigin }: Props) {
             ×
           </button>
         </header>
-        {view === "chat" && (
+        {view === "chat" && needsAuth && (
+          <InlineLogin
+            backendOrigin={backendOrigin}
+            onAuthenticated={() => setNeedsAuth(false)}
+          />
+        )}
+        {view === "chat" && !needsAuth && authChecked && (
           <>
             <MessageList
               messages={messages}
@@ -575,6 +608,84 @@ export function ChatPane({ backendOrigin }: Props) {
         {view === "settings" && <SettingsView backendOrigin={backendOrigin} />}
         {view === "logs" && <LogsView />}
       </aside>
+    </div>
+  );
+}
+
+
+// Inline login form rendered inside the drawer body when auth is
+// required. Sits in place of MessageList/Composer; once the API key
+// is accepted the parent flips ``needsAuth`` and the regular chat
+// flow takes over. No new top-level pane, no separate router state.
+function InlineLogin(props: {
+  backendOrigin: string;
+  onAuthenticated: () => void;
+}) {
+  const { backendOrigin, onAuthenticated } = props;
+  const [apiKey, setApiKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: Event) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    const r = await loginWithApiKey(backendOrigin, apiKey.trim());
+    setBusy(false);
+    if (r.ok) {
+      setApiKey("");
+      onAuthenticated();
+    } else {
+      setError(r.error || "Login failed.");
+    }
+  }
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        gap: "10px",
+        padding: "20px",
+        overflowY: "auto",
+      }}
+    >
+      <p class="muted" style={{ margin: 0 }}>
+        This Voitta backend requires an API key.
+      </p>
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <label htmlFor="voitta-api-key" style={{ fontWeight: 600 }}>API key</label>
+        <input
+          id="voitta-api-key"
+          type="password"
+          value={apiKey}
+          autoComplete="off"
+          autoFocus
+          disabled={busy}
+          onInput={(e) => setApiKey((e.currentTarget as HTMLInputElement).value)}
+          placeholder="enter key"
+          style={{
+            padding: "8px 10px",
+            border: "1px solid var(--voitta-border)",
+            borderRadius: "4px",
+            background: "var(--voitta-surface)",
+            color: "var(--voitta-text)",
+            font: "inherit",
+          }}
+        />
+        <button
+          type="submit"
+          class="save-btn"
+          disabled={busy || !apiKey.trim()}
+          style={{ marginTop: "4px" }}
+        >
+          {busy ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+      {error && (
+        <div class="status err" role="alert" aria-live="polite">{error}</div>
+      )}
     </div>
   );
 }
