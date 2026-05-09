@@ -1,0 +1,9 @@
+{
+  "name": "google",
+  "version": "0.1.0",
+  "description": "Google Drive provider — read-only Drive access via OAuth, plus a no-OAuth pickup fallback that uses the user's existing browser session.",
+  "host_patterns": ["drive.google.com"],
+  "python_module": "voitta_google",
+  "frontend_bundle": "frontend/widget.ts",
+  "docs_dir": "docs"
+}
