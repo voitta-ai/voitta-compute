@@ -53,9 +53,11 @@ class ToolSpec:
     handler: ToolHandler
     side: Literal["server", "hybrid"] = "server"
     # Optional gate: if set, the tool is only included in the LLM's tool
-    # list when the bookmarklet session's `page.host` matches this pattern
-    # via strict suffix match. None = no host gating.
-    host_pattern: str | None = None
+    # list when the bookmarklet session's `page.host` matches one of
+    # these patterns via strict suffix match. ``None`` means no host
+    # gating (visible everywhere). A bare string is normalised to a
+    # one-element list at match time, so existing callers keep working.
+    host_pattern: "str | list[str] | None" = None
     # Optional runtime gate: if set, the tool is only included when this
     # callable returns True. Used for tools that depend on external state
     # the LLM can't manipulate (e.g. "Drive tools only visible when the
@@ -94,8 +96,9 @@ class ToolRegistry:
         host's hostname. ``host_pattern="drive.google.com"`` matches
         ``drive.google.com`` and ``foo.drive.google.com`` but NOT
         ``drive.google.com.evil.com`` (which a substring match would
-        accept). The ``host`` may include a port (``host:port``) — we
-        strip it before comparison.
+        accept). A list of patterns is OR'd together — the tool shows
+        when ANY pattern matches. The ``host`` may include a port
+        (``host:port``) — we strip it before comparison.
         """
         out: list[ToolSpec] = []
         # Strip port for comparison.
@@ -105,8 +108,20 @@ class ToolRegistry:
             if s.host_pattern is not None:
                 if not hostname:
                     continue
-                pat = s.host_pattern.lower().rstrip(".")
-                if hostname != pat and not hostname.endswith("." + pat):
+                patterns = (
+                    [s.host_pattern]
+                    if isinstance(s.host_pattern, str)
+                    else list(s.host_pattern)
+                )
+                matched = False
+                for raw in patterns:
+                    if not isinstance(raw, str) or not raw:
+                        continue
+                    pat = raw.lower().rstrip(".")
+                    if hostname == pat or hostname.endswith("." + pat):
+                        matched = True
+                        break
+                if not matched:
                     continue
             # Runtime visibility gate (e.g. "OAuth connected").
             if s.visibility_check is not None:

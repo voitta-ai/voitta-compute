@@ -138,24 +138,31 @@ def _import_plugin(plugin_dir: Path, manifest: dict) -> None:
         return
 
     # Apply manifest host_patterns to plugin-contributed tools that
-    # didn't declare their own. Multi-host plugins declare a list; we
-    # take the first as the default and log a warning so the author
-    # knows the auto-gate is one-of-many. (Tools that genuinely need
-    # multi-host visibility should declare per-tool host_pattern.)
+    # didn't declare their own. Multi-host plugins declare a list of
+    # patterns; the FULL list is applied (registry's matcher OR's them
+    # together). Tools that need a tighter gate can still override
+    # per-ToolSpec, in which case the manifest list is ignored for
+    # that tool.
     raw_patterns = manifest.get("host_patterns")
-    default_host: str | None = None
-    if isinstance(raw_patterns, list) and raw_patterns:
-        default_host = next((p for p in raw_patterns if isinstance(p, str)), None)
-    if default_host:
+    host_patterns: list[str] = []
+    if isinstance(raw_patterns, list):
+        host_patterns = [p for p in raw_patterns if isinstance(p, str) and p]
+    if host_patterns:
         added = [t for t in _registry.all() if t.name not in before]
+        applied = 0
         for spec in added:
             if spec.host_pattern is None:
-                spec.host_pattern = default_host
+                # Single string when there's only one host (cheaper to
+                # serialise + display); list otherwise.
+                spec.host_pattern = (
+                    host_patterns[0] if len(host_patterns) == 1
+                    else list(host_patterns)
+                )
+                applied += 1
         if added:
             _logger.info(
-                "plugin %s: %d tools registered, host_pattern=%r applied to %d unset",
-                plugin_dir.name, len(added), default_host,
-                sum(1 for t in added if t.host_pattern == default_host),
+                "plugin %s: %d tools registered, host_patterns=%r applied to %d unset",
+                plugin_dir.name, len(added), host_patterns, applied,
             )
     else:
         _logger.info("plugin %s: loaded (module=%s)", plugin_dir.name, package_name)

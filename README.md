@@ -114,7 +114,29 @@ npm run build      # produces dist/widget.js
 Re-run on every frontend change. (Or `npm run dev` for the standalone
 Vite harness at `http://localhost:5173`.)
 
-### 4. Use the bookmarklet
+### 4. Browser CSP extension (recommended)
+
+Strict-CSP sites (eBay, GitHub, some banks) refuse to load scripts from
+`127.0.0.1:12358` by default. Install one Chrome extension to bypass:
+
+* **CSP Unblock** (4.5★) — universal, strips all CSP headers everywhere.
+* **Anti-CORS, anti-CSP** (4.3★) — per-hostname allowlist, narrower
+  blast radius.
+
+Either is safe to leave on the sites you actually use — turn it off
+elsewhere. Without it, the bookmarklet will still load on most sites,
+but eBay-class CSP-strict pages will silently refuse to fetch
+`/widget.js`.
+
+If you're not sure whether you need it: try the bookmarklet on a site,
+open DevTools → Console. If you see *"Loading the script
+https://127.0.0.1:12358/widget.js... violates the following Content
+Security Policy directive ... The action has been blocked"*, you need
+the extension. *"...The policy is report-only, so the violation has
+been logged but no further action has been taken"* — extension
+optional, the bookmarklet still works.
+
+### 5. Use the bookmarklet
 
 The minified one-liner:
 

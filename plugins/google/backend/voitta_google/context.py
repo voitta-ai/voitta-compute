@@ -191,6 +191,9 @@ registry.register(
         },
         handler=_drive_page_context,
         side="hybrid",
-        host_pattern="drive.google.com",
+        # host_pattern is auto-applied from the plugin's manifest.json
+        # (host_patterns list). Letting the manifest be the single source
+        # of truth lets a fork add additional dev/test hosts without
+        # touching every tool registration.
     )
 )

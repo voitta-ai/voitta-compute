@@ -122,7 +122,7 @@ registry.register(
         },
         handler=_drive_list_visible_files,
         side="hybrid",
-        host_pattern="drive.google.com",
+        # host_pattern auto-applied from manifest.json — see context.py.
         visibility_check=_list_visible_visible,
     )
 )

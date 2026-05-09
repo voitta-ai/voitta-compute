@@ -51,13 +51,44 @@ export function mount(): void {
 
   const host = document.createElement("div");
   host.id = HOST_ID;
-  // `all: initial` insulates the host from page-level cascade. Shadow DOM
-  // handles the inverse direction (our styles staying inside).
+  // ``all: initial`` is omitted on purpose. We used to set it for
+  // double-isolation against page-level cascade, but it's the
+  // canonical fingerprint anti-injection scripts (e.g. on ebay.com)
+  // look for to find bookmarklets/userscripts and hide them with
+  // ``display: none !important``. The closed shadow root attached
+  // below already isolates the host from outside CSS — the shadow
+  // boundary is what actually matters for style scoping; ``all:
+  // initial`` was belt-and-braces.
   host.style.cssText =
-    "all:initial;position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
+    "position:fixed;inset:0;pointer-events:none;z-index:2147483647;";
   document.documentElement.appendChild(host);
 
-  const shadow = host.attachShadow({ mode: "open" });
+  // ``mode: "closed"`` so ``host.shadowRoot`` returns null from
+  // outside the original attachShadow call. Some hostile pages (e.g.
+  // ebay.com's anti-injection scan) walk every element looking for
+  // ``el.shadowRoot !== null`` and hide the host with
+  // ``display: none !important`` — closed mode defeats that scanner.
+  // Plugins / ChatPane / primitives that need the shadow root read
+  // it from a non-enumerable property under a per-mount random key
+  // exposed on ``window.VoittaBookmarklet`` rather than via the
+  // standard ``shadowRoot`` accessor.
+  const shadow = host.attachShadow({ mode: "closed" });
+  // Stash on the host under a unique, non-enumerable property so
+  // same-page code (us) can find it without the standard accessor.
+  // The key is also exported via window.VoittaBookmarklet so plugin
+  // primitives can locate the root without re-deriving it.
+  Object.defineProperty(host, "__voittaShadowRoot", {
+    value: shadow,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  // Expose a getter on the global so other modules don't need the
+  // host id constant. Idempotent — second mount() call wouldn't run
+  // because of the early return at the top of this function.
+  (window as unknown as { VoittaBookmarklet?: Record<string, unknown> }).VoittaBookmarklet ??= {};
+  ((window as unknown as { VoittaBookmarklet: Record<string, unknown> }).VoittaBookmarklet)
+    .getShadowRoot = () => shadow;
 
   // Voitta fonts. Fetched once from Google Fonts — failure is silent
   // (we fall back to system-ui / Georgia per --voitta-font-* tokens).

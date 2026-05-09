@@ -63,14 +63,22 @@ interface ModalElements {
 // ``z-index: 2147483647`` and sits above the chat drawer (also in the
 // Shadow DOM). At document body level the host wins the z-index race
 // and the modal appears underneath the drawer.
+function _resolveShadowRoot(): ShadowRoot | null {
+  // The shadow is attached in ``mode: "closed"`` so ``host.shadowRoot``
+  // returns null from outside the original attachShadow call. Voitta
+  // core stashes a getter at ``window.VoittaBookmarklet.getShadowRoot``
+  // for in-bundle code to use.
+  const w = window as unknown as {
+    VoittaBookmarklet?: { getShadowRoot?: () => ShadowRoot };
+  };
+  const root = w.VoittaBookmarklet?.getShadowRoot?.();
+  return root ?? null;
+}
+
 function _modalParent(): { parent: ParentNode; pointerEvents: string } {
-  const HOST_ID = "voitta-bookmarklet-host";
-  const host = document.getElementById(HOST_ID) as HTMLElement | null;
-  if (host && host.shadowRoot) {
-    // The host has ``pointer-events:none`` so background clicks reach
-    // the host page. Re-enable it on our modal root so the backdrop /
-    // close button respond.
-    return { parent: host.shadowRoot, pointerEvents: "auto" };
+  const root = _resolveShadowRoot();
+  if (root) {
+    return { parent: root, pointerEvents: "auto" };
   }
   return { parent: document.body, pointerEvents: "auto" };
 }
@@ -235,10 +243,9 @@ function _findModalById(modalId: string): HTMLElement | null {
   const sel = `[data-voitta-modal="drive-download"][data-modal-id="${
     CSS.escape(modalId)
   }"]`;
-  const HOST_ID = "voitta-bookmarklet-host";
-  const host = document.getElementById(HOST_ID) as HTMLElement | null;
-  if (host && host.shadowRoot) {
-    const inShadow = host.shadowRoot.querySelector(sel);
+  const root = _resolveShadowRoot();
+  if (root) {
+    const inShadow = root.querySelector(sel);
     if (inShadow) return inShadow as HTMLElement;
   }
   const inDoc = document.querySelector(sel);
