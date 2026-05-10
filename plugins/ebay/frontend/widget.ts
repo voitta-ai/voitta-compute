@@ -26,6 +26,9 @@ function _classifyPage(): string {
   if (p.startsWith("/str/")) return "store";
   if (p.startsWith("/b/")) return "category";
   if (p.startsWith("/mye/")) return "myebay";
+  // /cnt/ViewMessage and /msg/* are the messaging UIs (also linked
+  // from the gear icon as "Messages"). Same React tree on both routes.
+  if (p.startsWith("/cnt/ViewMessage") || p.startsWith("/msg/")) return "messages";
   return "other";
 }
 
@@ -333,6 +336,194 @@ registerPrimitive("ebay_scrape_myebay", async (rawArgs) => {
     orders,
     orders_returned: orders.length,
     orders_total_in_dom: document.querySelectorAll(".m-order-card").length,
+  };
+});
+
+
+// ---- ebay_list_messages ---------------------------------------------------
+//
+// Read the inbox card list at /cnt/ViewMessage. Each card carries
+// data-conversation-id; per-card title/sender/date/unread-state come
+// from spans inside .card__content. Skips folders nav (separate
+// concept).
+
+interface InboxCard {
+  conversation_id: string | null;
+  sender: string | null;
+  subject: string | null;
+  date: string | null;
+  unread: boolean;
+  from_ebay: boolean;
+  image: string | null;
+}
+
+registerPrimitive("ebay_list_messages", async (rawArgs) => {
+  if (_classifyPage() !== "messages") {
+    throw new PrimitiveError(
+      "wrong_page",
+      `current page (${_classifyPage()}) is not a Messages page; navigate to /cnt/ViewMessage`,
+    );
+  }
+  const limit = Math.max(1, Math.min(500, Number(rawArgs?.limit ?? 100)));
+
+  const buttons = Array.from(
+    document.querySelectorAll<HTMLElement>(".message-button"),
+  );
+  const out: InboxCard[] = [];
+  for (const btn of buttons) {
+    if (out.length >= limit) break;
+    const sender = btn.querySelector(".card__username")?.textContent?.trim() ?? null;
+    // Subject lives in two places — the visible span and the
+    // sr-only "Unread, <subject>" / "<subject>" string. Prefer the
+    // visible one; strip the leading "Unread, " from sr-only as
+    // fallback.
+    let subject =
+      btn.querySelector(".message-subject .ux-textspans")?.textContent?.trim() ?? null;
+    if (!subject) {
+      const sr = btn.querySelector(".message-subject .clipped")?.textContent ?? "";
+      subject = sr.replace(/^Unread,\s*/, "").trim() || null;
+    }
+    out.push({
+      conversation_id: btn.getAttribute("data-conversation-id"),
+      sender,
+      subject,
+      date: btn.querySelector(".card__time .ux-textspans")?.textContent?.trim() ?? null,
+      unread: btn.classList.contains("unread"),
+      from_ebay: (btn.getAttribute("data-testid") || "").includes("from-ebay"),
+      image: (btn.querySelector("img") as HTMLImageElement | null)?.src ?? null,
+    });
+  }
+
+  return {
+    url: location.href,
+    folder: new URLSearchParams(location.search).get("group_type") || "inbox",
+    total_visible: buttons.length,
+    returned: out.length,
+    cards: out,
+  };
+});
+
+
+// ---- ebay_read_message ----------------------------------------------------
+//
+// Read whichever message is currently open in the right pane. Body
+// renders inside an <iframe id="app__email-iframe"> that's same-
+// origin (ebay.com → ebay.com) so we can walk into it. Optionally
+// click a card by conversation_id first.
+
+registerPrimitive("ebay_read_message", async (rawArgs) => {
+  if (_classifyPage() !== "messages") {
+    throw new PrimitiveError(
+      "wrong_page",
+      `current page (${_classifyPage()}) is not a Messages page; navigate to /cnt/ViewMessage`,
+    );
+  }
+  const targetId = String(rawArgs?.conversation_id ?? "").trim();
+
+  // Capture metadata from the card BEFORE clicking — eBay's React
+  // doesn't add an "active" class to the open card, and the right-pane
+  // wrapper only has the iframe + a back button (no sender/subject
+  // chrome). The card we clicked IS the source of truth for those
+  // fields.
+  let cardMeta: {
+    sender: string | null;
+    subject: string | null;
+    date: string | null;
+    unread: boolean;
+    from_ebay: boolean;
+  } | null = null;
+
+  if (targetId) {
+    const btn = document.querySelector<HTMLElement>(
+      `.message-button[data-conversation-id="${CSS.escape(targetId)}"]`,
+    );
+    if (!btn) {
+      throw new PrimitiveError(
+        "no_such_conversation",
+        `no card with conversation_id=${targetId} in current inbox`,
+      );
+    }
+    cardMeta = {
+      sender: btn.querySelector(".card__username")?.textContent?.trim() ?? null,
+      subject:
+        btn.querySelector(".message-subject .ux-textspans")?.textContent?.trim()
+        ?? ((btn.querySelector(".message-subject .clipped")?.textContent ?? "")
+              .replace(/^Unread,\s*/, "").trim() || null),
+      date: btn.querySelector(".card__time .ux-textspans")?.textContent?.trim() ?? null,
+      unread: btn.classList.contains("unread"),
+      from_ebay: (btn.getAttribute("data-testid") || "").includes("from-ebay"),
+    };
+    // Make sure the card is in the viewport before clicking — virtualised
+    // lists ignore clicks on off-screen rows.
+    btn.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+    // Wait for the scroll, then click.
+    await new Promise(r => setTimeout(r, 100));
+    btn.click();
+    // Wait for the iframe to swap in the new email body. eBay renders
+    // a placeholder first then loads the real HTML asynchronously;
+    // 1000ms catches most loads, polling below catches the slow ones.
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  // The view wrapper exists whether or not a message is open — what
+  // distinguishes "open" from "empty placeholder" is the presence of
+  // <iframe id="app__email-iframe"> with non-empty body. (The
+  // "msg-content-view--active" class we used to key on is NOT
+  // reliable — eBay sometimes omits it even when content is loaded.)
+  const iframe = document.getElementById("app__email-iframe") as HTMLIFrameElement | null;
+  if (!iframe) {
+    return {
+      url: location.href,
+      open: false,
+      hint: targetId
+        ? "click fired but the iframe didn't appear. eBay's React may be slow — retry, or scroll the inbox so the card is in view first."
+        : "no message currently open. Pass conversation_id to open one.",
+    };
+  }
+
+  // Poll the iframe body for up to 4 seconds — the click may have
+  // fired but the email contents are still loading.
+  let bodyText: string | null = null;
+  let bodyHtml: string | null = null;
+  let iframeError: string | null = null;
+  for (let i = 0; i < 40; i++) {
+    try {
+      const doc = iframe.contentDocument;
+      const text = doc?.body?.innerText?.trim();
+      if (text && text.length > 30) {
+        bodyText = text;
+        bodyHtml = doc?.body?.innerHTML ?? null;
+        break;
+      }
+    } catch (e) {
+      iframeError = String((e as Error).message ?? e);
+      break;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  // Optional caps so we don't dump a 100 KB email into the LLM by
+  // default. Caller can opt-in to the full body via include_html.
+  const maxText = Math.max(0, Math.min(50_000, Number(rawArgs?.max_text_chars ?? 8_000)));
+  const includeHtml = Boolean(rawArgs?.include_html ?? false);
+  const fullLen = bodyText?.length ?? 0;
+  if (bodyText && bodyText.length > maxText) {
+    bodyText = bodyText.slice(0, maxText) + `\n\n…[truncated; full ${bodyText.length} chars in iframe]`;
+  }
+
+  return {
+    url: location.href,
+    open: !!bodyText,
+    conversation_id: targetId || null,
+    sender: cardMeta?.sender ?? null,
+    subject: cardMeta?.subject ?? null,
+    date: cardMeta?.date ?? null,
+    unread_when_opened: cardMeta?.unread ?? null,
+    from_ebay: cardMeta?.from_ebay ?? null,
+    body_text: bodyText,
+    body_text_full_chars: fullLen,
+    body_html: includeHtml ? bodyHtml : null,
+    iframe_error: iframeError,
   };
 });
 
