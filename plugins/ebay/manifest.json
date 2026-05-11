@@ -1,0 +1,9 @@
+{
+  "name": "ebay",
+  "version": "0.1.0",
+  "description": "eBay marketplace plugin — DOM-scrape search results, item details, seller info from the active eBay tab. No API key required.",
+  "host_patterns": ["ebay.com"],
+  "python_module": "voitta_ebay",
+  "frontend_bundle": "frontend/widget.ts",
+  "docs_dir": "docs"
+}
