@@ -61,7 +61,10 @@ export function registerPrimitive(name: string, fn: Primitive): void {
   primitives.set(name, fn);
 }
 
-export function startBridge(backendOrigin: string): void {
+export function startBridge(
+  backendOrigin: string,
+  pluginDefaults?: Parameters<typeof bootstrapSettings>[1],
+): void {
   if (started) return;
   started = true;
   SESSION_ID = newSessionId();
@@ -69,11 +72,9 @@ export function startBridge(backendOrigin: string): void {
 
   log.info("bridge", "starting", { backendOrigin, sessionId: SESSION_ID });
 
-  // Pull persisted user settings from the backend (replaces the old
-  // localStorage-per-origin path). Fire-and-forget — the cache stays
-  // at DEFAULT_SETTINGS until this resolves; subscribers are notified
-  // when the real blob lands.
-  void bootstrapSettings(backendOrigin);
+  // Pull persisted user settings from the backend. Plugin defaults are
+  // applied beneath the user's saved blob so a user preference always wins.
+  void bootstrapSettings(backendOrigin, pluginDefaults);
 
   // Self-healing inbox: keep ONE EventSource alive at any time. If
   // the browser's built-in retry stalls (Chrome occasionally gives

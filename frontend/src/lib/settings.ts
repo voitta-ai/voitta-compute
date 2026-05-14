@@ -140,7 +140,10 @@ export function subscribeSettings(fn: (s: Settings) => void): () => void {
 /** Called once by the bridge when the widget mounts. Fetches the
  * persisted blob from the backend and updates the cache. Safe to call
  * before, during, or after first render. */
-export async function bootstrapSettings(origin: string): Promise<Settings> {
+export async function bootstrapSettings(
+  origin: string,
+  pluginDefaults?: Partial<Settings>,
+): Promise<Settings> {
   backendOrigin = origin.replace(/\/$/, "");
   try {
     const res = await fetch(`${backendOrigin}/api/settings`, {
@@ -154,8 +157,12 @@ export async function bootstrapSettings(origin: string): Promise<Settings> {
       return cached;
     }
     const body = await res.json();
+    // Plugin defaults sit between the hardcoded DEFAULT_SETTINGS and the
+    // user's persisted blob — they apply only when the user hasn't saved
+    // an explicit preference.
     const merged = sanitise({
       ...DEFAULT_SETTINGS,
+      ...(pluginDefaults ?? {}),
       ...(body && typeof body === "object" ? body : {}),
     });
     cached = merged;

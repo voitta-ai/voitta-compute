@@ -6,7 +6,7 @@ This document describes how to add a new plugin to voitta-bookmarklet. Read it t
 
 ## What a plugin is
 
-A plugin is a self-contained folder under `/plugins/<name>/` that adds host-specific capability to voitta-bookmarklet without modifying core. Plugins ride four auto-discovery surfaces:
+A plugin is a self-contained folder under `/plugins/<name>/` that adds host-specific capability to voitta-bookmarklet without modifying core. Plugins ride five auto-discovery surfaces:
 
 | Surface | What gets discovered | Where in core |
 |---|---|---|
@@ -14,6 +14,7 @@ A plugin is a self-contained folder under `/plugins/<name>/` that adds host-spec
 | Browser primitives | The plugin's `frontend/widget.ts`; every `registerPrimitive(...)` it makes | [frontend/src/widget.tsx](frontend/src/widget.tsx) |
 | Documentation → RAG | Every `.md` under `plugins/<name>/docs/`; chunks land in the same RAG corpus as core docs | [rag/build_rag.py](rag/build_rag.py) |
 | Seed scripts | `plugins/<name>/scripts/{compute,reports}/<slug>/`; staged into the .app and copied to the user's writable scripts dir on first launch | [build_app.sh](build_app.sh) + [backend/app/scripts_seed.py](backend/app/scripts_seed.py) |
+| Branding / theme | `manifest.json` → `agent_name`; `plugins/<name>/theme.css` if present | [backend/app/main.py](backend/app/main.py) (`GET /api/plugin`, `GET /api/plugin/{name}/theme.css`) |
 
 Core has zero hardcoded plugin names. The discovery loader walks `/plugins/*/manifest.json` and imports whatever each manifest points at. The canonical OSS reference plugin (`/plugins/google/`) is the only one tracked in the upstream repo; everything else is gitignored by `/plugins/*` plus a `!/plugins/google/` carve-out.
 
@@ -38,6 +39,7 @@ If you want to track your plugin in source control, `git init` inside `plugins/<
 plugins/<name>/
 ├── manifest.json                 ← required
 ├── README.md                     ← optional, recommended
+├── theme.css                     ← optional; CSS custom-property overrides for branding
 ├── backend/
 │   └── <python_module>/
 │       ├── __init__.py           ← imports your tool modules
@@ -81,10 +83,44 @@ Pick a `<name>` that's filesystem-safe and a `<python_module>` that won't collid
 | `version` | yes | Free-form. Surfaced in `/healthz`-style diagnostics. |
 | `description` | yes | One-line summary shown in the menu bar Settings dialog. |
 | `host_patterns` | recommended | Strict-suffix hostname matches. The first entry is auto-applied as `host_pattern` to every ToolSpec your plugin registers that doesn't declare its own. Multi-host plugins should declare per-tool `host_pattern` explicitly. |
+| `agent_name` | optional | Display name for the assistant shown in the widget header (e.g. `"eBay Assistant"`, `"Voitta Enterprise"`). Defaults to title-case of `name`. |
+| `default_layout` | optional | `"chat-left"` or `"chat-right"`. Sets the initial pane position for new users. The user's saved preference always wins if they've changed it. |
 | `python_module` | yes if you have a backend | Importable name of your plugin's Python package, located at `plugins/<name>/backend/<python_module>/`. |
 | `frontend_bundle` | optional | Informational; the discovery loader globs `frontend/widget.ts` directly. |
 | `docs_dir` | optional | Informational; RAG always uses `docs/`. |
 | `python_dependencies` | optional | List of `{import, spec}`. The first-launch installer extends its heavy-package list with these so users without your deps installed get them automatically. Dedupe across plugins is automatic. |
+
+---
+
+## Branding and theming
+
+When the widget mounts on a host that matches your plugin's `host_patterns`, it calls `GET /api/plugin?host=<hostname>` and receives your plugin's `agent_name` and, if present, a URL to your `theme.css`. No extra wiring required — the bootstrap happens automatically at mount time.
+
+### Agent name
+
+Set `"agent_name"` in `manifest.json`. The widget header will show that name instead of "Voitta". If omitted, it defaults to title-case of your plugin's `name` field.
+
+### Theme override
+
+Create `plugins/<name>/theme.css`. Declare only the CSS custom properties you want to change — everything else inherits from the core default theme. The widget injects your file into the shadow DOM *before* the base theme, so your `:host` block wins in the cascade.
+
+Minimal example:
+
+```css
+/* plugins/acme/theme.css */
+:host {
+  --voitta-header-bg:   #0057a8;
+  --voitta-header-fg:   #ffffff;
+  --voitta-accent:      #0057a8;
+  --voitta-accent-hover:#004a90;
+  --voitta-accent-fg:   #ffffff;
+  --voitta-accent-tint: rgba(0, 87, 168, 0.08);
+}
+```
+
+Available tokens are defined in [`frontend/src/theme.css`](frontend/src/theme.css) — that file is the authoritative list. If no `theme.css` is present in your plugin folder the default Voitta theme is used unmodified.
+
+The `/api/plugin/{name}/theme.css` endpoint is unauthenticated so the widget can fetch it before the user has logged in.
 
 ---
 
@@ -429,10 +465,13 @@ When users install your plugin's .app for the first time, the launcher:
 - [ ] `plugins/<name>/frontend/widget.ts` if any tools need the user's browser session.
 - [ ] `plugins/<name>/docs/01-tools.md` describing what's available — this is what the LLM sees via RAG.
 - [ ] `python_dependencies` in the manifest if your backend imports anything not in core.
+- [ ] Optional: `"agent_name"` in `manifest.json` to brand the widget header.
+- [ ] Optional: `plugins/<name>/theme.css` to override CSS tokens (accent colour, header background, etc.).
 - [ ] Optional: `plugins/<name>/scripts/compute/<slug>/` for canonical analyses your tools should chain into.
 - [ ] Optional: `plugins/<name>/README.md` for human maintainers.
 - [ ] Verify: `git ls-files | xargs grep -l <your-plugin-name>` returns empty (the OSS upstream has no record of your plugin).
 - [ ] Verify: launching the .app shows your tools in `registry.all()` and your docs in RAG hits.
+- [ ] Verify: `curl "http://localhost:12358/api/plugin?host=<your-host>"` returns your `agent_name`.
 
 ---
 
@@ -448,7 +487,9 @@ When users install your plugin's .app for the first time, the launcher:
 
 ## Where to look in the canonical example
 
-`/plugins/google/` is the OSS reference plugin and demonstrates everything above:
+`/plugins/google/` is the OSS reference plugin and demonstrates everything above. `/plugins/ebay/` demonstrates branding — it ships a `theme.css` and `"agent_name"` showing how to white-label the widget without touching core:
+
+**google plugin:**
 
 | File | Demonstrates |
 |---|---|
@@ -459,3 +500,10 @@ When users install your plugin's .app for the first time, the launcher:
 | `backend/voitta_google/context.py` | reading the active tab URL via the bridge |
 | `frontend/widget.ts` | registering a download-modal primitive |
 | `docs/01-drive-tools.md` | end-user-facing tool catalog |
+
+**ebay plugin:**
+
+| File | Demonstrates |
+|---|---|
+| `manifest.json` | `agent_name` field for widget header branding |
+| `theme.css` | minimal CSS token overrides (eBay red accent + header) |

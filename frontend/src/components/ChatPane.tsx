@@ -29,7 +29,7 @@ type View = "chat" | "settings" | "logs";
 
 const STORAGE_OPEN_KEY = "voitta-bkmk-open";
 
-const BRAND = { name: "Voitta", ariaLabel: "Voitta chat pane" };
+const DEFAULT_BRAND_NAME = "Voitta";
 const STORAGE_WIDTH_KEY = "voitta-bkmk-width";
 const DEFAULT_WIDTH_PX = 400;
 const MIN_WIDTH_PX = 280;
@@ -66,6 +66,7 @@ function loadInitialWidth(): number {
 
 interface Props {
   backendOrigin: string;
+  agentName?: string;
 }
 
 // Helpers that operate on a TurnItem[] in stream order, returning a *new*
@@ -120,7 +121,7 @@ function itemsToContent(items: TurnItem[]): string {
     .join("");
 }
 
-export function ChatPane({ backendOrigin }: Props) {
+export function ChatPane({ backendOrigin, agentName }: Props) {
   const [open, setOpen] = useState<boolean>(loadInitialOpen);
   const [width, setWidth] = useState<number>(loadInitialWidth);
   const [resizing, setResizing] = useState(false);
@@ -167,7 +168,8 @@ export function ChatPane({ backendOrigin }: Props) {
   // collapse/expand without re-running the report.
   const [reportCollapsed, setReportCollapsed] = useState(false);
   const [artifactsOpen, setArtifactsOpen] = useState(false);
-  const brand = BRAND;
+  const name = agentName ?? DEFAULT_BRAND_NAME;
+  const brand = { name, ariaLabel: `${name} chat pane` };
   const abortRef = useRef<AbortController | null>(null);
   // Mirror of streamingItems used inside the stream callbacks (which close
   // over the value at start time, not the latest React state).

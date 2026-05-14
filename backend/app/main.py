@@ -92,6 +92,9 @@ async def _auth_gate(request: Request, call_next):
     key = f"{request.method} {request.url.path}"
     if key in _AUTH_OPEN_ROUTES:
         return await call_next(request)
+    # Plugin bootstrap routes are open — theme.css served by name (/api/plugin/{name}/theme.css)
+    if request.method == "GET" and request.url.path.startswith("/api/plugin"):
+        return await call_next(request)
 
     cookie = request.cookies.get(_cfg.AUTH_COOKIE_NAME)
     if cookie and cookie == _cfg.API_KEY:
@@ -150,6 +153,67 @@ async def health() -> dict:
         "providers_supported": ["anthropic", "openai", "gemini"],
         "max_tool_iterations_ceiling": settings.max_tool_iterations_ceiling,
     }
+
+
+def _as_list(v: object) -> list[str]:
+    if isinstance(v, list):
+        return [x for x in v if isinstance(x, str)]
+    if isinstance(v, str):
+        return [v]
+    return []
+
+
+def _plugin_for_host(host: str) -> dict | None:
+    from app.tools.providers import LOADED_PLUGINS
+
+    hostname = host.split(":", 1)[0].lower().rstrip(".")
+    for plugin in LOADED_PLUGINS:
+        for raw in _as_list(plugin["manifest"].get("host_patterns", [])):
+            pat = raw.lower().rstrip(".")
+            if hostname == pat or hostname.endswith("." + pat):
+                return plugin
+    return None
+
+
+@app.get("/api/plugin")
+async def plugin_for_host(host: str) -> JSONResponse:
+    plugin = _plugin_for_host(host)
+    if plugin is None:
+        raise HTTPException(status_code=404, detail="No plugin matched this host")
+    manifest = plugin["manifest"]
+    name = plugin["name"]
+    agent_name = manifest.get("agent_name") or name.title()
+    theme_path = Path(plugin["path"]) / "theme.css"
+    result: dict = {"name": name, "agent_name": agent_name}
+    if theme_path.exists():
+        result["theme_url"] = f"/api/plugin/{name}/theme.css"
+    raw_layout = manifest.get("default_layout", "")
+    if raw_layout in ("chat-left", "chat-right"):
+        result["default_layout"] = raw_layout
+    return JSONResponse(result)
+
+
+@app.get("/api/plugin/{name}/theme.css")
+async def plugin_theme_css(name: str) -> FileResponse:
+    from app.tools.providers import LOADED_PLUGINS
+
+    for plugin in LOADED_PLUGINS:
+        if plugin["name"] == name:
+            path = Path(plugin["path"]) / "theme.css"
+            if path.exists():
+                return FileResponse(
+                    path, media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=3600"},
+                )
+            break
+    # Fall back to the core default theme
+    default = PROJECT_ROOT / "frontend" / "src" / "theme.css"
+    if not default.exists():
+        raise HTTPException(status_code=404, detail="Default theme not found")
+    return FileResponse(
+        default, media_type="text/css",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @app.get("/api/_html2canvas.js")

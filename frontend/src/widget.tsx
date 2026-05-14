@@ -46,6 +46,26 @@ function detectBackendOrigin(): string {
   return BACKEND_FALLBACK;
 }
 
+interface PluginInfo {
+  name: string;
+  agent_name: string;
+  theme_url?: string;
+  default_layout?: "chat-left" | "chat-right";
+}
+
+async function fetchPluginInfo(backendOrigin: string): Promise<PluginInfo | null> {
+  try {
+    const res = await fetch(
+      `${backendOrigin}/api/plugin?host=${encodeURIComponent(window.location.hostname)}`,
+      { credentials: "include", signal: AbortSignal.timeout(2000) },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as PluginInfo;
+  } catch {
+    return null;
+  }
+}
+
 export function mount(): void {
   if (document.getElementById(HOST_ID)) return;
 
@@ -112,11 +132,26 @@ export function mount(): void {
 
   const backendOrigin = detectBackendOrigin();
   log.info("widget", "mount", { backendOrigin });
-  render(<ChatPane backendOrigin={backendOrigin} />, mountPoint);
 
-  // Open the server↔browser tool channel. ChatPane handles the auth
-  // gate inline (login form rendered in the drawer body when needed),
-  // so the bridge can start unconditionally — gated routes will 401
-  // until the user submits the key, which is fine.
-  startBridge(backendOrigin);
+  // Single plugin bootstrap fetch — drives theme injection, agent name,
+  // and layout default. Bridge starts after so plugin defaults are in
+  // place before bootstrapSettings fires.
+  fetchPluginInfo(backendOrigin).then((plugin) => {
+    if (plugin?.theme_url) {
+      // Insert plugin theme BEFORE the base theme so its :host { } block
+      // wins in the cascade (later rule = higher priority for equal specificity).
+      const pluginThemeLink = document.createElement("link");
+      pluginThemeLink.rel = "stylesheet";
+      pluginThemeLink.href = `${backendOrigin}${plugin.theme_url}`;
+      shadow.insertBefore(pluginThemeLink, themeEl);
+    }
+    render(
+      <ChatPane backendOrigin={backendOrigin} agentName={plugin?.agent_name} />,
+      mountPoint,
+    );
+    const pluginDefaults = plugin?.default_layout
+      ? { layout: plugin.default_layout as "chat-left" | "chat-right" }
+      : undefined;
+    startBridge(backendOrigin, pluginDefaults);
+  });
 }

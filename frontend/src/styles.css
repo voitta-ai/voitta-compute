@@ -40,7 +40,7 @@
   padding: 0;
 }
 .handle:hover {
-  background: #1e293b;
+  background: var(--voitta-header-bg);
 }
 .root[data-open="true"] .handle {
   opacity: 0;
@@ -218,8 +218,8 @@ header .provider-chip:hover {
 .tool-line {
   align-self: flex-start;
   max-width: 95%;
-  background: #f4f4f4;
-  border: 1px solid #e0e0e0;
+  background: var(--voitta-tool-bg);
+  border: 1px solid var(--voitta-tool-border);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 12px;
@@ -263,8 +263,8 @@ header .provider-chip:hover {
   animation: voitta-pulse 1.2s ease-in-out infinite;
 }
 .tool-line.status-ok {
-  background: #f4f4f4;
-  border-color: #e0e0e0;
+  background: var(--voitta-tool-bg);
+  border-color: var(--voitta-tool-border);
   color: var(--voitta-text);
 }
 .tool-line.status-ok .sym {
@@ -281,8 +281,8 @@ header .provider-chip:hover {
 .tool-line .tool-body {
   margin: 6px 0 0;
   padding: 6px;
-  background: #fff;
-  border: 1px solid #eee;
+  background: var(--voitta-bg);
+  border: 1px solid var(--voitta-border);
   border-radius: 4px;
   overflow: auto;
   max-height: 240px;
@@ -350,7 +350,7 @@ header .provider-chip:hover {
   z-index: 1; /* above the report-pane stacking even though pane is hidden */
 }
 .report-handle:hover {
-  background: #1e293b;
+  background: var(--voitta-header-bg);
 }
 
 /* ─── report pane (opposite edge from chat drawer) ───────────────────────── */
@@ -390,7 +390,7 @@ header .provider-chip:hover {
      to align with the chat header's "Voitta" label. */
   padding: 10px 14px;
   background: var(--voitta-header-bg);
-  color: #fff;
+  color: var(--voitta-header-fg);
   border-bottom: 1px solid var(--voitta-header-rule);
   flex-shrink: 0;
   font-size: 13px;
@@ -408,11 +408,11 @@ header .provider-chip:hover {
 .report-pane .report-id {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 10px;
-  color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--voitta-header-muted);
+  background: var(--voitta-header-btn-bg);
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--voitta-header-btn-bg-hover);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -425,8 +425,8 @@ header .provider-chip:hover {
 .report-pane .report-edit,
 .report-pane .report-action {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  color: #fff;
+  border: 1px solid var(--voitta-header-btn-bg-hover);
+  color: var(--voitta-header-fg);
   width: 28px;
   height: 24px;
   border-radius: 4px;
@@ -451,7 +451,7 @@ header .provider-chip:hover {
   flex: 1;
   width: 100%;
   border: none;
-  background: #fff;
+  background: var(--voitta-bg);
 }
 
 /* ─── plot cards (Chart.js) ──────────────────────────────────────────────── */
@@ -609,7 +609,7 @@ header .provider-chip:hover {
   text-align: left;
 }
 .markdown th {
-  background: #f4f4f4;
+  background: var(--voitta-surface);
 }
 .markdown hr {
   border: 0;
@@ -634,13 +634,13 @@ header .provider-chip:hover {
   resize: none;
   font: inherit;
   padding: 7px 8px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--voitta-border);
   border-radius: 6px;
   height: 56px;
   min-height: 36px;
   max-height: 160px;
-  background: #fff;
-  color: var(--voitta-header-bg);
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
 }
 .composer-input:focus {
   outline: none;
@@ -649,7 +649,7 @@ header .provider-chip:hover {
 }
 .send-btn {
   background: var(--voitta-accent);
-  color: #fff;
+  color: var(--voitta-accent-fg);
   border: none;
   border-radius: 6px;
   padding: 0 14px;
@@ -697,11 +697,11 @@ header .provider-chip:hover {
   width: 100%;
   padding: 7px 10px;
   margin-top: 4px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--voitta-border);
   border-radius: 5px;
   font: inherit;
-  background: #fff;
-  color: var(--voitta-header-bg);
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
 }
 /* Mask API keys without using type=password (avoids Chrome's
    "Save password?" prompt). */
@@ -743,7 +743,7 @@ header .provider-chip:hover {
 .view-settings .save-btn {
   padding: 8px 16px;
   background: var(--voitta-accent);
-  color: #fff;
+  color: var(--voitta-accent-fg);
   border: none;
   border-radius: 5px;
   font: 600 13px var(--voitta-font-sans);
@@ -957,8 +957,8 @@ header .provider-chip:hover {
   flex: 1;
 }
 .art-btn {
-  background: #fff;
-  border: 1px solid #c4c4c4;
+  background: var(--voitta-bg);
+  border: 1px solid var(--voitta-border);
   color: var(--voitta-text);
   border-radius: 4px;
   padding: 3px 9px;
@@ -1006,7 +1006,7 @@ header .provider-chip:hover {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #fff;
+  background: var(--voitta-bg);
   font-size: 12px;
 }
 

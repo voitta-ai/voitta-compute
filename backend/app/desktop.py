@@ -63,6 +63,44 @@ ABOUT_TEXT = (
 )
 
 
+def _alert(*args, **kwargs):
+    """Wrapper around ``rumps.alert`` that makes the modal actually
+    visible from a status-bar (LSUIElement / Accessory) app.
+
+    The problem: rumps apps run with NSApplicationActivationPolicyAccessory.
+    Accessory apps CANNOT reliably steal foreground focus from another
+    app — calling activateIgnoringOtherApps_ alone is not enough; the
+    NSAlert opens but stays buried behind the active app, with no way
+    for the user to see or dismiss it. The main thread blocks inside
+    runModal() waiting for a click, and the menu freezes.
+
+    Fix (lifted from voitta-desktop's _promote_for_keyboard pattern):
+    flip to Regular activation policy for the lifetime of the modal,
+    then restore Accessory. A Regular app can steal focus reliably.
+    The status-bar icon stays put across policy changes — only the
+    Dock icon would appear, briefly, during the alert.
+    """
+    try:
+        from AppKit import (
+            NSApplication,
+            NSApplicationActivationPolicyAccessory,
+            NSApplicationActivationPolicyRegular,
+        )
+        nsapp = NSApplication.sharedApplication()
+        nsapp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        nsapp.activateIgnoringOtherApps_(True)
+    except Exception:
+        nsapp = None
+    try:
+        return rumps.alert(*args, **kwargs)
+    finally:
+        if nsapp is not None:
+            try:
+                nsapp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+            except Exception:
+                pass
+
+
 def _server_url() -> str:
     scheme = "https" if TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists() else "http"
     return f"{scheme}://{HOST}:{PORT}"
@@ -219,6 +257,7 @@ class VoittaMenuBarApp(rumps.App):
             rumps.MenuItem("Settings…", callback=self.show_settings),
             None,
             rumps.MenuItem("Show data folder", callback=self.show_data_folder),
+            rumps.MenuItem("(Re)create TLS certificates…", callback=self.recreate_certs),
             rumps.MenuItem("Reset…", callback=self.reset),
             None,
             rumps.MenuItem(f"Quit {APP_NAME}", callback=self.quit_app),
@@ -307,7 +346,7 @@ class VoittaMenuBarApp(rumps.App):
     # ---- menu callbacks ---------------------------------------------------
 
     def show_about(self, _sender) -> None:
-        rumps.alert(title=APP_NAME, message=ABOUT_TEXT, ok="OK")
+        _alert(title=APP_NAME, message=ABOUT_TEXT, ok="OK")
 
     def open_browser(self, _sender) -> None:
         webbrowser.open(_server_url())
@@ -317,7 +356,7 @@ class VoittaMenuBarApp(rumps.App):
             text = _bookmarklet_text()
         except FileNotFoundError:
             self._log.warning("bookmarklet source missing from bundle")
-            rumps.alert(
+            _alert(
                 title=APP_NAME,
                 message=(
                     "Couldn't find the bookmarklet source.\n\n"
@@ -329,7 +368,7 @@ class VoittaMenuBarApp(rumps.App):
             return
         if not _copy_to_clipboard(text):
             self._log.warning("clipboard write failed")
-            rumps.alert(
+            _alert(
                 title=APP_NAME,
                 message="Couldn't write to the clipboard.",
                 ok="OK",
@@ -349,23 +388,23 @@ class VoittaMenuBarApp(rumps.App):
             pass
 
     def show_settings(self, _sender) -> None:
-        # The user-facing chat settings (API keys, model selection)
-        # live in the bookmarklet's localStorage, not here. This panel
-        # surfaces backend runtime info — what URL to hit, where data
-        # lives, install + RAG status — so the user can debug
-        # "why isn't this working?" without reading source.
-        #
-        # NSAlert renders ``message`` in the system proportional font,
-        # so trying to align rows with spaces yields jagged columns.
-        # Format as a short list of "Label   value" pairs and let the
-        # natural wrap handle long paths.
+        self._log.info("show_settings: callback fired")
+        try:
+            self._show_settings_impl()
+        except BaseException:
+            self._log.exception("show_settings: handler raised")
+
+    def _show_settings_impl(self) -> None:
         from app import activity, installer, rag_build, scripts_seed
+        self._log.info("show_settings: imports done")
 
         tls_on = TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists()
         active_now = activity.snapshot()
+        self._log.info("show_settings: activity snapshot done")
 
         # ---- install status -----
         install = installer.status_summary()
+        self._log.info("show_settings: installer.status_summary done")
         if install["ok"]:
             install_line = (
                 f"Install  ·  ✓ all {install['total']} packages present"
@@ -380,6 +419,7 @@ class VoittaMenuBarApp(rumps.App):
 
         # ---- seed scripts status -----
         seed = scripts_seed.status_summary()
+        self._log.info("show_settings: scripts_seed.status_summary done")
         if seed["all_seeded"]:
             seed_line = (
                 f"Scripts  ·  ✓ {len(seed['present'])} canonical scripts ready"
@@ -394,6 +434,7 @@ class VoittaMenuBarApp(rumps.App):
 
         # ---- RAG status -----
         rag = rag_build.status_summary()
+        self._log.info("show_settings: rag_build.status_summary done")
         if rag["built"]:
             rag_line = (
                 f"RAG      ·  ✓ {rag['chunk_count']} chunks across "
@@ -447,20 +488,23 @@ class VoittaMenuBarApp(rumps.App):
                 log_path = None
             log_label = "Open install error log"
 
+        self._log.info("show_settings: about to display alert (log_path=%s)", log_path)
         if log_path is not None and log_label is not None and log_path.exists():
-            response = rumps.alert(
+            response = _alert(
                 title=APP_NAME,
                 message=body,
                 ok="Close",
                 cancel=log_label,
             )
+            self._log.info("show_settings: alert dismissed response=%s", response)
             # rumps.alert returns 1 for OK (Close), 0 for the cancel
             # slot (which we've repurposed as "Open log"). When the
             # user picks the log button, surface the file in TextEdit.
             if response == 0:
                 subprocess.run(["open", "-e", str(log_path)], check=False)
         else:
-            rumps.alert(title=APP_NAME, message=body, ok="Close")
+            response = _alert(title=APP_NAME, message=body, ok="Close")
+            self._log.info("show_settings: alert dismissed response=%s", response)
 
     def show_data_folder(self, _sender) -> None:
         # Open the writable data dir in Finder for the user to inspect
@@ -469,33 +513,124 @@ class VoittaMenuBarApp(rumps.App):
             PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
         subprocess.run(["open", str(PROJECT_ROOT)], check=False)
 
-    def reset(self, _sender) -> None:
-        """Wipe the entire user data dir and quit.
+    def recreate_certs(self, _sender) -> None:
+        """Regenerate the TLS cert pair via mkcert and prompt the user
+        to restart so uvicorn picks them up."""
+        self._log.info("recreate_certs: callback fired")
+        from app import certs
 
-        Deletes every artefact the app has ever written: settings, the
-        site-packages dir of pip-installed deps, snapshots, scripts,
-        TLS certs, log file. The next launch starts from scratch — the
-        first-run install dialog will reappear.
-        """
-        confirm = rumps.alert(
-            title=f"Reset {APP_NAME}?",
+        confirm = _alert(
+            title="Recreate TLS certificates?",
             message=(
-                f"This deletes:\n  {PROJECT_ROOT}\n\n"
-                "All settings, snapshots, scripts, and installed Python\n"
-                "packages will be removed. The app will quit immediately.\n"
-                "Restart it for a clean first-run setup.\n\n"
-                "This cannot be undone."
+                "This regenerates the local TLS cert pair via mkcert and\n"
+                "installs the local CA into your system trust store.\n\n"
+                f"Cert location: {certs.CERTS_DIR}\n\n"
+                "Requires the `mkcert` tool on PATH. Restart the app\n"
+                "after this completes so uvicorn picks up the new cert."
             ),
-            ok="Reset and quit",
+            ok="Generate",
             cancel="Cancel",
         )
         if not confirm:
+            self._log.info("recreate_certs: cancelled by user")
             return
         try:
-            if PROJECT_ROOT.exists():
-                shutil.rmtree(PROJECT_ROOT, ignore_errors=True)
-        finally:
-            rumps.quit_application()
+            cert_path = certs.provision(force=True)
+        except certs.CertError as exc:
+            self._log.warning("recreate_certs failed: %s", exc)
+            _alert(
+                title="Cert generation failed",
+                message=str(exc),
+                ok="OK",
+            )
+            return
+        self._log.info("recreate_certs: provisioned %s", cert_path)
+        _alert(
+            title="Certificates regenerated",
+            message=(
+                f"New cert pair at:\n  {cert_path}\n\n"
+                "Restart the app for uvicorn to load the new cert."
+            ),
+            ok="OK",
+        )
+
+    def reset(self, _sender) -> None:
+        """Wipe all user-writable data and restart with the install window.
+
+        Deletes only the artefacts the app has written at runtime: settings,
+        pip-installed deps, snapshots, scripts, TLS certs, and log files.
+        The source tree / .venv are left untouched. The process then
+        re-execs itself so the install window appears immediately — the
+        user doesn't need to relaunch manually.
+        """
+        self._log.info("reset: callback fired")
+        try:
+            self._reset_impl()
+        except BaseException:
+            self._log.exception("reset: callback raised")
+
+    def _reset_impl(self) -> None:
+        import os
+
+        # Explicit list of data dirs so we never accidentally nuke the
+        # source tree or .venv in dev mode (where PROJECT_ROOT == repo root).
+        _data_dirs = [
+            PROJECT_ROOT / "rag",
+            PROJECT_ROOT / "scripts",
+            PROJECT_ROOT / "python_storage",
+            PROJECT_ROOT / "userbase",
+            PROJECT_ROOT / "backend" / "certs",
+            PROJECT_ROOT / "backend" / "settings.json",
+        ]
+        _log_files = [
+            PROJECT_ROOT / "voitta.log",
+            PROJECT_ROOT / "voitta-launch.log",
+        ]
+        items_listed = "\n  ".join(
+            str(p) for p in _data_dirs + _log_files if p.exists()
+        ) or "(nothing to delete)"
+        confirm = _alert(
+            title=f"Reset {APP_NAME}?",
+            message=(
+                f"This deletes:\n  {items_listed}\n\n"
+                "All settings, snapshots, scripts, and installed Python\n"
+                "packages will be removed. Setup will run again immediately.\n\n"
+                "This cannot be undone."
+            ),
+            ok="Reset and reinstall",
+            cancel="Cancel",
+        )
+        if not confirm:
+            self._log.info("reset: cancelled by user")
+            return
+
+        self._log.info("reset: user confirmed — wiping data dirs")
+        for p in _data_dirs:
+            if p.is_dir():
+                self._log.info("reset: rmtree %s", p)
+                shutil.rmtree(p, ignore_errors=True)
+                self._log.info("reset: rmtree %s done", p)
+            elif p.is_file():
+                self._log.info("reset: unlink %s", p)
+                p.unlink(missing_ok=True)
+        for p in _log_files:
+            # unlink log files last so the lines above are visible
+            p.unlink(missing_ok=True)
+
+        self._log.info(
+            "reset: wipe complete — re-execing via desktop_launcher; "
+            "executable=%s argv=%s",
+            sys.executable,
+            [sys.executable, "-m", "app.desktop_launcher"],
+        )
+        # Flush handlers so the log lines above survive the exec boundary
+        for h in self._log.handlers:
+            h.flush()
+        logging.shutdown()
+
+        os.execv(sys.executable, [
+            sys.executable, "-m", "app.desktop_launcher",
+        ])
 
     def quit_app(self, _sender) -> None:
         # rumps's default Quit button bypasses our cleanup. Funnel
@@ -586,6 +721,18 @@ def _kick_install_then_serve(log: logging.Logger) -> None:
                 )
             )
 
+        # Phase 3: TLS certs. After reset, backend/certs/ is gone;
+        # without certs uvicorn falls through to HTTP, which the
+        # bookmarklet can't load on HTTPS host pages (mixed-content
+        # block). Try mkcert if it's available; non-fatal otherwise.
+        try:
+            from app import certs as _certs
+            generated = _certs.provision_if_missing()
+            if generated is not None:
+                log.info("certs: provisioned %s during install flow", generated)
+        except Exception:
+            log.exception("certs: provision_if_missing failed during install flow")
+
         window.close()
         # Reaching here means heavy-package install succeeded
         # (``not ok`` returned early). RAG-build failures are
@@ -596,12 +743,66 @@ def _kick_install_then_serve(log: logging.Logger) -> None:
     threading.Thread(target=_worker, name="voitta-installer", daemon=True).start()
 
 
+def _install_async_logging() -> None:
+    """Set up non-blocking logging.
+
+    Critical for dev mode where the process is attached to a terminal:
+    if stderr writes ever block (terminal buffer full, slow tty drain),
+    Python's default StreamHandler will block the CALLING thread on
+    every log.info(). When the rumps main thread is the caller, this
+    freezes the menu bar — clicks stop dispatching, the menu turns grey.
+
+    Fix: route ALL log records through a QueueHandler that just appends
+    to an in-memory queue and returns instantly. A background daemon
+    thread (QueueListener) drains the queue and writes to stderr +
+    rotating file. If a downstream handler ever blocks, only the worker
+    thread blocks — the producer (main thread) keeps moving.
+    """
+    import queue
+    from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    # Strip any handlers basicConfig or libraries may have already added
+    # so we control the full chain.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    # Sink 1: stderr (terminal output for dev mode).
+    stderr_handler = logging.StreamHandler()
+    stderr_handler.setFormatter(fmt)
+    stderr_handler.setLevel(logging.INFO)
+
+    sinks: list[logging.Handler] = [stderr_handler]
+
+    # Sink 2: rotating file at PROJECT_ROOT/voitta.log.
+    try:
+        log_path = PROJECT_ROOT / "voitta.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3)
+        fh.setFormatter(fmt)
+        fh.setLevel(logging.INFO)
+        sinks.append(fh)
+    except OSError:
+        pass
+
+    # The queue is unbounded — better to grow than to drop diagnostics.
+    log_queue: queue.Queue = queue.Queue(-1)
+    qh = QueueHandler(log_queue)
+    root.addHandler(qh)
+
+    listener = QueueListener(log_queue, *sinks, respect_handler_level=True)
+    # QueueListener.start() spawns a daemon thread already; no need to
+    # touch the daemon flag after the fact.
+    listener.start()
+
+
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    _install_async_logging()
     log = logging.getLogger("voitta.desktop")
+    log.info("desktop main() starting pid=%d", os.getpid())
 
     # Make sure the data dir exists before uvicorn starts touching it.
     PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -621,6 +822,15 @@ def main() -> int:
     from app import installer
 
     if installer.is_complete():
+        # Provision certs if missing — covers the case where install
+        # is already done but certs were wiped (e.g. by Reset).
+        try:
+            from app import certs as _certs
+            generated = _certs.provision_if_missing()
+            if generated is not None:
+                log.info("certs: provisioned %s at startup", generated)
+        except Exception:
+            log.exception("certs: provision_if_missing failed at startup")
         _start_uvicorn(log)
     else:
         from PyObjCTools import AppHelper

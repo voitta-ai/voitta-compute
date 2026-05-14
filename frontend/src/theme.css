@@ -32,12 +32,17 @@
   --voitta-accent-tint:   rgba(26, 26, 26, 0.12);
 
   /* ── Header strip (gives the drawer presence vs. the host) ───── */
-  --voitta-header-bg:     #0f172a;
-  --voitta-header-fg:     #f1f5f9;
-  --voitta-header-rule:   #f1f5f9;
-  --voitta-header-icon:   #f1f5f9;
-  --voitta-header-btn-bg: rgba(241, 245, 249, 0.08);
-  --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.16);
+  --voitta-header-bg:          #0f172a;
+  --voitta-header-fg:          #f1f5f9;
+  --voitta-header-rule:        #1e293b;
+  --voitta-header-icon:        #f1f5f9;
+  --voitta-header-muted:       rgba(241, 245, 249, 0.55);  /* de-emphasised header text, e.g. report-id chip */
+  --voitta-header-btn-bg:      rgba(241, 245, 249, 0.08);
+  --voitta-header-btn-bg-hover:rgba(241, 245, 249, 0.16);
+
+  /* ── Tool-call chips ─────────────────────────────────────────── */
+  --voitta-tool-bg:     #f4f4f4;
+  --voitta-tool-border: #e0e0e0;
 
   /* ── Conversation bubbles ────────────────────────────────────── */
   --voitta-user-bubble:   #f1f5f9;

@@ -1,0 +1,66 @@
+/* Voitta Enterprise — Apple-flavoured identity, drawn from enterprise.voitta.ai palette.
+ *
+ * Accent:  Apple blue  #0071e3
+ * Header:  near-white  #f5f5f7  (inverts the default dark-slate header for a
+ *          light, app-chrome feel consistent with the enterprise portal)
+ * Surface: elevated white on a light-grey canvas — matches the portal's
+ *          --color-bg / --color-bg-elevated split.
+ */
+:host {
+  /* ── Surfaces ─────────────────────────────────────────────────── */
+  --voitta-bg:        #ffffff;
+  --voitta-surface:   #f5f5f7;   /* portal --color-bg */
+  --voitta-border:    #d2d2d7;   /* portal --color-border */
+  --voitta-divider:   #e5e5ea;   /* portal --color-border-light */
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --voitta-text:       #1d1d1f;  /* portal --color-text-primary */
+  --voitta-text-muted: #86868b;  /* portal --color-text-secondary */
+  --voitta-text-faint: #aeaeb2;  /* portal --color-text-tertiary */
+
+  /* ── Accent (CTAs, pills, focused borders) ───────────────────── */
+  --voitta-accent:        #0071e3;  /* portal --color-accent */
+  --voitta-accent-hover:  #0077ed;  /* portal --color-accent-hover */
+  --voitta-accent-fg:     #ffffff;
+  --voitta-accent-tint:   rgba(0, 113, 227, 0.08);
+
+  /* ── Header strip ────────────────────────────────────────────── */
+  /* Light header — matches the portal's sticky app-header (white / #f5f5f7).
+     Rule and icons flip to the primary text colour. */
+  --voitta-header-bg:          #ffffff;
+  --voitta-header-fg:          #1d1d1f;
+  --voitta-header-rule:        #d2d2d7;
+  --voitta-header-icon:        #1d1d1f;
+  --voitta-header-muted:       #86868b;  /* portal --color-text-secondary */
+  --voitta-header-btn-bg:      rgba(0, 0, 0, 0.04);
+  --voitta-header-btn-bg-hover:rgba(0, 0, 0, 0.08);
+
+  /* ── Tool-call chips ─────────────────────────────────────────── */
+  --voitta-tool-bg:     #f5f5f7;   /* portal --color-bg */
+  --voitta-tool-border: #d2d2d7;   /* portal --color-border */
+
+  /* ── Conversation bubbles ────────────────────────────────────── */
+  --voitta-user-bubble:    #f5f5f7;
+  --voitta-user-bubble-fg: #1d1d1f;
+
+  /* ── Status colours (portal error/success palette) ───────────── */
+  --voitta-ok-fg:         #34c759;  /* portal --color-success */
+  --voitta-error-bg:      #fff5f5;
+  --voitta-error-border:  #ffd0d0;
+  --voitta-error-fg:      #ff3b30;  /* portal --color-error */
+  --voitta-warn-bg:       #fff8ed;
+  --voitta-warn-border:   #ffd59e;
+  --voitta-warn-fg:       #ff9500;  /* portal --color-warning */
+
+  /* ── Shape ───────────────────────────────────────────────────── */
+  --voitta-radius:    10px;  /* portal --radius-md */
+  --voitta-radius-sm:  6px;  /* portal --radius-sm */
+  --voitta-shadow:        -6px 0 20px rgba(0, 0, 0, 0.08);
+  --voitta-shadow-handle: -3px 2px 8px  rgba(0, 0, 0, 0.14);
+
+  /* ── Typography ──────────────────────────────────────────────── */
+  /* Portal uses -apple-system / SF Pro; we keep the Voitta font stack
+     but prepend the system stack so Apple devices get native SF Pro. */
+  --voitta-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                      "Open Sans", system-ui, sans-serif;
+}

@@ -21,11 +21,13 @@ cd "$(dirname "$0")"
 #          loader auto-matches scheme).
 FORCE_HTTP=0
 LOCALHOST_MODE=0  # off by default — server runs require login
+DESKTOP_MODE=0    # when on, launches the macOS menu-bar app instead of raw uvicorn
 for arg in "$@"; do
   case "$arg" in
     --http) FORCE_HTTP=1 ;;
     --localhost) LOCALHOST_MODE=1 ;;
     --no-localhost) LOCALHOST_MODE=0 ;;  # explicit no-op alias for symmetry with the .app launcher
+    --desktop) DESKTOP_MODE=1 ;;
     -h|--help)
       sed -n '2,15p' "$0"
       echo
@@ -33,6 +35,8 @@ for arg in "$@"; do
       echo "  --http           skip HTTPS, run plain http://"
       echo "  --localhost      skip the API-key gate (loopback-only deployments)"
       echo "  --no-localhost   require login (default; alias for symmetry with the .app)"
+      echo "  --desktop        launch the macOS menu-bar app (rumps) instead of raw uvicorn"
+      echo "                   implies the same cert provisioning; no --reload in this mode"
       exit 0 ;;
     *)
       echo "[run.sh] unknown arg: $arg" >&2
@@ -200,15 +204,28 @@ if [ "$FORCE_HTTP" -eq 0 ]; then
   ensure_cert || true
 fi
 
-ARGS=(--host "$HOST" --port "$PORT" --reload)
-
 if [ "$FORCE_HTTP" -eq 0 ] && [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
-  ARGS+=(--ssl-certfile "$CERT_PATH" --ssl-keyfile "$KEY_PATH")
   echo "[run.sh] HTTPS on https://$HOST:$PORT"
 elif [ "$FORCE_HTTP" -eq 1 ]; then
   echo "[run.sh] HTTP on http://$HOST:$PORT  (--http forced)"
 else
   echo "[run.sh] HTTP on http://$HOST:$PORT  (cert at $CERT_PATH not found)"
+fi
+
+if [ "$DESKTOP_MODE" -eq 1 ]; then
+  # Start the macOS menu-bar app (rumps). It launches uvicorn internally on
+  # a daemon thread — no --reload in this mode, but the menu bar is live.
+  # desktop_launcher.main() respects VOITTA_LOCALHOST_MODE and the cert
+  # files already provisioned above.
+  echo "[run.sh] desktop mode — starting menu-bar app"
+  exec ./.venv/bin/python -c \
+    "from app.desktop_launcher import main; import sys; sys.exit(main())"
+fi
+
+ARGS=(--host "$HOST" --port "$PORT" --reload)
+
+if [ "$FORCE_HTTP" -eq 0 ] && [ -f "$CERT_PATH" ] && [ -f "$KEY_PATH" ]; then
+  ARGS+=(--ssl-certfile "$CERT_PATH" --ssl-keyfile "$KEY_PATH")
 fi
 
 exec ./.venv/bin/uvicorn app.main:app "${ARGS[@]}"
