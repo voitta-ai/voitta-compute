@@ -83,7 +83,8 @@ Pick a `<name>` that's filesystem-safe and a `<python_module>` that won't collid
 | `version` | yes | Free-form. Surfaced in `/healthz`-style diagnostics. |
 | `description` | yes | One-line summary shown in the menu bar Settings dialog. |
 | `host_patterns` | recommended | Strict-suffix hostname matches. The first entry is auto-applied as `host_pattern` to every ToolSpec your plugin registers that doesn't declare its own. Multi-host plugins should declare per-tool `host_pattern` explicitly. |
-| `agent_name` | optional | Display name for the assistant shown in the widget header (e.g. `"eBay Assistant"`, `"Voitta Enterprise"`). Defaults to title-case of `name`. |
+| `agent_name` | optional | Display name for the assistant shown in the widget header (e.g. `"eBay Assistant"`, `"Voitta Enterprise"`). Defaults to title-case of `name`. Still used as the accessible name (aria-label) when `hide_brand` is true. |
+| `hide_brand` | optional | `true` to suppress the brand mark + agent-name text in the header entirely. Useful when the host page already carries the Voitta wordmark and duplicating it would be noise. Provider chip and header buttons stay visible. |
 | `default_layout` | optional | `"chat-left"` or `"chat-right"`. Sets the initial pane position for new users. The user's saved preference always wins if they've changed it. |
 | `python_module` | yes if you have a backend | Importable name of your plugin's Python package, located at `plugins/<name>/backend/<python_module>/`. |
 | `frontend_bundle` | optional | Informational; the discovery loader globs `frontend/widget.ts` directly. |

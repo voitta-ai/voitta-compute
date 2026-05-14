@@ -190,6 +190,8 @@ async def plugin_for_host(host: str) -> JSONResponse:
     raw_layout = manifest.get("default_layout", "")
     if raw_layout in ("chat-left", "chat-right"):
         result["default_layout"] = raw_layout
+    if manifest.get("hide_brand") is True:
+        result["hide_brand"] = True
     return JSONResponse(result)
 
 

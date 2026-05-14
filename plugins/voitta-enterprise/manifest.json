@@ -1,6 +1,7 @@
 {
   "name": "voitta-enterprise",
-  "agent_name": "Voitta Enterprise",
+  "agent_name": "Voitta",
+  "hide_brand": true,
   "default_layout": "chat-left",
   "version": "0.1.0",
   "description": "Voitta Enterprise portal plugin — scaffolding for tools and primitives on enterprise.voitta.ai.",

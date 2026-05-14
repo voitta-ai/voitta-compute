@@ -51,6 +51,7 @@ interface PluginInfo {
   agent_name: string;
   theme_url?: string;
   default_layout?: "chat-left" | "chat-right";
+  hide_brand?: boolean;
 }
 
 async function fetchPluginInfo(backendOrigin: string): Promise<PluginInfo | null> {
@@ -138,15 +139,24 @@ export function mount(): void {
   // place before bootstrapSettings fires.
   fetchPluginInfo(backendOrigin).then((plugin) => {
     if (plugin?.theme_url) {
-      // Insert plugin theme BEFORE the base theme so its :host { } block
-      // wins in the cascade (later rule = higher priority for equal specificity).
+      // Insert plugin theme AFTER the base theme so its :host { } block
+      // wins in the cascade: for equal specificity, the LATER rule wins.
+      // We can't put it before styleEl either — styles.css references
+      // the tokens, and we want plugin overrides to land before any
+      // consumer reads them on first paint.
       const pluginThemeLink = document.createElement("link");
       pluginThemeLink.rel = "stylesheet";
       pluginThemeLink.href = `${backendOrigin}${plugin.theme_url}`;
-      shadow.insertBefore(pluginThemeLink, themeEl);
+      // Insert AFTER themeEl (base tokens) but BEFORE styleEl (rules
+      // that consume tokens). nextSibling of themeEl == styleEl.
+      shadow.insertBefore(pluginThemeLink, styleEl);
     }
     render(
-      <ChatPane backendOrigin={backendOrigin} agentName={plugin?.agent_name} />,
+      <ChatPane
+        backendOrigin={backendOrigin}
+        agentName={plugin?.agent_name}
+        hideBrand={plugin?.hide_brand === true}
+      />,
       mountPoint,
     );
     const pluginDefaults = plugin?.default_layout

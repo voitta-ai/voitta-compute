@@ -48,6 +48,55 @@
   --voitta-user-bubble:   #f1f5f9;
   --voitta-user-bubble-fg:#1a1a1a;
 
+  /* ── Stop button (red while a turn is streaming) ─────────────── */
+  --voitta-stop-bg:       #5b2d5b;
+  --voitta-stop-bg-hover: #4a234a;
+
+  /* ── Inline code + code blocks (markdown) ────────────────────── */
+  --voitta-code-bg:        rgba(0, 0, 0, 0.06);  /* inline `code` */
+  --voitta-code-block-bg:  #1e1e1e;               /* fenced ```code``` */
+  --voitta-code-block-fg:  #eeeeee;
+  --voitta-link-fg:        #1766c4;
+
+  /* ── Image / rich blocks (run_compute outputs) ───────────────── */
+  --voitta-rich-text-bg:   #f8f8f8;
+  --voitta-heatmap-bg:     #fafafa;
+
+  /* ── Logs view (intentionally dark by default for readability) ─ */
+  --voitta-log-bg:           #1e1e1e;
+  --voitta-log-fg:           #dddddd;
+  --voitta-log-toolbar-bg:   #2a2a2a;
+  --voitta-log-toolbar-rule: #000000;
+  --voitta-log-title-fg:     #cfd8dc;
+  --voitta-log-btn-bg:       #3a3a3a;
+  --voitta-log-btn-bg-hover: #4a4a4a;
+  --voitta-log-btn-border:   #555555;
+  --voitta-log-line-rule:    #2a2a2a;
+  --voitta-log-body-bg:      #15191e;
+  --voitta-log-body-rule:    #444444;
+  --voitta-log-error-fg:     #ff8080;
+  --voitta-log-error-rule:   #ff5050;
+  --voitta-log-warn-fg:      #ffcc66;
+  --voitta-log-warn-rule:    #d49b3a;
+  --voitta-log-info-fg:      #dddddd;
+
+  /* ── Artifacts panel (Finder-style window) ───────────────────── */
+  --voitta-art-titlebar-bg-from: #f3f3f3;
+  --voitta-art-titlebar-bg-to:   #e6e6e6;
+  --voitta-art-titlebar-rule:    #d4d4d8;
+  --voitta-art-window-border:    #d4d4d8;
+  --voitta-art-btn-bg-hover:     #f1f1f1;
+  --voitta-art-btn-border-hover: #9c9c9c;
+  --voitta-art-row-rule:         #f4f4f5;
+  --voitta-art-row-stripe:       #fafafa;
+  --voitta-art-row-hover:        #e8f0fe;
+  --voitta-art-footer-bg:        #fafafa;
+  --voitta-art-footer-rule:      #ececec;
+  --voitta-art-badge-bg:         #eef2f7;
+  --voitta-art-badge-border:     #dbe2ea;
+  --voitta-art-badge-fg:         #4b5563;
+  --voitta-art-size-fg:          #4b5563;
+
   /* ── Status colours ──────────────────────────────────────────── */
   --voitta-warn-bg:       #fff7e6;
   --voitta-warn-border:   #fcd9a3;

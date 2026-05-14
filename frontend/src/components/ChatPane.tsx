@@ -67,6 +67,7 @@ function loadInitialWidth(): number {
 interface Props {
   backendOrigin: string;
   agentName?: string;
+  hideBrand?: boolean;
 }
 
 // Helpers that operate on a TurnItem[] in stream order, returning a *new*
@@ -121,7 +122,7 @@ function itemsToContent(items: TurnItem[]): string {
     .join("");
 }
 
-export function ChatPane({ backendOrigin, agentName }: Props) {
+export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
   const [open, setOpen] = useState<boolean>(loadInitialOpen);
   const [width, setWidth] = useState<number>(loadInitialWidth);
   const [resizing, setResizing] = useState(false);
@@ -523,10 +524,12 @@ export function ChatPane({ backendOrigin, agentName }: Props) {
           onDblClick={onResizeDblClick}
         />
         <header>
-          <span class="brand-mark" aria-hidden="true">
-            ●
-          </span>
-          <span class="brand-name">{brand.name}</span>
+          {!hideBrand && (
+            <span class="brand-mark" aria-hidden="true">
+              ●
+            </span>
+          )}
+          {!hideBrand && <span class="brand-name">{brand.name}</span>}
           <button
             class="provider-chip"
             type="button"

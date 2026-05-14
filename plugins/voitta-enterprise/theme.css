@@ -1,66 +1,122 @@
-/* Voitta Enterprise — Apple-flavoured identity, drawn from enterprise.voitta.ai palette.
+/* Voitta Enterprise — Apple Dark Mode palette, drawn directly from the
+ * enterprise.voitta.ai portal (static/styles.css :root.dark block).
  *
- * Accent:  Apple blue  #0071e3
- * Header:  near-white  #f5f5f7  (inverts the default dark-slate header for a
- *          light, app-chrome feel consistent with the enterprise portal)
- * Surface: elevated white on a light-grey canvas — matches the portal's
- *          --color-bg / --color-bg-elevated split.
+ * Portal mapping → widget token:
+ *   --color-bg              #1d1d1f  →  --voitta-bg              (drawer body)
+ *   --color-bg-elevated     #2c2c2e  →  --voitta-surface         (cards, header)
+ *   --color-bg-hover        #3a3a3c  →  hover surfaces
+ *   --color-text-primary    #f5f5f7  →  --voitta-text
+ *   --color-text-secondary  #a1a1a6  →  --voitta-text-muted
+ *   --color-text-tertiary   #636366  →  --voitta-text-faint
+ *   --color-accent          #0a84ff  →  --voitta-accent          (Apple dark blue)
+ *   --color-accent-hover    #409cff  →  --voitta-accent-hover
+ *   --color-border          #3a3a3c  →  --voitta-border
+ *   --color-border-light    #48484a  →  divider
+ *   --color-success         #34c759  →  --voitta-ok-fg
+ *   --color-error           #ff3b30  →  --voitta-error-fg
+ *   --color-warning         #ff9500  →  --voitta-warn-fg
  */
 :host {
   /* ── Surfaces ─────────────────────────────────────────────────── */
-  --voitta-bg:        #ffffff;
-  --voitta-surface:   #f5f5f7;   /* portal --color-bg */
-  --voitta-border:    #d2d2d7;   /* portal --color-border */
-  --voitta-divider:   #e5e5ea;   /* portal --color-border-light */
+  --voitta-bg:        #1d1d1f;
+  --voitta-surface:   #2c2c2e;
+  --voitta-border:    #3a3a3c;
+  --voitta-divider:   #48484a;
 
   /* ── Text ─────────────────────────────────────────────────────── */
-  --voitta-text:       #1d1d1f;  /* portal --color-text-primary */
-  --voitta-text-muted: #86868b;  /* portal --color-text-secondary */
-  --voitta-text-faint: #aeaeb2;  /* portal --color-text-tertiary */
+  --voitta-text:       #f5f5f7;
+  --voitta-text-muted: #a1a1a6;
+  --voitta-text-faint: #636366;
 
-  /* ── Accent (CTAs, pills, focused borders) ───────────────────── */
-  --voitta-accent:        #0071e3;  /* portal --color-accent */
-  --voitta-accent-hover:  #0077ed;  /* portal --color-accent-hover */
-  --voitta-accent-fg:     #ffffff;
-  --voitta-accent-tint:   rgba(0, 113, 227, 0.08);
+  /* ── Accent ──────────────────────────────────────────────────── */
+  --voitta-accent:       #0a84ff;
+  --voitta-accent-hover: #409cff;
+  --voitta-accent-fg:    #ffffff;
+  --voitta-accent-tint:  rgba(10, 132, 255, 0.18);
 
-  /* ── Header strip ────────────────────────────────────────────── */
-  /* Light header — matches the portal's sticky app-header (white / #f5f5f7).
-     Rule and icons flip to the primary text colour. */
-  --voitta-header-bg:          #ffffff;
-  --voitta-header-fg:          #1d1d1f;
-  --voitta-header-rule:        #d2d2d7;
-  --voitta-header-icon:        #1d1d1f;
-  --voitta-header-muted:       #86868b;  /* portal --color-text-secondary */
-  --voitta-header-btn-bg:      rgba(0, 0, 0, 0.04);
-  --voitta-header-btn-bg-hover:rgba(0, 0, 0, 0.08);
+  /* ── Header strip — matches portal's sticky app-header (#2c2c2e) ─ */
+  --voitta-header-bg:          #2c2c2e;
+  --voitta-header-fg:          #f5f5f7;
+  --voitta-header-rule:        #3a3a3c;
+  --voitta-header-icon:        #f5f5f7;
+  --voitta-header-muted:       #a1a1a6;
+  --voitta-header-btn-bg:      rgba(245, 245, 247, 0.06);
+  --voitta-header-btn-bg-hover:rgba(245, 245, 247, 0.12);
 
   /* ── Tool-call chips ─────────────────────────────────────────── */
-  --voitta-tool-bg:     #f5f5f7;   /* portal --color-bg */
-  --voitta-tool-border: #d2d2d7;   /* portal --color-border */
+  --voitta-tool-bg:     #2c2c2e;
+  --voitta-tool-border: #3a3a3c;
 
-  /* ── Conversation bubbles ────────────────────────────────────── */
-  --voitta-user-bubble:    #f5f5f7;
-  --voitta-user-bubble-fg: #1d1d1f;
+  /* ── Conversation bubbles (user side) ────────────────────────── */
+  --voitta-user-bubble:    #2c2c2e;
+  --voitta-user-bubble-fg: #f5f5f7;
 
-  /* ── Status colours (portal error/success palette) ───────────── */
-  --voitta-ok-fg:         #34c759;  /* portal --color-success */
-  --voitta-error-bg:      #fff5f5;
-  --voitta-error-border:  #ffd0d0;
-  --voitta-error-fg:      #ff3b30;  /* portal --color-error */
-  --voitta-warn-bg:       #fff8ed;
-  --voitta-warn-border:   #ffd59e;
-  --voitta-warn-fg:       #ff9500;  /* portal --color-warning */
+  /* ── Stop button — dark red for high contrast on dark surface ── */
+  --voitta-stop-bg:        #a02929;
+  --voitta-stop-bg-hover:  #c33;
 
-  /* ── Shape ───────────────────────────────────────────────────── */
-  --voitta-radius:    10px;  /* portal --radius-md */
-  --voitta-radius-sm:  6px;  /* portal --radius-sm */
-  --voitta-shadow:        -6px 0 20px rgba(0, 0, 0, 0.08);
-  --voitta-shadow-handle: -3px 2px 8px  rgba(0, 0, 0, 0.14);
+  /* ── Inline code + fenced blocks ─────────────────────────────── */
+  --voitta-code-bg:        rgba(255, 255, 255, 0.10);
+  --voitta-code-block-bg:  #0c0c0d;   /* slightly deeper than bg for contrast */
+  --voitta-code-block-fg:  #f5f5f7;
+  --voitta-link-fg:        #64b5ff;   /* lighter blue for contrast on dark */
 
-  /* ── Typography ──────────────────────────────────────────────── */
-  /* Portal uses -apple-system / SF Pro; we keep the Voitta font stack
-     but prepend the system stack so Apple devices get native SF Pro. */
+  /* ── Rich blocks (run_compute outputs) ───────────────────────── */
+  --voitta-rich-text-bg:   #2c2c2e;
+  --voitta-heatmap-bg:     #2c2c2e;
+
+  /* ── Logs view (works on dark by default — minor tweaks only) ── */
+  --voitta-log-bg:           #0c0c0d;
+  --voitta-log-fg:           #f5f5f7;
+  --voitta-log-toolbar-bg:   #2c2c2e;
+  --voitta-log-toolbar-rule: #3a3a3c;
+  --voitta-log-title-fg:     #a1a1a6;
+  --voitta-log-btn-bg:       #3a3a3c;
+  --voitta-log-btn-bg-hover: #48484a;
+  --voitta-log-btn-border:   #48484a;
+  --voitta-log-line-rule:    #2c2c2e;
+  --voitta-log-body-bg:      #1d1d1f;
+  --voitta-log-body-rule:    #48484a;
+  --voitta-log-error-fg:     #ff6961;
+  --voitta-log-error-rule:   #ff3b30;
+  --voitta-log-warn-fg:      #ffcc66;
+  --voitta-log-warn-rule:    #ff9500;
+  --voitta-log-info-fg:      #f5f5f7;
+
+  /* ── Artifacts panel ─────────────────────────────────────────── */
+  --voitta-art-titlebar-bg-from: #2c2c2e;
+  --voitta-art-titlebar-bg-to:   #1d1d1f;
+  --voitta-art-titlebar-rule:    #3a3a3c;
+  --voitta-art-window-border:    #3a3a3c;
+  --voitta-art-btn-bg-hover:     #3a3a3c;
+  --voitta-art-btn-border-hover: #48484a;
+  --voitta-art-row-rule:         #2c2c2e;
+  --voitta-art-row-stripe:       #232325;
+  --voitta-art-row-hover:        rgba(10, 132, 255, 0.16);
+  --voitta-art-footer-bg:        #232325;
+  --voitta-art-footer-rule:      #3a3a3c;
+  --voitta-art-badge-bg:         rgba(10, 132, 255, 0.16);
+  --voitta-art-badge-border:     rgba(10, 132, 255, 0.32);
+  --voitta-art-badge-fg:         #64b5ff;
+  --voitta-art-size-fg:          #a1a1a6;
+
+  /* ── Status colours (portal palette) ─────────────────────────── */
+  --voitta-ok-fg:         #34c759;
+  --voitta-error-bg:      rgba(255, 59, 48, 0.10);
+  --voitta-error-border:  rgba(255, 59, 48, 0.32);
+  --voitta-error-fg:      #ff6961;
+  --voitta-warn-bg:       rgba(255, 149, 0, 0.10);
+  --voitta-warn-border:   rgba(255, 149, 0, 0.32);
+  --voitta-warn-fg:       #ffcc66;
+
+  /* ── Shape (matches portal's slightly rounder Apple radius) ──── */
+  --voitta-radius:    10px;
+  --voitta-radius-sm:  6px;
+  --voitta-shadow:        -6px 0 20px rgba(0, 0, 0, 0.45);
+  --voitta-shadow-handle: -3px 2px 8px  rgba(0, 0, 0, 0.55);
+
+  /* ── Typography (SF Pro on Apple, fallback to Voitta default) ── */
   --voitta-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text",
                       "Open Sans", system-ui, sans-serif;
 }
+

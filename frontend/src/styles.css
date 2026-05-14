@@ -458,7 +458,7 @@ header .provider-chip:hover {
 .plot-card {
   align-self: stretch;
   background: var(--voitta-surface);
-  border: 1px solid #d8d8d8;
+  border: 1px solid var(--voitta-border);
   border-radius: 8px;
   padding: 8px 10px 10px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -469,7 +469,7 @@ header .provider-chip:hover {
   width: 100%;
 }
 .plot-card.kind-heatmap .plot-canvas-wrap {
-  background: #fafafa;
+  background: var(--voitta-heatmap-bg);
   border-radius: 4px;
 }
 
@@ -477,7 +477,7 @@ header .provider-chip:hover {
    run_compute's ctx.text() */
 .rich-text {
   align-self: stretch;
-  background: #f8f8f8;
+  background: var(--voitta-rich-text-bg);
   border: 1px solid var(--voitta-border);
   border-radius: 6px;
   padding: 6px 10px;
@@ -513,8 +513,8 @@ header .provider-chip:hover {
 /* log panes from buffer_eval */
 .rich-log {
   align-self: stretch;
-  background: #1e1e1e;
-  color: #ddd;
+  background: var(--voitta-log-bg);
+  color: var(--voitta-log-fg);
   border-radius: 6px;
   padding: 4px 10px;
   font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
@@ -522,7 +522,7 @@ header .provider-chip:hover {
 }
 .rich-log summary {
   cursor: pointer;
-  color: #cfd8dc;
+  color: var(--voitta-log-title-fg);
   user-select: none;
   padding: 2px 0;
 }
@@ -571,17 +571,17 @@ header .provider-chip:hover {
   margin: 0.4em 0;
   padding: 0 0.7em;
   border-left: 3px solid var(--voitta-accent);
-  color: #555;
+  color: var(--voitta-text-muted);
 }
 .markdown code {
   font: 0.9em/1.4 ui-monospace, Menlo, Consolas, monospace;
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--voitta-code-bg);
   padding: 0.05em 0.32em;
   border-radius: 3px;
 }
 .markdown pre {
-  background: var(--voitta-header-bg);
-  color: #eee;
+  background: var(--voitta-code-block-bg);
+  color: var(--voitta-code-block-fg);
   padding: 8px 10px;
   border-radius: 6px;
   overflow-x: auto;
@@ -594,7 +594,7 @@ header .provider-chip:hover {
   font-size: 0.88em;
 }
 .markdown a {
-  color: #1766c4;
+  color: var(--voitta-link-fg);
   text-decoration: underline;
 }
 .markdown table {
@@ -604,7 +604,7 @@ header .provider-chip:hover {
 }
 .markdown th,
 .markdown td {
-  border: 1px solid #ddd;
+  border: 1px solid var(--voitta-border);
   padding: 3px 7px;
   text-align: left;
 }
@@ -666,10 +666,10 @@ header .provider-chip:hover {
   cursor: not-allowed;
 }
 .send-btn.stop {
-  background: #5b2d5b;
+  background: var(--voitta-stop-bg);
 }
 .send-btn.stop:hover {
-  background: #4a234a;
+  background: var(--voitta-stop-bg-hover);
 }
 
 /* ─── settings view ──────────────────────────────────────────────────────── */
@@ -685,7 +685,7 @@ header .provider-chip:hover {
   margin-top: 12px;
   font-weight: 600;
   font-size: 12px;
-  color: #1f2937;
+  color: var(--voitta-text);
   letter-spacing: 0.02em;
 }
 .view-settings label:first-of-type {
@@ -729,7 +729,7 @@ header .provider-chip:hover {
   word-break: break-all;
 }
 .view-settings .scope code {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--voitta-code-bg);
   padding: 0.05em 0.32em;
   border-radius: 3px;
 }
@@ -771,8 +771,8 @@ header .provider-chip:hover {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #1e1e1e;
-  color: #ddd;
+  background: var(--voitta-log-bg);
+  color: var(--voitta-log-fg);
   font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
 }
 .logs-toolbar {
@@ -780,38 +780,38 @@ header .provider-chip:hover {
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: #2a2a2a;
-  border-bottom: 1px solid #000;
+  background: var(--voitta-log-toolbar-bg);
+  border-bottom: 1px solid var(--voitta-log-toolbar-rule);
   flex-shrink: 0;
   font-family: var(--voitta-font-sans);
   font-size: 11px;
 }
 .logs-toolbar .logs-title {
-  color: #cfd8dc;
+  color: var(--voitta-log-title-fg);
   font-weight: 600;
 }
 .logs-toolbar .logs-count {
   color: var(--voitta-text-faint);
   padding: 1px 6px;
   border-radius: 10px;
-  background: #1e1e1e;
-  border: 1px solid #444;
+  background: var(--voitta-log-bg);
+  border: 1px solid var(--voitta-log-body-rule);
   font-size: 10px;
 }
 .logs-toolbar .spacer {
   flex: 1;
 }
 .logs-toolbar button {
-  background: #3a3a3a;
-  color: #ddd;
-  border: 1px solid #555;
+  background: var(--voitta-log-btn-bg);
+  color: var(--voitta-log-fg);
+  border: 1px solid var(--voitta-log-btn-border);
   padding: 3px 9px;
   border-radius: 3px;
   cursor: pointer;
   font: inherit;
 }
 .logs-toolbar button:hover {
-  background: #4a4a4a;
+  background: var(--voitta-log-btn-bg-hover);
 }
 .logs-body {
   flex: 1;
@@ -827,36 +827,36 @@ header .provider-chip:hover {
 }
 .log-line {
   padding: 1px 0 3px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--voitta-log-line-rule);
 }
 .log-line .head {
   display: block;
 }
 .log-line .body {
   margin: 2px 0 0 16px;
-  color: #c0c4c8;
+  color: var(--voitta-log-title-fg);
   font-size: 10px;
-  background: #15191e;
-  border-left: 2px solid #444;
+  background: var(--voitta-log-body-bg);
+  border-left: 2px solid var(--voitta-log-body-rule);
   padding: 4px 6px;
   border-radius: 0 3px 3px 0;
   max-height: 200px;
   overflow: auto;
 }
 .log-line.log-error .head {
-  color: #ff8080;
+  color: var(--voitta-log-error-fg);
 }
 .log-line.log-error .body {
-  border-left-color: #ff5050;
+  border-left-color: var(--voitta-log-error-rule);
 }
 .log-line.log-warn .head {
-  color: #ffcc66;
+  color: var(--voitta-log-warn-fg);
 }
 .log-line.log-warn .body {
-  border-left-color: #d49b3a;
+  border-left-color: var(--voitta-log-warn-rule);
 }
 .log-line.log-info .head {
-  color: #ddd;
+  color: var(--voitta-log-info-fg);
 }
 
 /* ─── server artifacts (Finder-like floating window) ─────────────────────── */
@@ -870,7 +870,7 @@ header .provider-chip:hover {
 .artifacts-modal {
   position: absolute;
   background: var(--voitta-surface);
-  border: 1px solid #d4d4d8;
+  border: 1px solid var(--voitta-art-window-border);
   border-radius: 10px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
   display: flex;
@@ -920,8 +920,8 @@ header .provider-chip:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: linear-gradient(180deg, #f3f3f3, #e6e6e6);
-  border-bottom: 1px solid #d4d4d8;
+  background: linear-gradient(180deg, var(--voitta-art-titlebar-bg-from), var(--voitta-art-titlebar-bg-to));
+  border-bottom: 1px solid var(--voitta-art-titlebar-rule);
   flex-shrink: 0;
   font-size: 12px;
 }
@@ -966,8 +966,8 @@ header .provider-chip:hover {
   cursor: pointer;
 }
 .art-btn:hover {
-  background: #f1f1f1;
-  border-color: #9c9c9c;
+  background: var(--voitta-art-btn-bg-hover);
+  border-color: var(--voitta-art-btn-border-hover);
 }
 .art-btn-close {
   font-size: 14px;
@@ -986,8 +986,8 @@ header .provider-chip:hover {
 }
 .artifacts-columns {
   padding: 6px 14px 6px 0;
-  background: #f3f3f3;
-  border-bottom: 1px solid #d4d4d8;
+  background: var(--voitta-art-titlebar-bg-from);
+  border-bottom: 1px solid var(--voitta-art-titlebar-rule);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1012,19 +1012,19 @@ header .provider-chip:hover {
 
 .art-row {
   padding: 0 14px 0 0;
-  border-bottom: 1px solid #f4f4f5;
+  border-bottom: 1px solid var(--voitta-art-row-rule);
   cursor: default;
   user-select: none;
   height: 24px;
 }
 .art-row:nth-child(even) {
-  background: #fafafa;
+  background: var(--voitta-art-row-stripe);
 }
 .art-row.art-dir {
   cursor: pointer;
 }
 .art-row:hover {
-  background: #e8f0fe;
+  background: var(--voitta-art-row-hover);
 }
 .art-name-cell {
   display: flex;
@@ -1060,9 +1060,9 @@ header .provider-chip:hover {
 }
 .art-badge {
   font-size: 10px;
-  color: #4b5563;
-  background: #eef2f7;
-  border: 1px solid #dbe2ea;
+  color: var(--voitta-art-badge-fg);
+  background: var(--voitta-art-badge-bg);
+  border: 1px solid var(--voitta-art-badge-border);
   border-radius: 999px;
   padding: 0 6px;
   line-height: 14px;
@@ -1074,7 +1074,7 @@ header .provider-chip:hover {
 .art-size {
   text-align: right;
   font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
-  color: #4b5563;
+  color: var(--voitta-art-size-fg);
 }
 .art-mtime {
   text-align: right;
@@ -1084,8 +1084,8 @@ header .provider-chip:hover {
 
 .artifacts-footer {
   padding: 6px 12px;
-  border-top: 1px solid #ececec;
-  background: #fafafa;
+  border-top: 1px solid var(--voitta-art-footer-rule);
+  background: var(--voitta-art-footer-bg);
   font-size: 11px;
   color: var(--voitta-text-muted);
   flex-shrink: 0;
