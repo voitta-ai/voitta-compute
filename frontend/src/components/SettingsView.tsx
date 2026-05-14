@@ -347,6 +347,39 @@ export function SettingsView({ backendOrigin }: Props) {
         enabled.
       </p>
 
+      <label style={{ marginTop: "16px", display: "block" }}>Panel layout</label>
+      <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
+        {(["chat-right", "chat-left"] as const).map((opt) => (
+          <label
+            key={opt}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              cursor: "pointer",
+              padding: "5px 12px",
+              border: "1px solid var(--voitta-border)",
+              borderRadius: "6px",
+              background: draft.layout === opt ? "var(--voitta-accent-tint)" : "transparent",
+              fontWeight: draft.layout === opt ? 600 : 400,
+            }}
+          >
+            <input
+              type="radio"
+              name="layout"
+              value={opt}
+              checked={draft.layout === opt}
+              onChange={() => patch({ layout: opt })}
+              style={{ accentColor: "var(--voitta-accent)" }}
+            />
+            {opt === "chat-right" ? "Chat right, report left" : "Chat left, report right"}
+          </label>
+        ))}
+      </div>
+      <p class="muted">
+        Default: chat on the right, report on the left. Changes take effect immediately after Save.
+      </p>
+
       <p class="scope">
         Stored on the local backend at <code>~/.config/voitta-bookmarklet/settings.json</code> —
         shared across every host the bookmarklet runs on.

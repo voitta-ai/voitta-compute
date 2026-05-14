@@ -1,17 +1,18 @@
-// Left-side report pane.
+// Report pane — fills the viewport edge opposite the chat drawer.
 //
-// Renders a HoloViz Panel report in an iframe, sized to fill the page
-// from the left edge up to the chat drawer. Layout — when a report is
-// active and the chat drawer is open:
-//
+// chat-right layout (default): report on left, chat on right.
 //     ┌──────────────────────────────────────────┬───────────┐
 //     │  ReportPane (iframe + edit + × buttons)  │  Drawer   │
-//     │                                          │  (chat)   │
 //     └──────────────────────────────────────────┴───────────┘
 //
-// When the chat drawer is collapsed (handle visible), the report pane
-// stretches all the way to the right edge (drawerWidth = 0). Both panes
-// live inside the host's Shadow DOM so host-page styles don't bleed in.
+// chat-left layout: chat on left, report on right.
+//     ┌───────────┬──────────────────────────────────────────┐
+//     │  Drawer   │  ReportPane (iframe + edit + × buttons)  │
+//     └───────────┴──────────────────────────────────────────┘
+//
+// When the chat drawer is collapsed the report pane stretches to fill
+// the full viewport (drawerWidth = 0). Both panes live inside the host's
+// Shadow DOM so host-page styles don't bleed in.
 
 import { useEffect, useRef, useState } from "preact/hooks";
 
@@ -34,6 +35,7 @@ interface Props {
   onCollapse: () => void;
   collapsed: boolean;
   drawerWidth: number;
+  layout?: "chat-right" | "chat-left";
 }
 
 // Append (or remove) ?editable=true on the iframe URL. Toggling reloads
@@ -45,7 +47,7 @@ function withEditable(url: string, on: boolean): string {
   return url + (url.includes("?") ? "&" : "?") + "editable=true";
 }
 
-export function ReportPane({ info, onCollapse, collapsed, drawerWidth }: Props) {
+export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = "chat-right" }: Props) {
   const title = info.title || `Report ${info.report_id || "(unnamed)"}`;
   const [editing, setEditing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -131,7 +133,9 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth }: Props) 
       // any in-iframe widget state survive collapse/expand cycles, just
       // like display:none would, but with a slide animation that mirrors
       // the chat drawer.
-      style={{ right: `${drawerWidth}px` }}
+      style={layout === "chat-left"
+        ? { left: `${drawerWidth}px` }
+        : { right: `${drawerWidth}px` }}
     >
       <header class="report-header">
         <span class="report-title" title={info.url}>

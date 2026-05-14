@@ -58,6 +58,10 @@ export interface Settings {
   // Where the pickup tool watches for downloaded files. Tilde and env
   // vars are expanded server-side. Empty string → ~/Downloads.
   pickupDownloadsDir: string;
+  // Panel layout. "chat-right" (default): chat drawer on the right, report
+  // on the left. "chat-left": mirrored. The server-side default is set via
+  // VOITTA_DEFAULT_LAYOUT; the user can override here.
+  layout: "chat-right" | "chat-left";
 }
 
 export const MODELS_BY_PROVIDER: Record<ProviderId, string[]> = {
@@ -100,6 +104,7 @@ export const DEFAULT_SETTINGS: Settings = {
   webFetch: true,
   driveDownloadViaPickup: false,
   pickupDownloadsDir: "~/Downloads",
+  layout: "chat-right",
 };
 
 const listeners = new Set<(s: Settings) => void>();
@@ -228,6 +233,7 @@ function sanitise(s: Settings): Settings {
       typeof s.pickupDownloadsDir === "string" && s.pickupDownloadsDir.trim()
         ? s.pickupDownloadsDir.trim()
         : DEFAULT_SETTINGS.pickupDownloadsDir,
+    layout: s.layout === "chat-left" ? "chat-left" : "chat-right",
   };
 }
 

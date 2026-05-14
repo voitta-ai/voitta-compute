@@ -267,8 +267,12 @@ export function ChatPane({ backendOrigin }: Props) {
       const startX = e.clientX;
       const startW = width;
 
+      const chatLeft = settingsRef.current.layout === "chat-left";
       const move = (ev: PointerEvent) => {
-        setWidth(clampWidth(startW - (ev.clientX - startX)));
+        // chat-right: drag left (negative dx) increases width.
+        // chat-left:  drag right (positive dx) increases width.
+        const dx = ev.clientX - startX;
+        setWidth(clampWidth(chatLeft ? startW + dx : startW - dx));
       };
       const up = (ev: PointerEvent) => {
         setResizing(false);
@@ -433,9 +437,11 @@ export function ChatPane({ backendOrigin }: Props) {
     settings,
   )} · click to open Settings`;
 
-  // When the chat drawer is collapsed, the report pane stretches to the
-  // right edge (drawerWidth = 0). Otherwise it leaves room for the drawer.
-  const reportRightOffset = open ? width : 0;
+  // When the chat drawer is collapsed, the report pane stretches to fill
+  // the full viewport (drawerWidth = 0). Otherwise it leaves room for the
+  // drawer on whichever edge the layout dictates.
+  const drawerOffset = open ? width : 0;
+  const layout = settings.layout ?? "chat-right";
 
   return (
     <div
@@ -443,6 +449,7 @@ export function ChatPane({ backendOrigin }: Props) {
       data-open={open ? "true" : "false"}
       data-resizing={resizing ? "true" : "false"}
       data-report={activeReport ? "true" : "false"}
+      data-layout={layout}
       style={{ "--voitta-pane-width": width + "px" } as any}
     >
       {activeReport && (
@@ -450,7 +457,8 @@ export function ChatPane({ backendOrigin }: Props) {
           info={activeReport}
           onCollapse={() => setReportCollapsed(true)}
           collapsed={reportCollapsed}
-          drawerWidth={reportRightOffset}
+          drawerWidth={drawerOffset}
+          layout={layout}
         />
       )}
       {activeReport && reportCollapsed && (

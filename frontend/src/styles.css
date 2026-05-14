@@ -17,18 +17,19 @@
 }
 
 /* ─── floating handle (visible only when closed) ─────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
 .handle {
   position: fixed;
   top: 50%;
-  right: 0;
+  right: 0;                      /* layout: chat-right default */
   transform: translateY(-50%);
   width: 22px;
   height: 60px;
   background: var(--voitta-header-bg);
   color: var(--voitta-header-fg);
   border: 1px solid var(--voitta-header-bg);
-  border-right: none;
-  border-radius: 6px 0 0 6px;
+  border-right: none;            /* layout: chat-right default */
+  border-radius: 6px 0 0 6px;   /* layout: chat-right default */
   cursor: pointer;
   pointer-events: auto;
   display: flex;
@@ -47,18 +48,19 @@
 }
 
 /* ─── drawer ─────────────────────────────────────────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
 .drawer {
   position: fixed;
   top: 0;
-  right: 0;
+  right: 0;                      /* layout: chat-right default */
   height: 100vh;
   width: var(--voitta-pane-width);
   max-width: 92vw;
   background: var(--voitta-bg);
   color: var(--voitta-text);
-  border-left: 1px solid var(--voitta-border);
+  border-left: 1px solid var(--voitta-border);  /* layout: chat-right default */
   box-shadow: var(--voitta-shadow);
-  transform: translateX(100%);
+  transform: translateX(100%);   /* layout: chat-right default — slides in from right */
   transition: transform 0.25s ease;
   display: flex;
   flex-direction: column;
@@ -72,9 +74,10 @@
 }
 
 /* ─── left-edge resize grip ──────────────────────────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
 .resizer {
   position: absolute;
-  left: 0;
+  left: 0;                       /* layout: chat-right default — grip on inner (left) edge */
   top: 0;
   bottom: 0;
   width: 6px;
@@ -320,21 +323,22 @@ header .provider-chip:hover {
 }
 
 /* ─── floating report handle (visible only when report is collapsed) ─────── */
-/* Mirror of `.handle` (chat): same vertical position, opposite edge. The
-   chat handle docks to the right; this one to the left. They never share
-   a horizontal slice of screen so equal Y is fine. */
+/* Mirror of `.handle` (chat): same vertical position, opposite edge.
+   In chat-right layout: chat handle → right, report handle → left.
+   In chat-left  layout: chat handle → left,  report handle → right.
+   layout‑dependent rules are overridden below in [data-layout="chat-left"] */
 .report-handle {
   position: fixed;
   top: 50%;
-  left: 0;
+  left: 0;                       /* layout: chat-right default */
   transform: translateY(-50%);
   width: 22px;
   height: 60px;
   background: var(--voitta-header-bg);
   color: var(--voitta-header-fg);
   border: 1px solid var(--voitta-header-bg);
-  border-left: none;
-  border-radius: 0 6px 6px 0;
+  border-left: none;             /* layout: chat-right default */
+  border-radius: 0 6px 6px 0;   /* layout: chat-right default */
   cursor: pointer;
   pointer-events: auto;
   display: flex;
@@ -349,31 +353,31 @@ header .provider-chip:hover {
   background: #1e293b;
 }
 
-/* ─── report pane (left of chat drawer) ──────────────────────────────────── */
-/* Hosts a HoloViz Panel report in an iframe. The `right` offset is set
-   inline by the component so it leaves room for the chat drawer; when the
-   drawer is closed it stretches to the right edge. */
+/* ─── report pane (opposite edge from chat drawer) ───────────────────────── */
+/* The `right` (or `left`) inline offset is set by the component so it
+   leaves room for the chat drawer; when the drawer is closed it stretches
+   to the full viewport edge.
+   layout‑dependent rules are overridden below in [data-layout="chat-left"] */
 .report-pane {
   position: fixed;
   top: 0;
-  left: 0;
+  left: 0;                       /* layout: chat-right default */
   bottom: 0;
   background: var(--voitta-surface);
-  border-right: 1px solid var(--voitta-border);
+  border-right: 1px solid var(--voitta-border);  /* layout: chat-right default */
   box-shadow: 4px 0 16px rgba(0, 0, 0, 0.08);
   display: flex;
   flex-direction: column;
   pointer-events: auto;
   z-index: 0; /* inside .root which already has page-top z-index */
-  /* Slide-in/out animation, mirroring `.drawer` (the chat). The drawer
-     translates X from +100% (off the right) to 0; the report does the
-     same from -100% (off the left). Same easing + duration so the two
-     panes feel coordinated when both transition together. */
+  /* Slide-in/out animation. In chat-right: report slides from -100% (off
+     left); in chat-left: from +100% (off right). Same easing + duration as
+     .drawer so the two panes feel coordinated. */
   transform: translateX(0);
   transition: transform 0.25s ease;
 }
 .report-pane.is-collapsed {
-  transform: translateX(-100%);
+  transform: translateX(-100%);  /* layout: chat-right default */
   pointer-events: none;
 }
 .report-pane .report-header {
@@ -1093,4 +1097,59 @@ header .provider-chip:hover {
 }
 .art-status-err {
   color: var(--voitta-error-fg);
+}
+
+/* ─── chat-left layout overrides ─────────────────────────────────────────── */
+/* All direction-dependent rules from .handle / .drawer / .resizer /
+   .report-handle / .report-pane are mirrored here.
+   .root[data-layout="chat-left"] is set by ChatPane when settings.layout
+   equals "chat-left". Default (no attribute or "chat-right") falls through
+   to the base rules above. */
+
+/* Chat handle: left edge, open towards the right */
+.root[data-layout="chat-left"] .handle {
+  right: auto;
+  left: 0;
+  border-right: 1px solid var(--voitta-header-bg);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+
+/* Chat drawer: anchored to left, slides in from left */
+.root[data-layout="chat-left"] .drawer {
+  right: auto;
+  left: 0;
+  border-left: none;
+  border-right: 1px solid var(--voitta-border);
+  transform: translateX(-100%);
+}
+.root[data-layout="chat-left"][data-open="true"] .drawer {
+  transform: translateX(0);
+}
+
+/* Resize grip: right edge of the drawer (inner edge in chat-left) */
+.root[data-layout="chat-left"] .resizer {
+  left: auto;
+  right: 0;
+}
+
+/* Report handle: right edge, open towards the left */
+.root[data-layout="chat-left"] .report-handle {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--voitta-header-bg);
+  border-radius: 6px 0 0 6px;
+}
+
+/* Report pane: anchored to right, slides in from right */
+.root[data-layout="chat-left"] .report-pane {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--voitta-border);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+}
+.root[data-layout="chat-left"] .report-pane.is-collapsed {
+  transform: translateX(100%);
 }
