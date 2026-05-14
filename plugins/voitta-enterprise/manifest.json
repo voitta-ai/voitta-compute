@@ -1,0 +1,9 @@
+{
+  "name": "voitta-enterprise",
+  "version": "0.1.0",
+  "description": "Voitta Enterprise portal plugin — scaffolding for tools and primitives on enterprise.voitta.ai.",
+  "host_patterns": ["enterprise.voitta.ai"],
+  "python_module": "voitta_enterprise",
+  "frontend_bundle": "frontend/widget.ts",
+  "docs_dir": "docs"
+}

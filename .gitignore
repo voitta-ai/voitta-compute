@@ -70,6 +70,7 @@ backend/logs/
 /plugins/*
 !/plugins/google/
 !/plugins/ebay/
+!/plugins/voitta-enterprise/
 
 # Generated icon assets — `tools/generate_icon.py` rebuilds them
 # from the colours and font choices in that script. The intermediate
