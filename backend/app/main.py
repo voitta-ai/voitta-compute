@@ -642,15 +642,23 @@ async def get_user_settings() -> dict:
     that. The blob is intentionally opaque to the server — see
     app/services/user_settings.py.
     """
+    from app import config as _cfg
     from app.services import user_settings
 
     try:
-        return user_settings.read()
+        blob = user_settings.read()
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=500,
             detail=f"settings file is corrupt: {exc}",
         )
+    # Inject server-side defaults for fields the blob doesn't yet have.
+    # The frontend's coerceSettings re-validates on read; we only provide
+    # the value so it beats DEFAULT_SETTINGS ("chat-right") when the
+    # operator has overridden VOITTA_DEFAULT_LAYOUT.
+    if "layout" not in blob:
+        blob = {**blob, "layout": _cfg.DEFAULT_LAYOUT}
+    return blob
 
 
 @app.put("/api/settings")

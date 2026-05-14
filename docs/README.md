@@ -19,6 +19,7 @@ exposes it via the local hybrid (dense + BM25) RAG index built by
 | [10-a4db-files.md](10-a4db-files.md) | `.a4db` (ANSA / Animator crash database) — HDF5 schema, topology gotchas, rogue-element culling, animation pipeline |
 | [12-dat-files.md](12-dat-files.md) | SoundCheck `.dat` / `.wfm` / `.res` (Listen, Inc.) — version dispatch, title parsing, end-to-end curves pipeline |
 | [13-plugins.md](13-plugins.md) | Plugin authoring — manifest shape, autodiscovery, hybrid tools, distribution model |
+| [14-dmg-build-notes.md](14-dmg-build-notes.md) | Building the signed `.dmg` — known briefcase failure modes (empty DMG, App Management gate), manual repackage recipe |
 
 Plugin-specific docs live next to each plugin under `plugins/<name>/docs/` and are auto-indexed into the same RAG corpus.
 

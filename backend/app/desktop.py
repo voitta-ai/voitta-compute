@@ -11,6 +11,7 @@ Layout:
   • Menu items:
         About Voitta
         Open in browser
+        Copy bookmark text
         Settings…
         Quit
   • LSUIElement (no Dock icon) is set automatically by rumps when the
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -64,6 +66,83 @@ ABOUT_TEXT = (
 def _server_url() -> str:
     scheme = "https" if TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists() else "http"
     return f"{scheme}://{HOST}:{PORT}"
+
+
+def _bookmarklet_source_path() -> Path | None:
+    """Locate the readable bookmarklet source file.
+
+    Source checkout: ``<repo>/bookmarklet/bookmarklet.js``.
+    Packaged .app:   ``src/voitta/resources/bookmarklet/bookmarklet.js``
+                     staged by ``build_app.sh``.
+    """
+    repo_candidate = PROJECT_ROOT / "bookmarklet" / "bookmarklet.js"
+    if repo_candidate.is_file():
+        return repo_candidate
+    try:
+        import voitta
+    except ImportError:
+        return None
+    bundled = Path(voitta.__file__).resolve().parent / "resources" / "bookmarklet" / "bookmarklet.js"
+    return bundled if bundled.is_file() else None
+
+
+def _minify_bookmarklet(src: str) -> str:
+    """Collapse the readable bookmarklet into a single line.
+
+    Approximate, not a full JS minifier — but the bookmarklet has no
+    ``//`` inside strings and no string spans multiple lines, so a
+    line-wise comment strip + single-space join is safe and stays
+    legible if someone inspects the bookmark.
+    """
+    cleaned = []
+    for line in src.splitlines():
+        idx = line.find("//")
+        if idx >= 0:
+            head = line[:idx]
+            # Only treat ``//`` as a comment if it isn't inside an
+            # unterminated string on this line.
+            if head.count('"') % 2 == 0 and head.count("'") % 2 == 0:
+                line = head
+        line = line.strip()
+        if line:
+            cleaned.append(line)
+    body = " ".join(cleaned)
+    # Drop the optional space after ``javascript:`` for a tidier URL.
+    return body.replace("javascript: ", "javascript:", 1)
+
+
+def _bookmarklet_text() -> str:
+    """Return the ``javascript:`` URL the user pastes into a browser
+    bookmark. The embedded backend URL is rewritten on the fly so the
+    bookmark matches whatever scheme/port the running server uses,
+    even if the file's hard-coded value drifts."""
+    path = _bookmarklet_source_path()
+    if path is None:
+        raise FileNotFoundError("bookmarklet/bookmarklet.js not found")
+    text = _minify_bookmarklet(path.read_text(encoding="utf-8"))
+    # Replace the FIRST quoted ``http(s)://...`` literal — that's the
+    # backend base URL in the bookmarklet source.
+    return re.sub(r'"https?://[^"]+"', f'"{_server_url()}"', text, count=1)
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Write ``text`` to the macOS general pasteboard. Returns True on
+    success. pyobjc is the canonical path on macOS (and is already a
+    bundled dependency for the menu-bar app); ``pbcopy`` is the dev
+    fallback for plain ``python -m app.desktop`` runs without pyobjc."""
+    try:
+        from AppKit import NSPasteboard, NSPasteboardTypeString
+    except ImportError:
+        try:
+            p = subprocess.run(
+                ["pbcopy"], input=text, text=True, check=True
+            )
+            return p.returncode == 0
+        except (OSError, subprocess.CalledProcessError):
+            return False
+    pb = NSPasteboard.generalPasteboard()
+    pb.clearContents()
+    return bool(pb.setString_forType_(text, NSPasteboardTypeString))
 
 
 def _human_path(p: Path) -> str:
@@ -136,6 +215,7 @@ class VoittaMenuBarApp(rumps.App):
             rumps.MenuItem(f"About {APP_NAME}", callback=self.show_about),
             None,  # separator
             rumps.MenuItem("Open in browser", callback=self.open_browser),
+            rumps.MenuItem("Copy bookmark text", callback=self.copy_bookmarklet),
             rumps.MenuItem("Settings…", callback=self.show_settings),
             None,
             rumps.MenuItem("Show data folder", callback=self.show_data_folder),
@@ -231,6 +311,42 @@ class VoittaMenuBarApp(rumps.App):
 
     def open_browser(self, _sender) -> None:
         webbrowser.open(_server_url())
+
+    def copy_bookmarklet(self, _sender) -> None:
+        try:
+            text = _bookmarklet_text()
+        except FileNotFoundError:
+            self._log.warning("bookmarklet source missing from bundle")
+            rumps.alert(
+                title=APP_NAME,
+                message=(
+                    "Couldn't find the bookmarklet source.\n\n"
+                    "Rebuild the .app (./build_app.sh) — the file "
+                    "bookmarklet/bookmarklet.js may not have been staged."
+                ),
+                ok="OK",
+            )
+            return
+        if not _copy_to_clipboard(text):
+            self._log.warning("clipboard write failed")
+            rumps.alert(
+                title=APP_NAME,
+                message="Couldn't write to the clipboard.",
+                ok="OK",
+            )
+            return
+        # Brief confirmation. rumps.notification needs a bundle id; in
+        # the packaged .app briefcase sets one, so this just works. In
+        # dev (``python -m app.desktop``) it can fail silently — that's
+        # fine, the clipboard already has the text.
+        try:
+            rumps.notification(
+                title=APP_NAME,
+                subtitle="Bookmark text copied",
+                message="Paste it into a new bookmark in your browser.",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def show_settings(self, _sender) -> None:
         # The user-facing chat settings (API keys, model selection)

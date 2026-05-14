@@ -56,6 +56,12 @@ PORT = 12358
 # uvicorn's --reload restart without re-passing CLI flags.
 LOCALHOST_MODE = os.environ.get("VOITTA_LOCALHOST_MODE", "1") == "1"
 
+# Default layout for new installs. Overridable per-user in the Settings panel.
+# "chat-right" = chat drawer on the right, report pane on the left (historic default).
+# "chat-left"  = chat drawer on the left, report pane on the right.
+_raw_layout = os.environ.get("VOITTA_DEFAULT_LAYOUT", "chat-right").strip().lower()
+DEFAULT_LAYOUT: str = _raw_layout if _raw_layout in ("chat-right", "chat-left") else "chat-right"
+
 # The shared secret. Eventually replaced by Google OAuth, but for v1
 # the user types this into the login dialog. Falls back to a fixed
 # placeholder so dev environments don't need any extra setup.

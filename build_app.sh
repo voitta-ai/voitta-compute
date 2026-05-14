@@ -168,6 +168,13 @@ cp -R "$ROOT/docs/"* "$ROOT/src/voitta/resources/docs/" 2>/dev/null || true
 cp -f "$ROOT/rag/build_rag.py"       "$ROOT/src/voitta/resources/rag_scripts/" 2>/dev/null || true
 cp -f "$ROOT/rag/build_panel_rag.py" "$ROOT/src/voitta/resources/rag_scripts/" 2>/dev/null || true
 
+# Bookmarklet source — the "Copy bookmark text" menu item reads this
+# file at runtime, minifies it, and writes the resulting javascript:
+# URL to the clipboard. Without it, the menu item shows an error.
+rm -rf "$ROOT/src/voitta/resources/bookmarklet" 2>/dev/null || true
+mkdir -p "$ROOT/src/voitta/resources/bookmarklet"
+cp -f "$ROOT/bookmarklet/bookmarklet.js" "$ROOT/src/voitta/resources/bookmarklet/" 2>/dev/null || true
+
 # Seed scripts — the curated compute+report pairs the agent calls
 # automatically (a4db_parse / a4db_3d / dat_parse / dat_curves). They
 # get copied out of the bundle into PROJECT_ROOT/scripts/ at first
