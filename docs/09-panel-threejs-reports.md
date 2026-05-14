@@ -6,6 +6,24 @@ These tips are battle-scars from shipping a working car-FEM viewer (Three.js + a
 
 > **Read 07 first.** The two-stage error model (build vs. render) applies here too; the smoke test only catches `build(ctx)` failures, never anything that goes wrong inside the iframe.
 
+## Quickest path: `ctx.three_scene(scene_js, height=…)`
+
+For a simple scene where you just want to add meshes to a default-orbited camera, use the built-in helper. It handles the iframe wrapping (sections 1–2), CDN loading, drag-to-rotate, wheel-zoom, and resize for you:
+
+```python
+def build(ctx):
+    return ctx.three_scene("""
+        const geom = new THREE.BoxGeometry(1, 1, 1);
+        const mat  = new THREE.MeshNormalMaterial();
+        scene.add(new THREE.Mesh(geom, mat));
+        camera.position.set(2, 1.5, 3);
+    """, height=520)
+```
+
+Inside `scene_js` you have `THREE`, `scene`, `camera`, `renderer` in scope. Default lighting (ambient + directional) is pre-added. If you need anything beyond a single scene with a single canvas — multiple iframes talking to each other, custom layout, base64-inlined geometry — read on; the helper is one wrapper around the same iframe-srcdoc pattern documented below.
+
+For arbitrary JS libraries (D3, observable-plot, etc.), call `ctx.add_js("d3", "https://cdn.../d3.min.js")` from `build(ctx)`. The script lands in the report iframe's `<head>` via Panel's `js_files` mechanism, so its globals are available before any layout JS runs.
+
 ## TL;DR
 
 | If you're doing… | Reach for… |

@@ -209,6 +209,10 @@ class ScriptContext:
         self._image_count = 0
         self._items: list[dict] = []
         self._log_lines: list[str] = []
+        # External <script src=...> entries to inject into the report
+        # iframe's <head>. Populated by ctx.add_js(); merged into the
+        # Panel template by panel_app._wrap_template after build() runs.
+        self._js_files: dict[str, str] = {}
 
     # ---- data access -----------------------------------------------------
 
@@ -275,6 +279,203 @@ class ScriptContext:
         url = f"/api/script-output/{self.slug}/{self.run_id}/{name}"
         self._items.append({"kind": "image", "url": url, "alt": alt})
         return url
+
+    def add_js(self, name: str, url: str) -> None:
+        """Request an external ``<script src="...">`` in the report iframe.
+
+        Only meaningful inside a report ``build(ctx)`` — compute scripts
+        write into the chat stream, not into a Panel template.
+
+        Use this when your report needs a JS library that isn't already
+        bundled by Panel (Three.js, D3, custom rendering libs). The
+        script is added to the template's ``<head>`` via Panel's
+        ``js_files`` mechanism, so its globals (e.g. ``window.THREE``)
+        are available by the time your ``pn.pane.HTML`` boot snippet
+        mounts.
+
+        ``name`` must be a Python identifier (Panel uses it as the
+        internal resource key). ``url`` is any HTTPS-reachable URL.
+
+        Example::
+
+            def build(ctx):
+                import panel as pn
+                ctx.add_js("three",
+                    "https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js")
+                return pn.pane.HTML('''
+                    <div id="scene" style="width:100%;height:480px"></div>
+                    <script>
+                      const r = new THREE.WebGLRenderer({antialias:true});
+                      r.setSize(window.innerWidth, 480);
+                      document.getElementById("scene").appendChild(r.domElement);
+                      // ... scene setup ...
+                    </script>
+                ''')
+        """
+
+        if not isinstance(name, str) or not name.isidentifier():
+            raise ValueError(
+                "ctx.add_js name must be a Python identifier (e.g. 'three')"
+            )
+        if not isinstance(url, str) or not url:
+            raise ValueError("ctx.add_js url must be a non-empty string")
+        self._js_files[name] = url
+
+    def three_scene(
+        self,
+        scene_js: str,
+        *,
+        height: int = 480,
+        version: str = "0.150.1",
+        bg: str = "#1d1d1f",
+    ) -> Any:
+        """Ergonomic wrapper that wires Three.js for the common case.
+
+        Returns a ``pn.pane.HTML`` containing an ``<iframe srcdoc="...">``
+        (NOT a direct ``<div>`` — see docs/09-panel-threejs-reports.md
+        for why: ``pn.pane.HTML`` reads ``clientWidth=0`` inside Bokeh's
+        layout pass, killing canvas sizing). The iframe gets a real
+        document context, real layout, and real ``window.load``.
+
+        Inside the iframe, four locals are in scope when your
+        ``scene_js`` runs: ``scene``, ``camera``, ``renderer``, ``THREE``.
+        Add meshes/lights to ``scene``; an animation loop is already
+        running and the canvas auto-resizes with the iframe.
+
+        Default behaviour:
+          * Soft ambient + directional lighting (override by adding your own)
+          * Drag = orbit, wheel = zoom (no OrbitControls dep)
+          * Camera starts at (0,0,5); set ``camera.position.set(x,y,z)``
+            in ``scene_js`` to override
+
+        Args:
+          scene_js: user code executed once after THREE is loaded.
+          height: iframe height in px.
+          version: three.js npm version (CDN: jsdelivr).
+          bg: canvas/page background; defaults to portal-dark.
+
+        Example::
+
+            def build(ctx):
+                return ctx.three_scene('''
+                    const geom = new THREE.BoxGeometry(1, 1, 1);
+                    const mat  = new THREE.MeshNormalMaterial();
+                    scene.add(new THREE.Mesh(geom, mat));
+                    camera.position.set(2, 1.5, 3);
+                ''', height=520)
+        """
+
+        import html
+        import panel as pn
+
+        cdn = (
+            f"https://cdn.jsdelivr.net/npm/three@{version}/build/three.min.js"
+        )
+        # The full HTML document loaded into the iframe via srcdoc.
+        # Keep this verbatim — it's all string-escaped below.
+        viewer_doc = """<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<style>
+  html,body { margin:0; height:100%; background:""" + bg + """; overflow:hidden; }
+  #c { display:block; width:100%; height:100%; }
+</style>
+<script src=\"""" + cdn + """\"></script>
+</head><body>
+<canvas id="c"></canvas>
+<script>
+(function() {
+  if (typeof THREE === "undefined") {
+    document.body.innerHTML =
+      '<pre style="color:#ff6961;padding:1em;">Failed to load Three.js from CDN.</pre>';
+    return;
+  }
+  const canvas = document.getElementById("c");
+  const scene  = new THREE.Scene();
+  scene.background = new THREE.Color(""" + repr(bg) + """);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+  let w = window.innerWidth, h = window.innerHeight;
+  const camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000);
+  renderer.setSize(w, h, false);
+
+  // Default lighting — user code can add more.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
+  dir.position.set(2, 4, 3);
+  scene.add(dir);
+
+  // Drag-to-rotate + wheel-zoom (no OrbitControls dep).
+  let isDown = false, lastX = 0, lastY = 0;
+  const target = new THREE.Vector3(0, 0, 0);
+  let yaw = 0, pitch = 0, radius = 5;
+  function applyCam() {
+    camera.position.x = target.x + radius * Math.sin(yaw) * Math.cos(pitch);
+    camera.position.y = target.y + radius * Math.sin(pitch);
+    camera.position.z = target.z + radius * Math.cos(yaw) * Math.cos(pitch);
+    camera.lookAt(target);
+  }
+  canvas.addEventListener("pointerdown",  (e) => { isDown = true; lastX = e.clientX; lastY = e.clientY; });
+  window.addEventListener("pointerup",    () => { isDown = false; });
+  canvas.addEventListener("pointermove",  (e) => {
+    if (!isDown) return;
+    yaw   += (e.clientX - lastX) * 0.005;
+    pitch += (e.clientY - lastY) * 0.005;
+    pitch = Math.max(-1.5, Math.min(1.5, pitch));
+    lastX = e.clientX; lastY = e.clientY;
+    applyCam();
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    radius = Math.max(0.1, Math.min(500, radius * (1 + e.deltaY * 0.001)));
+    applyCam();
+  }, { passive: false });
+
+  // ── user scene_js ─────────────────────────────────────────────
+  try {
+__USER_SCENE_JS__
+  } catch (err) {
+    console.error("voitta three_scene user code threw:", err);
+  }
+  // ─────────────────────────────────────────────────────────────
+
+  // If the user moved the camera, derive yaw/pitch/radius from it so
+  // drag-rotate keeps working from there. Otherwise default to (0,0,5).
+  if (camera.position.lengthSq() === 0) {
+    radius = 5; applyCam();
+  } else {
+    const p = camera.position;
+    radius = p.length();
+    pitch  = Math.asin(p.y / (radius || 1));
+    yaw    = Math.atan2(p.x, p.z);
+  }
+
+  function resize() {
+    w = window.innerWidth; h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  }
+  animate();
+})();
+</script>
+</body></html>"""
+
+        viewer_doc = viewer_doc.replace("__USER_SCENE_JS__", scene_js)
+        wrapper = (
+            f'<iframe srcdoc="{html.escape(viewer_doc, quote=True)}" '
+            f'style="width:100%;height:{height}px;border:0;display:block;" '
+            f'sandbox="allow-scripts"></iframe>'
+        )
+        return pn.pane.HTML(wrapper, sizing_mode="stretch_width")
 
     def log(self, *args: Any) -> None:
         if len(self._log_lines) >= MAX_LOG_LINES:
@@ -602,6 +803,16 @@ def report_script_layout(report_id: str) -> Any | None:
         _update_run_meta(
             "reports", slug, ok=ok, run_id=run_id, elapsed_s=elapsed_s, error=error
         )
+    # Forward any ctx.add_js() registrations onto the layout so the
+    # template wrapper can merge them into ``js_files`` (see
+    # app.services.panel_app._wrap_template).
+    if layout is not None and ctx._js_files:
+        try:
+            layout._voitta_extra_js_files = dict(ctx._js_files)
+        except (AttributeError, TypeError):
+            # Some Bokeh objects refuse arbitrary attributes; that's OK,
+            # the user just doesn't get the extra scripts.
+            pass
     return layout
 
 

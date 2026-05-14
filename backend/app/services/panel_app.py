@@ -183,6 +183,20 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
         for item in main:
             _promote_sizing_mode(item)
 
+    # Report scripts can request extra <script src=...> entries via
+    # ``ctx.add_js(name, url)``; report_script_layout forwards them onto
+    # ``layout._voitta_extra_js_files``. We merge them into the template's
+    # ``js_files`` kwarg so they end up in the iframe's <head>. Script
+    # names must not collide with voitta's own entries below — we win.
+    extra_js: dict[str, str] = {}
+    raw_extra = getattr(layout, "_voitta_extra_js_files", None)
+    if isinstance(raw_extra, dict):
+        for k, v in raw_extra.items():
+            if isinstance(k, str) and isinstance(v, str) and k and v:
+                if k in ("voitta_panel_shim", "voitta_html2canvas"):
+                    continue  # don't let scripts shadow our shim
+                extra_js[k] = v
+
     common_kwargs: dict[str, Any] = dict(
         title=title,
         main=main,
@@ -198,6 +212,9 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
             # the entire report (full scrollHeight) without a headless
             # browser. Loaded in parallel with the shim itself.
             "voitta_html2canvas": "api/_html2canvas.js",
+            # Plus any user-requested libs (Three.js, D3, …) from
+            # ctx.add_js() — already filtered against our reserved keys.
+            **extra_js,
         },
     )
 
