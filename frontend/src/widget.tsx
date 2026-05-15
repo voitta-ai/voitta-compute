@@ -1,7 +1,9 @@
+/// <reference types="vite/client" />
 import { render } from "preact";
 import { ChatPane } from "./components/ChatPane";
 import { startBridge } from "./lib/bridge";
 import { log } from "./lib/logger";
+import { bootstrapSettings } from "./lib/settings";
 import "./lib/primitives"; // side-effect: registers the core browser primitives
 import "./lib/primitives-buffers"; // side-effect: registers buffer + plot + eval primitives
 
@@ -14,6 +16,11 @@ import "./lib/primitives-buffers"; // side-effect: registers buffer + plot + eva
 import.meta.glob("../../plugins/*/frontend/widget.ts", { eager: true });
 import themeCss from "./theme.css?raw";
 import widgetCss from "./styles.css?raw";
+// ReactFlow's CSS must land inside the widget's shadow root, NOT in
+// the document <head> (where the plain `import "..."` form would put
+// it). Without it the canvas has no positioning / pointer-events /
+// transform rules and pan/zoom/edges break in invisible ways.
+import reactFlowCss from "@xyflow/react/dist/style.css?raw";
 
 const VOITTA_FONTS_URL =
   "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Open+Sans:wght@400;500;600;700&display=swap";
@@ -123,6 +130,15 @@ export function mount(): void {
   themeEl.textContent = themeCss;
   shadow.appendChild(themeEl);
 
+  // ReactFlow's vendor stylesheet — must come BEFORE our widget CSS so
+  // our overrides win on equal specificity. ReactFlow's base rules
+  // own canvas positioning, pane pointer-events, transform origins,
+  // and edge path defaults; without them, the flow chart is broken in
+  // ways that look like JavaScript bugs.
+  const reactFlowStyleEl = document.createElement("style");
+  reactFlowStyleEl.textContent = reactFlowCss;
+  shadow.appendChild(reactFlowStyleEl);
+
   const styleEl = document.createElement("style");
   styleEl.textContent = widgetCss;
   shadow.appendChild(styleEl);
@@ -137,7 +153,16 @@ export function mount(): void {
   // Single plugin bootstrap fetch — drives theme injection, agent name,
   // and layout default. Bridge starts after so plugin defaults are in
   // place before bootstrapSettings fires.
-  fetchPluginInfo(backendOrigin).then((plugin) => {
+  fetchPluginInfo(backendOrigin).then(async (plugin) => {
+    const pluginDefaults = plugin?.default_layout
+      ? { layout: plugin.default_layout as "chat-left" | "chat-right" }
+      : undefined;
+    // Await settings bootstrap BEFORE rendering ChatPane so its initial
+    // `useState(() => loadSettings())` sees the real persisted blob (incl.
+    // API keys). Otherwise the user can hit Send while the cache still
+    // holds DEFAULT_SETTINGS (empty keys) and `send()` bounces them to
+    // the Settings view ("No API key for …").
+    await bootstrapSettings(backendOrigin, pluginDefaults);
     if (plugin?.theme_url) {
       // Insert plugin theme AFTER the base theme so its :host { } block
       // wins in the cascade: for equal specificity, the LATER rule wins.
@@ -159,9 +184,6 @@ export function mount(): void {
       />,
       mountPoint,
     );
-    const pluginDefaults = plugin?.default_layout
-      ? { layout: plugin.default_layout as "chat-left" | "chat-right" }
-      : undefined;
     startBridge(backendOrigin, pluginDefaults);
   });
 }

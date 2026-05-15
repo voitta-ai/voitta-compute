@@ -31,6 +31,7 @@ import {
 import { runEvalWorker } from "./eval-worker";
 import { log } from "./logger";
 import type { PlotSpec, RichOutput } from "./plot-spec";
+import type { FlowDefinition } from "./flow-types";
 
 // ---- buffer_list ----------------------------------------------------------
 
@@ -575,6 +576,55 @@ export function setReportSink(
 ): void {
   reportSink = fn;
 }
+
+// ---- show_flow_report (mermaid-rendered flow chart, no iframe) ----------
+//
+// Sibling to show_report. The server has already built the JSON flow
+// definition; we just mount it in the report slot. No URL/path — the
+// definition arrives in-band.
+
+export interface FlowReportInfo {
+  report_id: string;
+  title?: string;
+  render_id?: string;
+  definition: FlowDefinition;
+}
+
+let flowReportSink: ((info: FlowReportInfo | null) => void) | null = null;
+
+/** Wired by `<ChatPane>`. The sink replaces any currently-visible
+ *  report (holoviz or flow) with this flow definition. */
+export function setFlowReportSink(
+  fn: ((info: FlowReportInfo | null) => void) | null,
+): void {
+  flowReportSink = fn;
+}
+
+registerPrimitive("show_flow_report", async (rawArgs) => {
+  const args = rawArgs as {
+    definition?: FlowDefinition;
+    report_id?: string;
+    title?: string;
+    render_id?: string;
+  };
+  if (!args.definition || typeof args.definition !== "object") {
+    throw new PrimitiveError("invalid_args", "definition required");
+  }
+  if (!flowReportSink) {
+    throw new PrimitiveError(
+      "no_chat_pane",
+      "report sink not registered — open the chat pane first",
+    );
+  }
+  flowReportSink({
+    report_id: String(args.report_id || ""),
+    title: args.title ? String(args.title) : undefined,
+    render_id: args.render_id ? String(args.render_id) : undefined,
+    definition: args.definition,
+  });
+  return { ok: true, opened: true };
+});
+
 
 registerPrimitive("show_report", async (rawArgs) => {
   const args = rawArgs as {

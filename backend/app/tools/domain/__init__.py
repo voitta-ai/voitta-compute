@@ -15,7 +15,10 @@ from app.tools.domain import (  # noqa: F401  — registration side-effects
     python_storage,
     scripts,
     holoviz,
+    flow,
     screenshot,
     report_edits,
+    theme,
+    url_fetch,
     web,
 )

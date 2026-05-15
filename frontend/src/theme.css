@@ -40,6 +40,53 @@
   --voitta-header-btn-bg:      rgba(241, 245, 249, 0.08);
   --voitta-header-btn-bg-hover:rgba(241, 245, 249, 0.16);
 
+  /* ── Flow-chart reports (ReactFlow + engineering-schematic look) ──
+     Tone palette: default / info / success / warning / critical.
+     Each tone defines `bg` (title-bar fill), `fg` (title-bar text),
+     `border` (node + title-bar bottom rule), and `edge` (stroke for
+     outgoing edges tagged with that tone).
+
+     Defaults: muted slate / cyan / green / amber / red, sober enough
+     to read as engineering (not corporate-deck Material). Plugins
+     override these freely in their theme.css. */
+  --voitta-flow-grid: #d4d4d8;
+
+  --voitta-flow-tone-default-bg:     #1e293b;   /* slate-800 */
+  --voitta-flow-tone-default-fg:     #f1f5f9;
+  --voitta-flow-tone-default-border: #cbd5e1;
+  --voitta-flow-edge-default:        #475569;
+
+  --voitta-flow-tone-info-bg:        #0c4a6e;   /* sky-900 */
+  --voitta-flow-tone-info-fg:        #e0f2fe;
+  --voitta-flow-tone-info-border:    #7dd3fc;
+  --voitta-flow-edge-info:           #0284c7;
+
+  --voitta-flow-tone-success-bg:     #064e3b;   /* emerald-900 */
+  --voitta-flow-tone-success-fg:     #d1fae5;
+  --voitta-flow-tone-success-border: #6ee7b7;
+  --voitta-flow-edge-success:        #059669;
+
+  --voitta-flow-tone-warning-bg:     #78350f;   /* amber-900 */
+  --voitta-flow-tone-warning-fg:     #fef3c7;
+  --voitta-flow-tone-warning-border: #fcd34d;
+  --voitta-flow-edge-warning:        #d97706;
+
+  --voitta-flow-tone-critical-bg:    #7f1d1d;   /* red-900 */
+  --voitta-flow-tone-critical-fg:    #fee2e2;
+  --voitta-flow-tone-critical-border:#fca5a5;
+  --voitta-flow-edge-critical:       #dc2626;
+
+  /* Node body — hardcoded light card with dark text, INDEPENDENT of
+     the plugin theme. Engineering schematics traditionally read best
+     with light cards regardless of whether the canvas is dark or
+     light. Plugins that want dark cards override these explicitly.
+     The dots-grid canvas behind them follows the plugin's --voitta-bg. */
+  --voitta-flow-node-bg:     #f8fafc;
+  --voitta-flow-node-fg:     #0f172a;
+  --voitta-flow-node-fg-muted:#475569;
+  --voitta-flow-node-fg-faint:#64748b;
+  --voitta-flow-node-border: #cbd5e1;
+
   /* ── Tool-call chips ─────────────────────────────────────────── */
   --voitta-tool-bg:     #f4f4f4;
   --voitta-tool-border: #e0e0e0;
@@ -51,6 +98,14 @@
   /* ── Stop button (red while a turn is streaming) ─────────────── */
   --voitta-stop-bg:       #5b2d5b;
   --voitta-stop-bg-hover: #4a234a;
+
+  /* ── Scrollbars (chat pane + report iframe) ───────────────────
+     Both surfaces reference these via fallbacks so untokenised
+     templates / themes still get a neutral thin scrollbar. Override
+     in a plugin theme.css to colour-match a darker palette. */
+  --voitta-scrollbar-thumb:        rgba(0, 0, 0, 0.22);
+  --voitta-scrollbar-thumb-hover:  rgba(0, 0, 0, 0.42);
+  --voitta-scrollbar-track:        transparent;
 
   /* ── Inline code + code blocks (markdown) ────────────────────── */
   --voitta-code-bg:        rgba(0, 0, 0, 0.06);  /* inline `code` */

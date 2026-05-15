@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { streamChat, type ChatMessage, type TurnItem } from "../lib/api";
+import { streamChat, type ChatMessage, type ImageAttachment, type TurnItem } from "../lib/api";
 import { fetchAuthStatus, loginWithApiKey } from "../lib/auth";
 import { getSessionId } from "../lib/bridge";
 import { log } from "../lib/logger";
 import type { RichOutput } from "../lib/plot-spec";
-import { setReportSink, setRichOutputSink } from "../lib/primitives-buffers";
+import {
+  setFlowReportSink,
+  setReportSink,
+  setRichOutputSink,
+  type FlowReportInfo,
+} from "../lib/primitives-buffers";
 import {
   activeApiKey,
   activeModel,
+  bootstrapSettings,
   loadSettings,
   subscribeSettings,
   type Settings,
 } from "../lib/settings";
 import { MessageList } from "./MessageList";
-import { Composer } from "./Composer";
+import { Composer, encodeFiles } from "./Composer";
 import { LogsView } from "./LogsView";
 import { ReportPane } from "./ReportPane";
+import { FlowReportPane } from "./FlowReportPane";
 import { SettingsView } from "./SettingsView";
 import { ArtifactsView } from "./ArtifactsView";
 
@@ -24,6 +31,14 @@ interface ReportInfo {
   report_id: string;
   title?: string;
 }
+
+// Discriminated active-report state — one report slot, two kinds.
+// show_report sets kind: "holoviz"; show_flow_report sets kind: "flow".
+// Setting either replaces the other.
+type ActiveReport =
+  | ({ kind: "holoviz" } & ReportInfo)
+  | ({ kind: "flow" } & FlowReportInfo)
+  | null;
 
 type View = "chat" | "settings" | "logs";
 
@@ -129,11 +144,17 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
   const [view, setView] = useState<View>("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  // Pending image attachments, captured from paste/drop/plus-button.
+  // Cleared after a successful send. Carries over with the user message
+  // into `messages[]` so the wire serialiser can emit blocks.
+  const [pendingAttachments, setPendingAttachments] = useState<ImageAttachment[]>(
+    [],
+  );
   const [streaming, setStreaming] = useState(false);
   const [streamingItems, setStreamingItems] = useState<TurnItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
-  const [activeReport, setActiveReport] = useState<ReportInfo | null>(null);
+  const [activeReport, setActiveReport] = useState<ActiveReport>(null);
 
   // Auth state. ``needsAuth`` flips to true when the backend is in
   // non-localhost mode AND the user hasn't logged in yet — we render
@@ -230,13 +251,20 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
   // currently only call with a report; the user closes via the × button.
   useEffect(() => {
     setReportSink((info) => {
-      setActiveReport(info);
+      setActiveReport(info ? { kind: "holoviz", ...info } : null);
       // A freshly-shown report should always be visible; otherwise an
       // earlier "collapse" persists across navigations and the user
       // sees nothing happen when the LLM calls show_holoviz_report.
       setReportCollapsed(false);
     });
-    return () => setReportSink(null);
+    setFlowReportSink((info) => {
+      setActiveReport(info ? { kind: "flow", ...info } : null);
+      setReportCollapsed(false);
+    });
+    return () => {
+      setReportSink(null);
+      setFlowReportSink(null);
+    };
   }, []);
 
   // Esc closes pane (only when no input has focus inside the shadow tree).
@@ -301,7 +329,9 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    // Allow sending an image-only message (no text). Block only when both
+    // text AND attachments are empty, or the turn is already streaming.
+    if ((!text && pendingAttachments.length === 0) || busy) return;
     const s = settingsRef.current;
     const apiKey = activeApiKey(s);
     if (!apiKey) {
@@ -311,9 +341,17 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
       setView("settings");
       return;
     }
-    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: text,
+      ...(pendingAttachments.length
+        ? { attachments: pendingAttachments }
+        : {}),
+    };
+    const next: ChatMessage[] = [...messages, userMessage];
     setMessages(next);
     setDraft("");
+    setPendingAttachments([]);
     setError(null);
     setStreaming(true);
     setItems([]);
@@ -396,7 +434,29 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
     } finally {
       abortRef.current = null;
     }
-  }, [draft, busy, messages, backendOrigin]);
+  }, [draft, busy, messages, backendOrigin, pendingAttachments]);
+
+  const handleAttach = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    try {
+      const encoded = await encodeFiles(files);
+      if (encoded.length) {
+        setPendingAttachments((prev) => [...prev, ...encoded]);
+      }
+      // Surface a friendly error if every file in the batch failed
+      // (rare — encodeFiles already logs each one).
+      if (encoded.length === 0 && files.length > 0) {
+        setError("Couldn't process those images. Check the dev logs.");
+      }
+    } catch (e: any) {
+      log.error("chat", "attach failed", { err: String(e) });
+      setError(e?.message || String(e));
+    }
+  }, []);
+
+  const handleRemoveAttachment = useCallback((index: number) => {
+    setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -455,8 +515,17 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
       data-layout={layout}
       style={{ "--voitta-pane-width": width + "px" } as any}
     >
-      {activeReport && (
+      {activeReport && activeReport.kind === "holoviz" && (
         <ReportPane
+          info={activeReport}
+          onCollapse={() => setReportCollapsed(true)}
+          collapsed={reportCollapsed}
+          drawerWidth={drawerOffset}
+          layout={layout}
+        />
+      )}
+      {activeReport && activeReport.kind === "flow" && (
+        <FlowReportPane
           info={activeReport}
           onCollapse={() => setReportCollapsed(true)}
           collapsed={reportCollapsed}
@@ -598,7 +667,13 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
         {view === "chat" && needsAuth && (
           <InlineLogin
             backendOrigin={backendOrigin}
-            onAuthenticated={() => setNeedsAuth(false)}
+            onAuthenticated={() => {
+              // The pre-login bootstrap got a 401 and left the cache on
+              // DEFAULTS (empty API keys). Re-pull with the auth cookie
+              // now in place so the next Send doesn't bounce to Settings.
+              void bootstrapSettings(backendOrigin);
+              setNeedsAuth(false);
+            }}
           />
         )}
         {view === "chat" && !needsAuth && authChecked && (
@@ -615,6 +690,9 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
               onSend={send}
               onStop={stop}
               busy={busy}
+              attachments={pendingAttachments}
+              onAttach={handleAttach}
+              onRemoveAttachment={handleRemoveAttachment}
             />
           </>
         )}
