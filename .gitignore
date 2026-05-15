@@ -24,6 +24,7 @@ python_storage/
 # can be re-included with !-patterns below.
 scripts/compute/*
 scripts/reports/*
+scripts/flows/*
 # Shipped adapters that wrap permanent backend modules.
 !scripts/compute/a4db_parse/
 !scripts/compute/dat_parse/
