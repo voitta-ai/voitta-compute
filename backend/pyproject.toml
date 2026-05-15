@@ -39,6 +39,12 @@ dependencies = [
   # web_fetch tool: PDF text extraction for arbitrary web PDFs. Pure
   # Python, no system deps.
   "pypdf>=5.0",
+  # MCP client. Plugins declare ``mcp_servers`` entries in manifest.json
+  # and the core opens a streamable-http connection to each, calls
+  # ``list_tools()`` once at startup, and synthesises a ToolSpec per
+  # remote tool. Same package the voitta-rag-enterprise server uses, so
+  # wire types stay in lockstep.
+  "fastmcp>=2.0",
   # Scientific data formats — needed by user compute scripts that pull
   # HDF5 / netCDF artefacts out of python_storage. All ship binary
   # wheels for macOS/arm64 + Linux/x86_64 so no system-level HDF5 is
@@ -89,8 +95,15 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+# `-m "not live"` excludes Tier 2 live-API tests from the default run.
+# Run them explicitly with `-m live` and the appropriate
+# {ANTHROPIC,OPENAI,GEMINI}_API_KEY env vars set. See
+# streaming-migration.md §13.2.
+addopts = "-q --strict-markers -m 'not live'"
 asyncio_mode = "auto"
+markers = [
+  "live: tests that hit real provider APIs; require API keys via env",
+]
 
 # Briefcase config (project_name, bundle, sources, requires, …) lives at
 # the repo root in `pyproject.toml`. That's intentional: briefcase writes

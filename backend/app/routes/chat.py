@@ -1,19 +1,26 @@
 """Chat endpoint with provider-agnostic tool-use loop.
 
-Tool-use is multi-iteration: each provider call returns a normalised
-response with ``stop_reason``. When ``stop_reason == "tool_use"`` we
-dispatch every requested tool in parallel through the registry, append
-the results as ``tool_result`` blocks, and call the provider again. The
+Tool-use is multi-iteration: each provider stream yields normalised
+block events; when ``stop_reason == "tool_use"`` we dispatch every
+requested tool in parallel, append the results as ``tool_result``
+blocks, and re-open the provider stream for the next iteration. The
 SSE response to the browser stays open across iterations.
 
-SSE events:
+See streaming-migration.md for the protocol contract.
 
-* ``start { model, provider, tools }``      — first iteration begins
-* ``delta { text }``                        — text from the model
-* ``tool_use_start { id, name }``           — model wants to call a tool
-* ``tool_use_end   { id, name, ok, latency_ms, error?, input, result_preview }``
-* ``done  { stop_reason, usage, iterations }``
-* ``error { message, type }``
+SSE events (additive fields beyond the original shape: ``seq``,
+``iteration``, ``block_index``, ``parent_block_index``, ``sub_seq``,
+``partial``):
+
+* ``start          { model, provider, tools, seq, iteration }``
+* ``delta          { seq, iteration, block_index, text }``
+* ``tool_use_start { seq, iteration, block_index, id, name }``
+* ``rich           { seq, iteration, parent_block_index, sub_seq, … }``
+* ``tool_use_end   { seq, iteration, block_index, id, name, ok,
+                     latency_ms, error?, input, result_preview }``
+* ``done  { seq, stop_reason, usage, iterations }``
+* ``error { seq, iteration, type, message, partial,
+            during_block_index }``
 """
 
 from __future__ import annotations
@@ -37,6 +44,13 @@ from app.services.llm import (
     default_model_for,
     get_provider,
 )
+from app.services.llm.stream import (
+    BlockDelta,
+    BlockStart,
+    BlockStop,
+    MessageStop,
+    StreamError,
+)
 from app.tools import registry
 from app.tools.registry import ToolCtx
 
@@ -54,9 +68,32 @@ MAX_TOOL_RESULT_BYTES = 32_000
 MAX_PREVIEW_BYTES = 4_000
 
 
+class TextBlock(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+class ImageSource(BaseModel):
+    type: Literal["base64"]
+    media_type: str
+    data: str
+
+
+class ImageBlock(BaseModel):
+    type: Literal["image"]
+    source: ImageSource
+
+
+ContentBlock = TextBlock | ImageBlock
+
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    # Either a plain string (text-only, the historical shape) or a list
+    # of typed content blocks. Frontend emits blocks only when an
+    # attachment is present — text-only turns stay strings for
+    # backward compatibility with any older client.
+    content: str | list[ContentBlock]
 
 
 class ChatRequest(BaseModel):
@@ -110,12 +147,18 @@ def _tool_result_content(result: Any) -> str:
 
 
 async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
+    seq = _SeqCounter()
+
     if not req.provider:
         yield _sse(
             "error",
             {
-                "message": "no provider in chat request — open the Settings panel and pick one",
+                "seq": seq.next(),
+                "iteration": 0,
                 "type": "provider_not_configured",
+                "message": "no provider in chat request — open the Settings panel and pick one",
+                "partial": False,
+                "during_block_index": None,
                 "provider": None,
             },
         )
@@ -127,8 +170,12 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
         yield _sse(
             "error",
             {
-                "message": str(exc),
+                "seq": seq.next(),
+                "iteration": 0,
                 "type": "provider_not_configured",
+                "message": str(exc),
+                "partial": False,
+                "during_block_index": None,
                 "provider": exc.provider,
             },
         )
@@ -142,10 +189,6 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
     )
     ctx = ToolCtx(session_id=req.session_id)
 
-    # Host-aware tool exposure: tools with a host_pattern are only visible
-    # when the bookmarklet's registered page.host matches. Avoids
-    # confusing the model with site-specific tools (e.g. drive_*) on
-    # unrelated pages.
     from app.bridge import bus as _bridge_bus
     host: str | None = None
     if req.session_id:
@@ -161,32 +204,48 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
     from app.config import VOITTA_SYSTEM_PROMPT
     system = req.system or VOITTA_SYSTEM_PROMPT
 
-    # Ambient python_storage context — appended to the system prompt
-    # every turn. Lets the LLM use existing snapshot handles directly
-    # without re-searching/re-downloading. See
-    # app/services/python_storage_context.py for the rationale.
     from app.services import python_storage_context as _ps_ctx
     ambient = _ps_ctx.get_context_block()
     if ambient:
         system = (system or "").rstrip() + "\n\n" + ambient
 
-
-    # The chat-route's ``Message`` carries plain string content. The
-    # orchestrator works in block form so it can append ``tool_use`` /
-    # ``tool_result`` blocks across iterations.
-    messages: list[LlmMessage] = [
-        LlmMessage(role=m.role, content=[{"type": "text", "text": m.content}])
-        for m in req.messages
-    ]
+    messages: list[LlmMessage] = []
+    for m in req.messages:
+        if isinstance(m.content, str):
+            blocks: list[dict[str, Any]] = [{"type": "text", "text": m.content}]
+        else:
+            blocks = [b.model_dump() for b in m.content]
+        messages.append(LlmMessage(role=m.role, content=blocks))
 
     yield _sse(
         "start",
-        {"model": model, "provider": provider_id, "tools": registry.names()},
+        {
+            "seq": seq.next(),
+            "iteration": 0,
+            "model": model,
+            "provider": provider_id,
+            "tools": registry.names(),
+        },
     )
+
+    total_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    iteration = 0
+    current_block_index: int | None = None
 
     try:
         for iteration in range(max_iterations):
-            response = await provider.create_message(
+            # Per-iteration block assembly state.
+            blocks_by_index: dict[int, dict[str, Any]] = {}
+            text_buf: dict[int, list[str]] = {}
+            args_buf: dict[int, list[str]] = {}
+            iter_stop_reason: str = "end_turn"
+
+            async with provider.stream(
                 NormalisedRequest(
                     model=model,
                     system=system,
@@ -194,97 +253,162 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                     messages=messages,
                     tools=tools,
                 )
-            )
+            ) as events:
+                async for ev in events:
+                    if isinstance(ev, BlockStart):
+                        current_block_index = ev.block_index
+                        if ev.kind == "text":
+                            blocks_by_index[ev.block_index] = {"type": "text", "text": ""}
+                            text_buf[ev.block_index] = []
+                        else:
+                            blocks_by_index[ev.block_index] = {
+                                "type": "tool_use",
+                                "id": ev.tool_id or "",
+                                "name": ev.tool_name or "",
+                                "input": {},
+                            }
+                            args_buf[ev.block_index] = []
+                            # Emit tool_use_start as soon as we see it — this
+                            # is the whole point of streaming.
+                            yield _sse(
+                                "tool_use_start",
+                                {
+                                    "seq": seq.next(),
+                                    "iteration": iteration,
+                                    "block_index": ev.block_index,
+                                    "id": ev.tool_id or "",
+                                    "name": ev.tool_name or "",
+                                },
+                            )
+                    elif isinstance(ev, BlockDelta):
+                        if ev.kind == "text":
+                            text_buf.setdefault(ev.block_index, []).append(ev.text)
+                        else:
+                            args_buf.setdefault(ev.block_index, []).append(ev.text)
+                    elif isinstance(ev, BlockStop):
+                        block = blocks_by_index.get(ev.block_index)
+                        if block is None:
+                            continue
+                        if block["type"] == "text":
+                            # Buffering policy: flush text as a single
+                            # `delta` SSE event per block. Future
+                            # per-token rendering flips this to emit on
+                            # each BlockDelta(kind="text") instead. See
+                            # streaming-migration.md §10.
+                            joined = "".join(text_buf.get(ev.block_index, []))
+                            block["text"] = joined
+                            if joined:
+                                yield _sse(
+                                    "delta",
+                                    {
+                                        "seq": seq.next(),
+                                        "iteration": iteration,
+                                        "block_index": ev.block_index,
+                                        "text": joined,
+                                    },
+                                )
+                        else:
+                            joined = "".join(args_buf.get(ev.block_index, []))
+                            if joined:
+                                try:
+                                    block["input"] = json.loads(joined)
+                                except json.JSONDecodeError:
+                                    block["input"] = {"_raw": joined}
+                    elif isinstance(ev, MessageStop):
+                        iter_stop_reason = ev.stop_reason
+                        total_usage["input_tokens"] += ev.usage.input_tokens
+                        total_usage["output_tokens"] += ev.usage.output_tokens
+                        total_usage["cache_read_input_tokens"] += ev.usage.cache_read_input_tokens
+                        total_usage["cache_creation_input_tokens"] += ev.usage.cache_creation_input_tokens
+                    elif isinstance(ev, StreamError):
+                        yield _sse(
+                            "error",
+                            {
+                                "seq": seq.next(),
+                                "iteration": iteration,
+                                "type": ev.type,
+                                "message": ev.message,
+                                "partial": ev.partial,
+                                "during_block_index": current_block_index,
+                            },
+                        )
+                        return
 
-            for block in response.content:
-                btype = block.get("type")
-                if btype == "text":
-                    text = block.get("text") or ""
-                    if text:
-                        yield _sse("delta", {"text": text})
-                elif btype == "tool_use":
-                    yield _sse(
-                        "tool_use_start",
-                        {"id": block["id"], "name": block["name"]},
-                    )
+            # Iteration complete. Assemble the assistant message from
+            # blocks in block_index order.
+            assistant_content: list[dict[str, Any]] = []
+            for idx in sorted(blocks_by_index.keys()):
+                b = blocks_by_index[idx]
+                if b["type"] == "text" and not b.get("text"):
+                    continue
+                assistant_content.append(b)
 
-            if response.stop_reason != "tool_use":
+            if iter_stop_reason != "tool_use":
                 yield _sse(
                     "done",
                     {
-                        "stop_reason": response.stop_reason,
-                        "usage": {
-                            "input_tokens": response.usage.input_tokens,
-                            "output_tokens": response.usage.output_tokens,
-                            "cache_read_input_tokens": response.usage.cache_read_input_tokens,
-                            "cache_creation_input_tokens": response.usage.cache_creation_input_tokens,
-                        },
+                        "seq": seq.next(),
+                        "stop_reason": iter_stop_reason,
+                        "usage": total_usage,
                         "iterations": iteration + 1,
                     },
                 )
                 return
 
-            tool_uses = [b for b in response.content if b.get("type") == "tool_use"]
+            # tool_use path — dispatch tools, emit rich + tool_use_end,
+            # append assistant + tool_result blocks, loop.
+            tool_uses = [
+                (idx, blocks_by_index[idx])
+                for idx in sorted(blocks_by_index.keys())
+                if blocks_by_index[idx]["type"] == "tool_use"
+            ]
             if not tool_uses:
                 yield _sse(
                     "error",
                     {
-                        "message": "stop_reason=tool_use but no tool_use blocks present",
+                        "seq": seq.next(),
+                        "iteration": iteration,
                         "type": "ProtocolError",
+                        "message": "stop_reason=tool_use but no tool_use blocks present",
+                        "partial": True,
+                        "during_block_index": current_block_index,
                     },
                 )
                 return
 
             dispatch_tasks = [
                 registry.dispatch(tu["name"], dict(tu.get("input") or {}), ctx)
-                for tu in tool_uses
+                for _, tu in tool_uses
             ]
             results = await asyncio.gather(*dispatch_tasks)
 
             tool_result_blocks: list[dict[str, Any]] = []
-            for tu, res in zip(tool_uses, results):
+            for (block_idx, tu), res in zip(tool_uses, results):
                 preview_payload = res.result if res.ok else {"error": res.error}
-                # Some server-side tools (e.g. `run_compute`) collect
-                # rich items (text/markdown blocks, images) during their
-                # execution and surface them as `result.items`. Emit
-                # those as `rich` SSE events here so they render inline
-                # in the chat stream — same TurnItem path as the
-                # browser-side rich-output sink. We also strip them
-                # from the preview that travels to the model (the model
-                # already gets ctx.text content as part of its working
-                # state via the script's return value, and image URLs
-                # would bloat the context to no purpose).
                 rich_items = (
                     list(res.result.get("items") or [])
                     if res.ok and isinstance(res.result, dict)
                     else []
                 )
+                sub_seq = 0
                 for item in rich_items:
                     if isinstance(item, dict):
-                        yield _sse("rich", item)
+                        yield _sse(
+                            "rich",
+                            {
+                                "seq": seq.next(),
+                                "iteration": iteration,
+                                "parent_block_index": block_idx,
+                                "sub_seq": sub_seq,
+                                **item,
+                            },
+                        )
+                        sub_seq += 1
 
-                yield _sse(
-                    "tool_use_end",
-                    {
-                        "id": tu["id"],
-                        "name": tu["name"],
-                        "ok": res.ok,
-                        "latency_ms": res.latency_ms,
-                        "error": res.error,
-                        "input": dict(tu.get("input") or {}),
-                        "result_preview": _preview_text(preview_payload),
-                    },
-                )
                 content_payload = res.result if res.ok else {"error": res.error}
-                # Image-bearing tools (e.g. `screenshot_report`) tag their
-                # result with a private `_image: {media_type, data}` field
-                # that we strip before serialising. For Anthropic the
-                # tool_result.content is a list of blocks (text + image),
-                # so the model literally SEES the screenshot. Other
-                # providers (OpenAI / Gemini) take only string content
-                # blocks here, so they get a textual note pointing at
-                # the python_storage handle — the image still renders
-                # in the chat pane via the rich item below.
+                # Image-bearing tools tag results with `_image`. See the
+                # pre-streaming version of this function (in git history)
+                # for the full rationale on per-provider image handling.
                 image_block: dict[str, Any] | None = None
                 if isinstance(content_payload, dict) and "_image" in content_payload:
                     img = content_payload.pop("_image", None)
@@ -301,21 +425,16 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                                 "data": img["data"],
                             },
                         }
-                        # Also push it into the chat pane as a rich
-                        # item so the user sees what the model sees.
-                        # Prefer the backend HTTPS URL (CSP-safe under
-                        # the host page's policy); fall back to a
-                        # data: URL only if the producing tool didn't
-                        # supply one — most host pages (Drive,
-                        # Gmail) reject `data:` in
-                        # `img-src`, so the data-URL fallback is
-                        # mostly useful for local dev / harness pages.
                         rich_url = img.get("url") or (
                             f"data:{img['media_type']};base64,{img['data']}"
                         )
                         yield _sse(
                             "rich",
                             {
+                                "seq": seq.next(),
+                                "iteration": iteration,
+                                "parent_block_index": block_idx,
+                                "sub_seq": sub_seq,
                                 "kind": "image",
                                 "url": rich_url,
                                 "alt": (
@@ -324,9 +443,25 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                                 ),
                             },
                         )
+                        sub_seq += 1
+
+                yield _sse(
+                    "tool_use_end",
+                    {
+                        "seq": seq.next(),
+                        "iteration": iteration,
+                        "block_index": block_idx,
+                        "id": tu["id"],
+                        "name": tu["name"],
+                        "ok": res.ok,
+                        "latency_ms": res.latency_ms,
+                        "error": res.error,
+                        "input": dict(tu.get("input") or {}),
+                        "result_preview": _preview_text(preview_payload),
+                    },
+                )
 
                 if image_block is not None and provider_id == "anthropic":
-                    # Multi-block tool_result content (Anthropic only).
                     text_part = _tool_result_content(content_payload)
                     tool_result_blocks.append(
                         {
@@ -342,9 +477,6 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                     )
                 else:
                     if image_block is not None:
-                        # Non-Anthropic provider: surface a textual
-                        # pointer so the model knows the screenshot
-                        # exists even though it can't see it.
                         if isinstance(content_payload, dict):
                             content_payload = dict(content_payload)
                             content_payload["_image_note"] = (
@@ -359,28 +491,61 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                             "tool_use_id": tu["id"],
                             "content": _tool_result_content(content_payload),
                             "is_error": not res.ok,
-                            # `_name` is internal — the Gemini adapter uses it to
-                            # populate `function_response.name`. The Anthropic
-                            # adapter ignores it; OpenAI uses `tool_use_id` as
-                            # `call_id` directly so it doesn't need the name.
                             "_name": tu["name"],
                         }
                     )
 
-            messages.append(LlmMessage(role="assistant", content=response.content))
+            messages.append(LlmMessage(role="assistant", content=assistant_content))
             messages.append(LlmMessage(role="user", content=tool_result_blocks))
-            # loop into next iteration
 
         yield _sse(
             "error",
             {
-                "message": f"tool-use loop exceeded {max_iterations} iterations",
+                "seq": seq.next(),
+                "iteration": iteration,
                 "type": "IterationLimit",
+                "message": f"tool-use loop exceeded {max_iterations} iterations",
+                "partial": True,
+                "during_block_index": current_block_index,
             },
         )
+    except asyncio.CancelledError:
+        # Stop: client disconnected. Do NOT emit further SSE — the
+        # connection is gone and the upstream `async with provider.stream`
+        # is already unwinding. Re-raise so sse_starlette / asyncio sees
+        # the cancellation propagate cleanly.
+        logger.info(
+            "chat.stream cancelled iteration=%d block_index=%s",
+            iteration,
+            current_block_index,
+        )
+        raise
     except Exception as exc:
         logger.exception("chat stream failed")
-        yield _sse("error", {"message": str(exc), "type": type(exc).__name__})
+        yield _sse(
+            "error",
+            {
+                "seq": seq.next(),
+                "iteration": iteration,
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "partial": True,
+                "during_block_index": current_block_index,
+            },
+        )
+
+
+class _SeqCounter:
+    """Monotonic per-turn sequence counter for SSE events."""
+
+    __slots__ = ("_n",)
+
+    def __init__(self) -> None:
+        self._n = -1
+
+    def next(self) -> int:
+        self._n += 1
+        return self._n
 
 
 @router.post("/chat/stream")

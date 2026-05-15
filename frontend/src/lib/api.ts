@@ -3,12 +3,14 @@
 // We parse `event:` / `data:` blocks ourselves so the request method can stay
 // POST (EventSource is GET-only).
 
+import type { ImageAttachment } from "./image-attach";
 import type { RichOutput } from "./plot-spec";
 import type { ProviderId } from "./settings";
 
 export type Role = "user" | "assistant";
 
 export type { ProviderId };
+export type { ImageAttachment };
 
 // One sequential element of an assistant turn. The list is built in stream
 // order so re-rendering it preserves the original interleaving of text,
@@ -35,6 +37,11 @@ export interface ChatMessage {
   // ignores everything else in a fresh request, so this stays accurate
   // without redoing the orchestrator's history shape).
   content: string;
+  // User-attached images. When present, the wire shape switches from a plain
+  // string to an Anthropic-style blocks list (see toWireMessage below).
+  // Persists across turns — every subsequent /api/chat/stream POST re-sends
+  // them as part of conversation history.
+  attachments?: ImageAttachment[];
   // Frontend-only: the rich, ordered representation used for rendering.
   // Optional so back-loaded transcripts without items still render as plain
   // text.
@@ -101,6 +108,22 @@ function prefixCurrentUrl(messages: ChatMessage[]): ChatMessage[] {
   return [...messages.slice(0, -1), tagged];
 }
 
+// Combine a message's text + attachments into the wire shape. Text-only
+// turns stay as plain strings (back-compat); turns with one or more
+// attachments become an Anthropic-style content-block list. Images come
+// FIRST so the model sees them before the prose that references them.
+function toWireMessage(m: ChatMessage): { role: Role; content: unknown } {
+  if (!m.attachments || m.attachments.length === 0) {
+    return { role: m.role, content: m.content };
+  }
+  const blocks: unknown[] = m.attachments.map((a) => ({
+    type: "image",
+    source: { type: "base64", media_type: a.mime, data: a.data },
+  }));
+  blocks.push({ type: "text", text: m.content });
+  return { role: m.role, content: blocks };
+}
+
 export async function streamChat(
   backendOrigin: string,
   messages: ChatMessage[],
@@ -110,11 +133,9 @@ export async function streamChat(
   options: StreamOptions,
 ): Promise<void> {
   // Strip the frontend-only `items` field; backend only looks at
-  // {role, content}. Inject the URL prefix on the latest user turn.
-  const wirePayload = prefixCurrentUrl(messages).map((m) => ({
-    role: m.role,
-    content: m.content,
-  }));
+  // {role, content}. Inject the URL prefix on the latest user turn,
+  // then combine text + attachments into the wire shape.
+  const wirePayload = prefixCurrentUrl(messages).map(toWireMessage);
 
   const body: Record<string, unknown> = {
     messages: wirePayload,

@@ -18,16 +18,23 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from anthropic import AsyncAnthropic
 
 from app.services.llm.base import (
+    BaseProvider,
     Message,
     NormalisedRequest,
-    NormalisedResponse,
-    Provider,
     Usage,
+)
+from app.services.llm.stream import (
+    BlockDelta,
+    BlockStart,
+    BlockStop,
+    MessageStop,
+    StreamEvent,
 )
 
 
@@ -55,30 +62,19 @@ for _var in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
         )
 
 
-class AnthropicProvider(Provider):
+class AnthropicProvider(BaseProvider):
     id = "anthropic"
 
     def __init__(self, api_key: str) -> None:
         self._client = AsyncAnthropic(api_key=api_key, base_url=ANTHROPIC_BASE_URL)
 
-    async def create_message(self, req: NormalisedRequest) -> NormalisedResponse:
+    def _build_kwargs(self, req: NormalisedRequest) -> dict[str, Any]:
         messages = [_message_to_dict(m) for m in req.messages]
 
-        # Cache breakpoints — Claude Code-style sliding window. The Messages
-        # API allows up to 4 `cache_control` markers per request; we use all
-        # of them.
-        #
-        #   1. Last block of the system prompt — caches `tools + system`
-        #      together (render order is tools → system, so a marker on the
-        #      last system block covers both). This is the frozen prefix
-        #      every request reuses.
-        #   2-4. Last block of each of the three most recently appended
-        #        messages. As the conversation (or tool-use loop) grows,
-        #        the previous request's tail markers become this request's
-        #        cache-read points; the new tail writes fresh. Three rolling
-        #        markers also cover the 20-block lookback window for long
-        #        agentic loops where a single user-turn spawns many
-        #        tool_use/tool_result block pairs.
+        # Cache breakpoints — Claude Code-style sliding window. See the
+        # pre-streaming version of this adapter for the full rationale: the
+        # Messages API allows 4 `cache_control` markers; we put one on the
+        # system tail and three on the three most recently appended messages.
         for offset in range(1, min(4, len(messages) + 1)):
             blocks = messages[-offset].get("content")
             if blocks and isinstance(blocks[-1], dict):
@@ -105,8 +101,103 @@ class AnthropicProvider(Provider):
                 }
                 for t in req.tools
             ]
-        result = await self._client.messages.create(**kwargs)
-        return _from_anthropic(result)
+        return kwargs
+
+    def stream(self, req: NormalisedRequest):
+        return _AnthropicStreamCM(self._client, self._build_kwargs(req))
+
+
+class _AnthropicStreamCM:
+    """Async context manager wrapping `client.messages.stream()`.
+
+    Maps Anthropic SSE events to our normalised `StreamEvent`s.
+    """
+
+    def __init__(self, client: AsyncAnthropic, kwargs: dict[str, Any]) -> None:
+        self._client = client
+        self._kwargs = kwargs
+        self._cm = None
+        self._stream_obj = None
+
+    async def __aenter__(self) -> AsyncIterator[StreamEvent]:
+        self._cm = self._client.messages.stream(**self._kwargs)
+        self._stream_obj = await self._cm.__aenter__()
+        return self._iter_events(self._stream_obj)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        if self._cm is not None:
+            return await self._cm.__aexit__(exc_type, exc, tb)
+        return False
+
+    @staticmethod
+    async def _iter_events(stream_obj: Any) -> AsyncIterator[StreamEvent]:
+        usage = Usage()
+        stop_reason: str = "end_turn"
+
+        async for event in stream_obj:
+            etype = getattr(event, "type", None)
+            if etype == "content_block_start":
+                idx = getattr(event, "index", 0)
+                block = getattr(event, "content_block", None)
+                btype = getattr(block, "type", None) if block is not None else None
+                if btype == "text":
+                    yield BlockStart(block_index=idx, kind="text")
+                elif btype == "tool_use":
+                    yield BlockStart(
+                        block_index=idx,
+                        kind="tool_use",
+                        tool_id=getattr(block, "id", "") or "",
+                        tool_name=getattr(block, "name", "") or "",
+                    )
+                # `thinking` blocks are not surfaced to the orchestrator as
+                # streamable blocks — they're internal to Claude's reasoning
+                # and we keep the current behaviour of ignoring them on the
+                # wire. They still arrive in the final message via the
+                # MessageStop path below if the caller needs them.
+            elif etype == "content_block_delta":
+                idx = getattr(event, "index", 0)
+                delta = getattr(event, "delta", None)
+                dtype = getattr(delta, "type", None) if delta is not None else None
+                if dtype == "text_delta":
+                    text = getattr(delta, "text", "") or ""
+                    if text:
+                        yield BlockDelta(block_index=idx, kind="text", text=text)
+                elif dtype == "input_json_delta":
+                    partial = getattr(delta, "partial_json", "") or ""
+                    if partial:
+                        yield BlockDelta(block_index=idx, kind="tool_args", text=partial)
+            elif etype == "content_block_stop":
+                idx = getattr(event, "index", 0)
+                yield BlockStop(block_index=idx)
+            elif etype == "message_delta":
+                delta = getattr(event, "delta", None)
+                if delta is not None:
+                    sr = getattr(delta, "stop_reason", None)
+                    if sr:
+                        stop_reason = sr
+                u = getattr(event, "usage", None)
+                if u is not None:
+                    # `message_delta` usage is cumulative output_tokens.
+                    out = getattr(u, "output_tokens", None)
+                    if out is not None:
+                        usage.output_tokens = out
+            elif etype == "message_start":
+                msg = getattr(event, "message", None)
+                if msg is not None:
+                    u = getattr(msg, "usage", None)
+                    if u is not None:
+                        usage.input_tokens = getattr(u, "input_tokens", 0) or 0
+                        usage.output_tokens = getattr(u, "output_tokens", 0) or 0
+                        usage.cache_read_input_tokens = (
+                            getattr(u, "cache_read_input_tokens", 0) or 0
+                        )
+                        usage.cache_creation_input_tokens = (
+                            getattr(u, "cache_creation_input_tokens", 0) or 0
+                        )
+            elif etype == "message_stop":
+                if stop_reason not in ("end_turn", "tool_use", "max_tokens", "stop_sequence"):
+                    stop_reason = "end_turn"
+                yield MessageStop(stop_reason=stop_reason, usage=usage)  # type: ignore[arg-type]
 
 
 def _message_to_dict(m: Message) -> dict[str, Any]:
@@ -126,48 +217,3 @@ def _strip_internal_keys(block: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in block.items() if not (isinstance(k, str) and k.startswith("_"))}
 
 
-def _from_anthropic(result: Any) -> NormalisedResponse:
-    content: list[dict[str, Any]] = []
-    for block in result.content or []:
-        btype = getattr(block, "type", None)
-        if btype == "text":
-            content.append({"type": "text", "text": getattr(block, "text", "") or ""})
-        elif btype == "tool_use":
-            content.append(
-                {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.input,
-                }
-            )
-        elif btype == "thinking":
-            block_dict: dict[str, Any] = {
-                "type": "thinking",
-                "thinking": getattr(block, "thinking", "") or "",
-            }
-            sig = getattr(block, "signature", None)
-            if sig is not None:
-                block_dict["signature"] = sig
-            content.append(block_dict)
-        else:
-            # Best-effort fall-through for any future block type.
-            if hasattr(block, "model_dump"):
-                content.append({k: v for k, v in block.model_dump().items() if v is not None})
-
-    usage = Usage(
-        input_tokens=getattr(result.usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(result.usage, "output_tokens", 0) or 0,
-        cache_read_input_tokens=getattr(result.usage, "cache_read_input_tokens", 0) or 0,
-        cache_creation_input_tokens=getattr(result.usage, "cache_creation_input_tokens", 0) or 0,
-    )
-    stop_reason = result.stop_reason or "end_turn"
-    if stop_reason not in ("end_turn", "tool_use", "max_tokens", "stop_sequence"):
-        stop_reason = "end_turn"
-    return NormalisedResponse(
-        content=content,
-        stop_reason=stop_reason,
-        usage=usage,
-        model=result.model or "",
-        raw=result,
-    )

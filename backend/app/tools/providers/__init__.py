@@ -109,17 +109,35 @@ def _import_plugin(plugin_dir: Path, manifest: dict) -> None:
     ``manifest.json`` instead of repeating it on every ToolSpec — and
     guarantees the gate exists even if a tool author forgets.
 
+    Also parses the (optional) ``mcp_servers`` field: each entry is
+    registered as an :class:`MCPConnector`. The connector is dormant
+    until :func:`app.services.mcp.refresh_all` probes the remote server
+    (FastAPI startup or explicit refresh button). Plugins that only
+    need MCP — no local Python tools — can omit ``python_module``
+    entirely; we still load their manifest's connectors.
+
     Failure is logged but doesn't kill startup — a bad plugin shouldn't
     take the whole backend down. The user sees a missing-tools symptom
     instead, with a clear log line pointing at the cause.
     """
+    # Parse manifest fields up-front so MCP-only plugins (no
+    # python_module) still get their connectors registered.
+    raw_patterns = manifest.get("host_patterns")
+    host_patterns: list[str] = []
+    if isinstance(raw_patterns, list):
+        host_patterns = [p for p in raw_patterns if isinstance(p, str) and p]
+    _register_mcp_servers(plugin_dir.name, host_patterns, manifest)
+
     backend_dir = plugin_dir / "backend"
     if not backend_dir.is_dir():
-        _logger.info("plugin %s: no backend/ dir, skipping", plugin_dir.name)
+        _logger.info("plugin %s: no backend/ dir, skipping python_module", plugin_dir.name)
         return
     package_name = manifest.get("python_module")
     if not isinstance(package_name, str) or not package_name:
-        _logger.warning("plugin %s: manifest.python_module missing", plugin_dir.name)
+        _logger.info(
+            "plugin %s: manifest.python_module not set; "
+            "skipping Python import (MCP-only plugin)", plugin_dir.name,
+        )
         return
     sys_path_entry = str(backend_dir)
     if sys_path_entry not in sys.path:
@@ -143,10 +161,6 @@ def _import_plugin(plugin_dir: Path, manifest: dict) -> None:
     # together). Tools that need a tighter gate can still override
     # per-ToolSpec, in which case the manifest list is ignored for
     # that tool.
-    raw_patterns = manifest.get("host_patterns")
-    host_patterns: list[str] = []
-    if isinstance(raw_patterns, list):
-        host_patterns = [p for p in raw_patterns if isinstance(p, str) and p]
     if host_patterns:
         added = [t for t in _registry.all() if t.name not in before]
         applied = 0
@@ -168,6 +182,60 @@ def _import_plugin(plugin_dir: Path, manifest: dict) -> None:
         _logger.info("plugin %s: loaded (module=%s)", plugin_dir.name, package_name)
 
 
+def _register_mcp_servers(
+    plugin_name: str, host_patterns: list[str], manifest: dict
+) -> None:
+    """Parse manifest.mcp_servers[] and register each entry.
+
+    No network: registration only records the declaration. Probing
+    happens on FastAPI startup (or on explicit refresh) via
+    :func:`app.services.mcp.refresh_all`.
+
+    A malformed entry logs and is skipped — the rest of the manifest
+    still loads. Plugins typically declare zero or one MCP servers;
+    the list shape is forward-compat for plugins fronting multiple
+    services (e.g. a plugin that bridges both an internal RAG and a
+    public docs server).
+    """
+    raw = manifest.get("mcp_servers")
+    if not raw:
+        return
+    if not isinstance(raw, list):
+        _logger.warning(
+            "plugin %s: manifest.mcp_servers must be a list, got %s — ignored",
+            plugin_name, type(raw).__name__,
+        )
+        return
+    # Import deferred so a missing fastmcp install only breaks plugins
+    # that actually need it (in development workflows where someone
+    # blew away the venv).
+    try:
+        from app.services.mcp import MCPServerDecl, register_connector
+    except Exception as exc:
+        _logger.exception(
+            "plugin %s: cannot import MCP infrastructure (%s); "
+            "mcp_servers entries skipped", plugin_name, exc,
+        )
+        return
+    for entry in raw:
+        try:
+            decl = MCPServerDecl.from_manifest_entry(
+                plugin_name=plugin_name,
+                host_patterns=host_patterns,
+                raw=entry,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "plugin %s: bad mcp_servers entry: %s", plugin_name, exc,
+            )
+            continue
+        register_connector(decl)
+        _logger.info(
+            "plugin %s: registered mcp connector id=%s url_setting=%s",
+            plugin_name, decl.id, decl.url_setting,
+        )
+
+
 def _discover() -> list[dict]:
     loaded: list[dict] = []
     for plugins_root in _candidate_plugins_dirs():
@@ -184,7 +252,41 @@ def _discover() -> list[dict]:
     return loaded
 
 
-# Discovery runs once at import time. The list is held for diagnostic
-# routes (Settings panel, /healthz/plugins) so the user can tell what's
-# active without reading logs.
-LOADED_PLUGINS: list[dict] = _discover()
+# Discovery used to run at module import time. That created a subtle
+# circular-import vulnerability: ``_discover()`` calls into
+# ``_register_mcp_servers`` which imports ``app.services.mcp``, whose
+# registry module imports ``app.tools.registry`` (a sibling), which
+# back-loads ``app.tools.__init__``, which re-enters this module —
+# and then ``from app.services.mcp import …`` fails because the
+# original `app.services.mcp` is mid-init on the upstream frame.
+#
+# The fix: don't do filesystem / arbitrary-Python-import work as a
+# module-load side effect. ``discover_plugins()`` is the only entry
+# point now; ``app.main`` calls it during the FastAPI startup event
+# before ``refresh_all()`` probes any connectors. ``LOADED_PLUGINS``
+# starts empty and is mutated in place so existing callers
+# (``from app.tools.providers import LOADED_PLUGINS``) keep the same
+# import shape.
+LOADED_PLUGINS: list[dict] = []
+_discovered: bool = False
+
+
+def discover_plugins(force: bool = False) -> list[dict]:
+    """Discover + import every plugin under ``plugins/*`` (idempotent).
+
+    Mutates the module-level ``LOADED_PLUGINS`` list in place so
+    existing imports of that name continue to observe the populated
+    state. Returns the same list for callers that want a direct
+    reference.
+
+    ``force`` re-runs discovery from scratch (clears + repopulates).
+    Used by test fixtures + future hot-reload paths; production
+    callers leave it at the default.
+    """
+    global _discovered
+    if _discovered and not force:
+        return LOADED_PLUGINS
+    LOADED_PLUGINS.clear()
+    LOADED_PLUGINS.extend(_discover())
+    _discovered = True
+    return LOADED_PLUGINS

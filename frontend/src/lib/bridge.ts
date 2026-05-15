@@ -12,7 +12,7 @@
 //      stays current.
 
 import { log } from "./logger";
-import { bootstrapSettings } from "./settings";
+import type { bootstrapSettings } from "./settings";
 
 export interface PrimitiveContext {
   signal: AbortSignal;
@@ -72,9 +72,11 @@ export function startBridge(
 
   log.info("bridge", "starting", { backendOrigin, sessionId: SESSION_ID });
 
-  // Pull persisted user settings from the backend. Plugin defaults are
-  // applied beneath the user's saved blob so a user preference always wins.
-  void bootstrapSettings(backendOrigin, pluginDefaults);
+  // Settings bootstrap is awaited by the caller (widget.tsx) BEFORE
+  // ChatPane is rendered, so the pane's initial state already reflects
+  // the persisted blob. We accept ``pluginDefaults`` only to keep the
+  // call signature stable for callers; the value is unused here.
+  void pluginDefaults;
 
   // Self-healing inbox: keep ONE EventSource alive at any time. If
   // the browser's built-in retry stalls (Chrome occasionally gives

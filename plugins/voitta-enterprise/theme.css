@@ -55,6 +55,11 @@
   --voitta-stop-bg:        #a02929;
   --voitta-stop-bg-hover:  #c33;
 
+  /* ── Scrollbars (chat pane + report iframe) ──────────────────── */
+  --voitta-scrollbar-thumb:        rgba(245, 245, 247, 0.22);
+  --voitta-scrollbar-thumb-hover:  rgba(245, 245, 247, 0.42);
+  --voitta-scrollbar-track:        transparent;
+
   /* ── Inline code + fenced blocks ─────────────────────────────── */
   --voitta-code-bg:        rgba(255, 255, 255, 0.10);
   --voitta-code-block-bg:  #0c0c0d;   /* slightly deeper than bg for contrast */

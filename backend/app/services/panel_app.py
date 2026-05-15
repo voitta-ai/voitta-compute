@@ -237,9 +237,368 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
         #header { display: none !important; }
         #container { padding-top: 0 !important; }
         #main { margin-top: 8px !important; }
+
+        /* Thin scrollbars so the report iframe doesn't show the fat
+           macOS native chrome on dark themes. WebKit gets explicit
+           track/thumb colors; Firefox uses scrollbar-* shorthand. The
+           colors reference the theme tokens when a theme is applied
+           (see build_theme_css below) and fall back to neutral
+           translucent values that read OK on either light or dark
+           defaults. */
+        * {
+          scrollbar-width: thin;
+          scrollbar-color: var(--voitta-scrollbar-thumb, rgba(128,128,128,0.45))
+                           var(--voitta-scrollbar-track, transparent);
+        }
+        *::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+        *::-webkit-scrollbar-track {
+          background: var(--voitta-scrollbar-track, transparent);
+        }
+        *::-webkit-scrollbar-thumb {
+          background-color: var(--voitta-scrollbar-thumb, rgba(128,128,128,0.45));
+          border-radius: 6px;
+          border: 2px solid transparent;
+          background-clip: padding-box;
+        }
+        *::-webkit-scrollbar-thumb:hover {
+          background-color: var(--voitta-scrollbar-thumb-hover, rgba(128,128,128,0.7));
+        }
+        *::-webkit-scrollbar-corner {
+          background: transparent;
+        }
         """
     )
+
+    # Report scripts can stamp ctx.add_css(...) blocks onto the layout.
+    # Each entry is a raw CSS string that the user wanted in the iframe's
+    # document <head>. We append into the per-template raw_css list so
+    # the CSS lands as a real <style> block in <head>, sibling to Panel's
+    # bundled stylesheets — the same path our own theme CSS uses below.
+    # Routing via ``pn.pane.HTML('<style>…</style>')`` would not work:
+    # Panel sanitises HTML panes (entity-encodes the text), so the
+    # browser sees "&lt;style&gt;…" inside a <div>, not a stylesheet,
+    # and the rules never reach widgets in the outer document
+    # (Tabulator, Bokeh DataTable, Plotly modebar).
+    raw_css_extras = getattr(layout, "_voitta_extra_raw_css", None)
+    if isinstance(raw_css_extras, list):
+        for css in raw_css_extras:
+            if isinstance(css, str) and css.strip():
+                template.config.raw_css.append(css)
+
+    # NB: theme injection used to live here as a hidden post-build
+    # step — we'd read ``layout._voitta_theme_tokens`` and call
+    # ``build_theme_css(tokens, is_dark)`` from the wrapper. That
+    # path produced the right CSS for outer-document widgets but
+    # missed shadow-DOM widgets (Tabulator, Bokeh DataTable), which
+    # silently kept their default light theme. The fix routes theme
+    # CSS through the same channel as every other piece of report
+    # CSS: ``ctx.apply_theme`` now calls ``add_css`` AND attaches
+    # ``stylesheets=[…]`` to shadow-DOM widgets at build time. See
+    # ScriptContext.apply_theme / theme_css for the explicit form.
+    # No magic attribute reads here.
     return template
+
+
+def build_theme_css(tokens: dict[str, str], is_dark: bool) -> str:
+    """Assemble the report-iframe stylesheet for a stamped theme.
+
+    Two layers:
+      1. Declare every ``--voitta-…`` token on ``:root`` so the cascade
+         makes them available to user CSS, ``pn.pane.HTML`` content,
+         and any selector that reaches for ``var(--voitta-…)``.
+      2. A set of surface-targeting rules using those vars — covers the
+         common Panel / Bokeh DOM nodes that would otherwise stay in
+         their default light theme (white #main, light Markdown text,
+         white Tabulator cells, white input chrome).
+
+    Selectors are kept defensive — Panel changes Bokeh class names
+    between minor versions. Where two selectors might both match a
+    surface, we list both rather than rely on internal stability.
+    """
+    var_block = "\n".join(
+        f"  {name}: {value};"
+        for name, value in sorted(tokens.items())
+        if name.startswith("--voitta-")
+    )
+    # Bridge our ``--voitta-*`` namespace into Panel's ``--panel-*``
+    # namespace. Panel's bundled ``native.css`` sets
+    #   body { color: var(--background-text-color); }
+    # where ``--background-text-color`` resolves through a fallback
+    # chain that ends at ``var(--panel-on-background-color)``.  Panel
+    # expects the host page (JupyterLab, VSCode, pydata-sphinx, …) to
+    # define ``--panel-*`` tokens.  In our iframe nobody does — so the
+    # chain falls through to the user-agent default of black-on-white
+    # and Markdown text renders as black-on-dark in dark themes.
+    #
+    # The bridge below maps our four big surface tokens onto Panel's,
+    # which routes every Panel-bundled stylesheet (markdown.css and
+    # friends) through OUR colour palette automatically. Fixes Markdown
+    # bodies + any future pane that consumes the ``--panel-*`` chain
+    # without us needing to chase Panel's selector list.
+    panel_bridge = (
+        "  --panel-background-color: var(--voitta-bg);\n"
+        "  --panel-on-background-color: var(--voitta-text);\n"
+        "  --panel-surface-color: var(--voitta-surface);\n"
+        "  --panel-on-surface-color: var(--voitta-text);\n"
+    )
+    var_block = var_block + "\n" + panel_bridge.rstrip()
+    # The variable block uses both ``:root`` (outer document) AND
+    # ``:host`` (Bokeh widget shadow roots). Same CSS string is
+    # injected into both surfaces:
+    #   * ``ctx.add_css(css)`` → ``template.config.raw_css`` → outer doc
+    #     ``<head>`` — reaches non-shadow widgets (Markdown, Card,
+    #     plain panes).
+    #   * ``stylesheets=[css]`` on a Bokeh widget → widget's shadow
+    #     root — reaches widgets like Tabulator and Bokeh DataTable
+    #     whose chrome lives behind a shadow boundary that outer-doc
+    #     CSS can't pierce.
+    # Using ``:root, :host`` makes the same string work in both
+    # contexts. Without the ``:host`` half, our theme tokens stop at
+    # the shadow boundary and Tabulator falls back to its default
+    # light theme.
+    return f""":root, :host {{
+{var_block}
+  color-scheme: {"dark" if is_dark else "light"};
+}}
+
+/* Outer document — fills the iframe behind everything */
+html, body {{
+  background-color: var(--voitta-bg) !important;
+  color: var(--voitta-text);
+  font-family: var(--voitta-font-sans, system-ui, sans-serif);
+}}
+
+/* Vanilla / Editable templates' main scroll container */
+#container, #main, #content {{
+  background-color: var(--voitta-bg) !important;
+  color: var(--voitta-text);
+}}
+
+/* Bokeh / Panel rendering shells — both classic and post-3.x class names */
+.bk-Panel, .bk-Column, .bk-Row, .bk-clearfix {{
+  color: var(--voitta-text);
+}}
+
+/* Markdown panes carry the bulk of report prose. Bokeh wraps the
+   actual <h1>/<p>/<a> in a Shadow-DOM-free <div> so simple selectors
+   reach in. */
+.bk-Markdown, .markdown-body {{
+  color: var(--voitta-text);
+  background-color: transparent;
+}}
+.bk-Markdown h1, .bk-Markdown h2, .bk-Markdown h3,
+.bk-Markdown h4, .bk-Markdown h5, .bk-Markdown h6,
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {{
+  color: var(--voitta-text);
+  border-color: var(--voitta-divider);
+}}
+.bk-Markdown p, .bk-Markdown li, .bk-Markdown span,
+.markdown-body p, .markdown-body li, .markdown-body span {{
+  color: var(--voitta-text);
+}}
+.bk-Markdown a, .markdown-body a {{
+  color: var(--voitta-link-fg, var(--voitta-accent));
+}}
+.bk-Markdown code, .markdown-body code {{
+  background-color: var(--voitta-code-bg);
+  color: var(--voitta-text);
+}}
+.bk-Markdown pre, .markdown-body pre {{
+  background-color: var(--voitta-code-block-bg);
+  color: var(--voitta-code-block-fg);
+}}
+.bk-Markdown blockquote, .markdown-body blockquote {{
+  color: var(--voitta-text-muted);
+  border-left-color: var(--voitta-accent);
+}}
+.bk-Markdown hr, .markdown-body hr {{
+  border-color: var(--voitta-divider);
+}}
+.bk-Markdown table th, .bk-Markdown table td,
+.markdown-body table th, .markdown-body table td {{
+  border-color: var(--voitta-border);
+}}
+.bk-Markdown table th, .markdown-body table th {{
+  background-color: var(--voitta-surface);
+}}
+
+/* Card containers used by GridSpec / EditableTemplate */
+.bk-Card, .pn-card {{
+  background-color: var(--voitta-surface);
+  border-color: var(--voitta-border);
+  color: var(--voitta-text);
+}}
+.bk-Card-header, .pn-card-header {{
+  background-color: var(--voitta-surface);
+  color: var(--voitta-text);
+  border-color: var(--voitta-divider);
+}}
+
+/* Tabulator tables (pn.widgets.Tabulator)
+ *
+ * Tabulator's bundled tabulator_simple.min.css loads INTO the same
+ * shadow root we inject into and includes hard-coded white
+ * backgrounds via the selector ``.tabulator-row,
+ * .tabulator-row.tabulator-row-even`` (background: #fff).
+ * It uses class-pair selectors (specificity 0-2-0) and gets a
+ * later-cascade-position win on equal specificity. We can't win on
+ * order (Bokeh appends Tabulator's CSS after ours) so we win on
+ * !important — every Tabulator rule below is force-applied. This
+ * also covers cell-level borders that Tabulator paints over our
+ * row-level border-color.
+ *
+ * Even-row stripe: Tabulator uses an explicit class
+ * (.tabulator-row.tabulator-row-even), NOT :nth-child(even) — the
+ * latter doesn't fire because Tabulator's virtualised rows aren't
+ * siblings of the same parent. */
+.tabulator, .tabulator-tableholder {{
+  background-color: var(--voitta-surface) !important;
+  color: var(--voitta-text) !important;
+  border-color: var(--voitta-border) !important;
+}}
+.tabulator-header,
+.tabulator-col,
+.tabulator-col-content {{
+  background-color: var(--voitta-surface) !important;
+  color: var(--voitta-text) !important;
+  border-color: var(--voitta-border) !important;
+}}
+.tabulator-row,
+.tabulator-row.tabulator-row-odd {{
+  background-color: var(--voitta-surface) !important;
+  color: var(--voitta-text) !important;
+  border-color: var(--voitta-divider) !important;
+}}
+.tabulator-row.tabulator-row-even {{
+  background-color: var(--voitta-bg) !important;
+}}
+/* Cell is the actual text container — without an explicit colour
+ * here, Tabulator's bundled per-cell ``color:#333`` wins and rows
+ * stay near-invisible on a dark theme even after the row bg is fixed. */
+.tabulator-cell {{
+  color: var(--voitta-text) !important;
+  border-color: var(--voitta-divider) !important;
+}}
+/* Hover: Tabulator scopes its own hover to .tabulator-selectable;
+ * matching that selector means we override cleanly without
+ * accidentally restyling non-interactive rows. */
+.tabulator-row.tabulator-selectable:hover,
+.tabulator-row:hover {{
+  background-color: var(--voitta-art-row-hover, var(--voitta-divider)) !important;
+}}
+/* Footer / pagination chrome. */
+.tabulator-footer,
+.tabulator-paginator,
+.tabulator-page {{
+  background-color: var(--voitta-surface) !important;
+  color: var(--voitta-text) !important;
+  border-color: var(--voitta-border) !important;
+}}
+.tabulator-page.active {{
+  background-color: var(--voitta-accent) !important;
+  color: var(--voitta-accent-fg, var(--voitta-bg)) !important;
+}}
+.tabulator-footer {{
+  background-color: var(--voitta-surface);
+  color: var(--voitta-text-muted);
+  border-color: var(--voitta-border);
+}}
+
+/* Input widgets — date pickers, select dropdowns, textareas */
+input, textarea, select,
+.bk-input, .pn-input {{
+  background-color: var(--voitta-bg);
+  color: var(--voitta-text);
+  border-color: var(--voitta-border);
+}}
+input:focus, textarea:focus, select:focus,
+.bk-input:focus, .pn-input:focus {{
+  border-color: var(--voitta-accent);
+  outline: 2px solid var(--voitta-accent-tint, transparent);
+  outline-offset: -1px;
+}}
+
+/* Buttons (pn.widgets.Button) */
+button.bk-btn, .pn-button {{
+  background-color: var(--voitta-surface);
+  color: var(--voitta-text);
+  border-color: var(--voitta-border);
+}}
+button.bk-btn:hover, .pn-button:hover {{
+  background-color: var(--voitta-accent-tint, var(--voitta-surface));
+}}
+button.bk-btn.bk-btn-primary {{
+  background-color: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+  border-color: var(--voitta-accent);
+}}
+
+/* Tabs (pn.Tabs) */
+.bk-Tabs .bk-tab {{
+  background-color: var(--voitta-surface);
+  color: var(--voitta-text-muted);
+  border-color: var(--voitta-border);
+}}
+.bk-Tabs .bk-tab.bk-active {{
+  background-color: var(--voitta-bg);
+  color: var(--voitta-text);
+  border-bottom-color: var(--voitta-accent);
+}}
+
+/* Plotly defaults to white modebar background — wash it out */
+.modebar {{
+  background-color: transparent !important;
+}}
+.modebar-btn path {{
+  fill: var(--voitta-text-muted) !important;
+}}
+.modebar-btn:hover path {{
+  fill: var(--voitta-text) !important;
+}}
+"""
+
+
+def _record_server_error(
+    render_events_mod,
+    render_id: str,
+    report_id: str,
+    exc: BaseException,
+    *,
+    source: str,
+) -> None:
+    """Push a server-side render exception into the render_events store.
+
+    Mirrors the iframe-shim path so ``show_holoviz_report`` and
+    ``get_report_render_errors`` surface failures regardless of where
+    they happened. ``render_id`` may be empty in the rare case a report
+    is opened directly in a browser tab without an awaiting tool — the
+    persistent per-report log still captures it for a later
+    ``get_report_render_errors`` call.
+    """
+    import traceback
+
+    msg = f"{type(exc).__name__}: {exc}"
+    try:
+        stack = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    except Exception:
+        stack = None
+    try:
+        render_events_mod.record(
+            render_id=render_id or "server-direct",
+            report_id=report_id or "(unknown)",
+            kind="error",
+            message=msg,
+            stack=stack,
+            source=source,
+        )
+    except Exception:
+        # Recording must never crash the request handler — that's the
+        # whole point of this helper.
+        log.exception("render_events.record failed (best-effort)")
 
 
 def _error_layout(message: str):
@@ -269,20 +628,40 @@ def panel_factory():
     Called by ``panel.io.fastapi`` once per session connection; we read
     session-scoped query params and dispatch to either the user's stored
     report script or the mock fallback.
+
+    Two layers of error capture funnel through ``render_events.record``
+    so the LLM-facing ``show_holoviz_report`` / ``get_report_render_errors``
+    tools see *every* failure path, not just iframe-side JS:
+
+      1. ``ScriptError`` from ``report_script_layout`` — user script body
+         raised. Same path we've always had; the resulting error layout
+         is wrapped normally and the shim captures the failure too.
+      2. Anything from ``_wrap_template`` — Panel parameter validation,
+         template instantiation, theme-CSS assembly. These fire *after*
+         the user script returned cleanly, so prior versions of this
+         function let them bubble straight out of ``panel_factory``,
+         which makes Panel render its bare Bokeh 500 page in the iframe
+         with no shim injected → the awaiting tool times out with an
+         empty ``errors[]`` and the LLM is flying blind.
+
+    Server-side records carry ``source="server"`` so the LLM can tell
+    them apart from iframe-side ``window.error`` reports.
     """
 
     # Lazy imports so FastAPI startup doesn't pay the Panel/Bokeh cost.
-    from app.services import panel_renderer
+    from app.services import panel_renderer, render_events
     from app.services.scripts import ScriptError, report_script_layout
 
     report_id = _read_session_arg("id", default="")
     editable = _read_session_arg("editable", default="false").lower() == "true"
+    render_id = _read_session_arg("render_id", default="")
     title = f"Report {report_id}" if report_id else "Report"
 
     try:
         layout = report_script_layout(report_id) if report_id else None
     except ScriptError as exc:
         log.warning("report script %r failed: %s", report_id, exc)
+        _record_server_error(render_events, render_id, report_id, exc, source="server:script")
         layout = _error_layout(str(exc))
 
     if layout is None:
@@ -291,4 +670,31 @@ def panel_factory():
     # Always wrap — the template injects the shim that captures
     # render-time errors and signals ready. ``editable`` controls
     # whether Muuri activates drag/resize.
-    return _wrap_template(layout, title, editable=editable)
+    try:
+        return _wrap_template(layout, title, editable=editable)
+    except Exception as exc:
+        # Template-stage failures (Panel param validation, theme CSS,
+        # type coercion) don't reach the iframe shim because Panel
+        # serves an HTML error page directly. Record into the same
+        # store the shim uses so show_holoviz_report wakes up with
+        # the error in hand, and render a visible error layout
+        # (re-wrapped under the safest path: VanillaTemplate, no
+        # promotion, no theme).
+        log.warning(
+            "_wrap_template raised for report %r: %s", report_id, exc,
+        )
+        _record_server_error(
+            render_events, render_id, report_id, exc, source="server:template",
+        )
+        try:
+            return _wrap_template(
+                _error_layout(f"{type(exc).__name__}: {exc}"),
+                title,
+                editable=False,
+            )
+        except Exception:
+            # If even the error-layout wrap fails, fall back to a bare
+            # Column so Panel still has SOMETHING to render. Better a
+            # plain markdown traceback than the Bokeh 500.
+            log.exception("error-layout wrap also failed for %r", report_id)
+            return _error_layout(f"{type(exc).__name__}: {exc}")

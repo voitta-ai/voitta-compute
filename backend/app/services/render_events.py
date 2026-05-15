@@ -89,6 +89,13 @@ class _RenderState:
     started_at: float
     events: list[RenderEvent] = field(default_factory=list)
     ready: asyncio.Event | None = None  # set when ANY event lands
+    # Loop captured at begin_await() time. We can't rely on
+    # ``ready._loop`` — Python 3.10+ doesn't bind asyncio.Event to a
+    # loop at construction; ``_loop`` stays None until ``wait()`` is
+    # called. If we wait until then to look it up, ``record()`` paths
+    # that fire BEFORE the awaiter has called wait() (the normal race
+    # for fast server-side errors) drop the signal.
+    ready_loop: asyncio.AbstractEventLoop | None = None
     completed_at: float | None = None
 
 
@@ -120,6 +127,9 @@ def begin_await(render_id: str, report_id: str) -> asyncio.Event:
             _states[render_id] = st
         if st.ready is None:
             st.ready = asyncio.Event()
+        # Capture the running loop so record() can signal across thread
+        # boundaries even when the awaiter hasn't called wait() yet.
+        st.ready_loop = loop
         # If events arrived BEFORE the await registered (race), surface them
         # immediately by pre-setting the event.
         if st.events:
@@ -175,8 +185,10 @@ def record(
         if kind in ("ready", "error") and st.completed_at is None:
             st.completed_at = ev.ts
         if st.ready is not None:
-            # Signal across thread boundaries via the loop the awaiter is on.
-            loop = st.ready._loop  # type: ignore[attr-defined]
+            # Signal across thread boundaries via the loop the awaiter
+            # registered on. Capturing at begin_await() time (not now)
+            # is what makes the race work — see _RenderState.ready_loop.
+            loop = st.ready_loop
             if loop is not None and not loop.is_closed():
                 loop.call_soon_threadsafe(st.ready.set)
     _gc_states()

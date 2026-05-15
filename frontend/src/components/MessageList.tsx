@@ -177,7 +177,19 @@ export function MessageList({ messages, streamingItems, streaming, error }: Prop
           const display = m.content.replace(/^\(current url: [^)]*\)\n\n/, "");
           return (
             <div key={i} class="msg user">
-              {display}
+              {m.attachments && m.attachments.length > 0 && (
+                <div class="msg-attachments">
+                  {m.attachments.map((att, j) => (
+                    <img
+                      key={`${i}-${j}`}
+                      src={att.dataUrl}
+                      alt=""
+                      class="msg-attachment"
+                    />
+                  ))}
+                </div>
+              )}
+              {display && <div class="msg-text">{display}</div>}
             </div>
           );
         }

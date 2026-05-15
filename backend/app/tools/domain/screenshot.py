@@ -339,7 +339,16 @@ registry.register(
             "Known limit: Bokeh WebGL canvases (rare — most plots are "
             "2D) come out blank because the bitmap is cleared after "
             "compositing. If a plot looks blank in the screenshot, "
-            "that's why; the data is still correct in the report."
+            "that's why; the data is still correct in the report.\n"
+            "\n"
+            "DO NOT use this tool to verify a Three.js / WebGL / "
+            "`ctx.three_scene` report. The scene runs inside a sandboxed "
+            "<iframe srcdoc> that html2canvas (in the parent document) "
+            "cannot reach into — you will always get a blank canvas, "
+            "regardless of whether the scene is rendering correctly. "
+            "A blank screenshot of a Three.js report means NOTHING "
+            "about whether the scene works. Ask the user what they see "
+            "instead. See docs/09-panel-threejs-reports.md for details."
         ),
         input_schema={
             "type": "object",

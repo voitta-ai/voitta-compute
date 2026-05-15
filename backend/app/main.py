@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.routes.chat import router as chat_router
 from app.routes.cli import router as cli_router
+from app.routes.plugins import router as plugins_router
 from app.routes.providers import router as providers_router
 from app.routes.tools import router as tools_router
 
@@ -139,6 +140,54 @@ async def _allow_private_network(request: Request, call_next):
 app.include_router(chat_router, prefix="/api")
 app.include_router(tools_router)
 app.include_router(providers_router)
+# Plugin diagnostics + MCP refresh control. Routes already carry the
+# /api/plugins prefix internally, so we mount without an extra prefix.
+app.include_router(plugins_router)
+
+
+@app.on_event("startup")
+async def _bootstrap_plugins_and_mcp() -> None:
+    """One-shot plugin discovery + MCP connector probe at boot.
+
+    Two phases, in order:
+
+    1. ``discover_plugins()`` walks ``plugins/*``, imports each
+       plugin's Python module so its ``ToolSpec`` registrations land
+       on the global registry, AND records ``mcp_servers`` manifest
+       entries as MCP connector declarations. This used to run as a
+       module-load side effect in ``app.tools.providers``; it's
+       deferred to startup now to avoid a circular import (the
+       discovery path needs ``app.services.mcp`` which back-loads
+       ``app.tools.__init__``).
+
+    2. ``refresh_all()`` opens one streamable-http connection per
+       connector, lists remote tools, synthesises ``ToolSpec``s.
+       Per the design contract this is the only automatic probe —
+       further refreshes come from the Settings "Refresh tool list"
+       button.
+
+    Failures are absorbed so a down MCP server doesn't block startup;
+    affected connectors show ``unreachable`` in the Settings panel.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        from app.tools.providers import discover_plugins
+
+        discover_plugins()
+    except Exception:
+        # Plugin discovery failing at startup is unusual but shouldn't
+        # take the backend down — core tools still work, just no
+        # plugin-contributed ones.
+        log.exception("plugin discovery raised")
+
+    try:
+        from app.services.mcp import refresh_all as _refresh_mcp
+
+        await _refresh_mcp()
+    except Exception:
+        log.exception("MCP startup refresh raised")
 # Localhost-only back-channel for external automation (Claude Code,
 # scripts). NOT exposed to the in-pane chat LLM. See app/routes/cli.py.
 app.include_router(cli_router)
@@ -288,6 +337,22 @@ async def panel_shim_js():
     js = """(function(){
   // ---- 1. parent → iframe action bridge (undo/reset/screenshot) -----------
   window.addEventListener('message', function(e){
+    // Errors forwarded from a NESTED srcdoc iframe (e.g. ctx.three_scene's
+    // sandboxed viewer). e.source is the child iframe's window, not
+    // window.parent — so the parent-only filter below would drop them.
+    // Promote into the standard render-error stream so
+    // get_report_render_errors picks them up.
+    if (e.data && e.data.type === 'voitta_nested_error' && e.source !== window.parent) {
+      _emitError({
+        message: e.data.message,
+        stack: e.data.stack,
+        source: 'nested:' + (e.data.source || 'unknown'),
+        url: e.data.url,
+        line: e.data.line,
+        col: e.data.col
+      });
+      return;
+    }
     if (e.source !== window.parent) return;
     var a = e.data && e.data.voittaAction;
     if (a === 'screenshot') {

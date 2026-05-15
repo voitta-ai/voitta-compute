@@ -423,8 +423,10 @@ async def _web_fetch(args: dict[str, Any], ctx: ToolCtx) -> dict[str, Any]:
         "message": (
             f"Refusing to inline binary content-type {content_type!r}. "
             "web_fetch only returns readable text (HTML, plain text, "
-            "JSON, PDF). For images / archives / other binaries, ask "
-            "the user — there's no download-to-storage variant yet."
+            "JSON, PDF). For images / archives / other binaries, use "
+            "``fetch_to_python_storage(url=...)`` instead — it pulls "
+            "the bytes into python_storage and hands you a handle "
+            "that run_compute / ctx.snapshot can read."
         ),
     }
 
@@ -433,14 +435,22 @@ registry.register(
     ToolSpec(
         name="web_fetch",
         description=(
-            "Fetch a single URL by HTTP GET and return its readable text. "
-            "Use for pulling articles, docs, JSON APIs, or PDFs from the "
-            "open web.\n"
+            "Fetch a single URL by HTTP GET and return its readable text "
+            "inline. Use for reading articles, docs, JSON APIs, or PDFs "
+            "from the open web as context for your reasoning.\n"
             "\n"
             "Returns text only — boilerplate-stripped from HTML (so you "
             "get article body + page title, not nav/footer/ads), pretty-"
             "printed for JSON, page-extracted for PDF. Other binaries "
             "(images, archives) are refused.\n"
+            "\n"
+            "Use ``fetch_to_python_storage`` instead when you need the "
+            "file as bytes for a downstream Python script (large PDFs "
+            "you'll parse with pypdf, CSVs you'll load with pandas, "
+            "datasets you'll iterate over, anything that wouldn't fit "
+            "comfortably in your context window). ``web_fetch`` puts "
+            "the text in context; ``fetch_to_python_storage`` puts the "
+            "file on disk and gives you a handle.\n"
             "\n"
             "Redirects are followed (up to 5). The request looks like a "
             "regular Chrome navigation (real User-Agent, client hints, "

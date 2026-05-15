@@ -24,27 +24,35 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
+import uuid
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from google import genai
 from google.genai import types as genai_types
 
 from app.services.llm.base import (
+    BaseProvider,
     Message,
     NormalisedRequest,
-    NormalisedResponse,
-    Provider,
     Usage,
+)
+from app.services.llm.stream import (
+    BlockDelta,
+    BlockStart,
+    BlockStop,
+    MessageStop,
+    StreamEvent,
 )
 
 
-class GeminiProvider(Provider):
+class GeminiProvider(BaseProvider):
     id = "gemini"
 
     def __init__(self, api_key: str) -> None:
         self._client = genai.Client(api_key=api_key)
 
-    async def create_message(self, req: NormalisedRequest) -> NormalisedResponse:
+    def _build_request(self, req: NormalisedRequest) -> dict[str, Any]:
         contents = _messages_to_contents(req.messages)
         config = genai_types.GenerateContentConfig(
             system_instruction=req.system,
@@ -66,13 +74,107 @@ class GeminiProvider(Provider):
             config.tool_config = genai_types.ToolConfig(
                 function_calling_config=genai_types.FunctionCallingConfig(mode="AUTO")
             )
+        return {"model": req.model, "contents": contents, "config": config}
 
-        result = await self._client.aio.models.generate_content(
-            model=req.model,
-            contents=contents,
-            config=config,
+    def stream(self, req: NormalisedRequest):
+        return _GeminiStreamCM(self._client, self._build_request(req))
+
+
+class _GeminiStreamCM:
+    """Async context manager for `generate_content_stream`.
+
+    Walks `candidates[0].content.parts[]` per chunk. Consecutive text Parts
+    coalesce into one logical text block until a function_call Part
+    interrupts. function_call Parts arrive complete in a single chunk
+    (verified empirically 2026-05-14, see /tmp/gemini_stream_probe.py), so
+    we emit BlockStart + BlockDelta(tool_args) + BlockStop back-to-back.
+    """
+
+    def __init__(self, client: genai.Client, request: dict[str, Any]) -> None:
+        self._client = client
+        self._request = request
+        self._stream_obj = None
+
+    async def __aenter__(self) -> AsyncIterator[StreamEvent]:
+        self._stream_obj = await self._client.aio.models.generate_content_stream(
+            **self._request
         )
-        return _from_gemini(result, model=req.model)
+        return self._iter_events(self._stream_obj)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        # google-genai's stream object doesn't expose an explicit close;
+        # the underlying transport is GC'd. If a closer becomes available
+        # in a future SDK version, wire it here.
+        self._stream_obj = None
+        return False
+
+    @staticmethod
+    async def _iter_events(stream_obj: Any) -> AsyncIterator[StreamEvent]:
+        next_block_index = 0
+        open_text_bi: int | None = None
+        had_tool = False
+        usage = Usage()
+        finish_str = ""
+
+        async for chunk in stream_obj:
+            cands = getattr(chunk, "candidates", None) or []
+            cand = cands[0] if cands else None
+            if cand is not None:
+                fr = getattr(cand, "finish_reason", None)
+                if fr:
+                    finish_str = str(fr)
+            cand_content = getattr(cand, "content", None) if cand is not None else None
+            parts = getattr(cand_content, "parts", None) or []
+
+            for p in parts:
+                text = getattr(p, "text", None)
+                fc = getattr(p, "function_call", None)
+                if text:
+                    if open_text_bi is None:
+                        open_text_bi = next_block_index
+                        next_block_index += 1
+                        yield BlockStart(block_index=open_text_bi, kind="text")
+                    yield BlockDelta(block_index=open_text_bi, kind="text", text=text)
+                elif fc is not None:
+                    if open_text_bi is not None:
+                        yield BlockStop(block_index=open_text_bi)
+                        open_text_bi = None
+                    bi = next_block_index
+                    next_block_index += 1
+                    had_tool = True
+                    args_dict = dict(getattr(fc, "args", {}) or {})
+                    yield BlockStart(
+                        block_index=bi,
+                        kind="tool_use",
+                        tool_id=f"gemini_call_{uuid.uuid4().hex}",
+                        tool_name=getattr(fc, "name", "") or "",
+                    )
+                    if args_dict:
+                        yield BlockDelta(
+                            block_index=bi,
+                            kind="tool_args",
+                            text=json.dumps(args_dict, default=str),
+                        )
+                    yield BlockStop(block_index=bi)
+
+            u = getattr(chunk, "usage_metadata", None)
+            if u is not None:
+                usage.input_tokens = getattr(u, "prompt_token_count", 0) or 0
+                usage.output_tokens = getattr(u, "candidates_token_count", 0) or 0
+                usage.cache_read_input_tokens = (
+                    getattr(u, "cached_content_token_count", 0) or 0
+                )
+
+        if open_text_bi is not None:
+            yield BlockStop(block_index=open_text_bi)
+
+        if had_tool:
+            stop_reason = "tool_use"
+        elif "MAX_TOKENS" in finish_str:
+            stop_reason = "max_tokens"
+        else:
+            stop_reason = "end_turn"
+        yield MessageStop(stop_reason=stop_reason, usage=usage)  # type: ignore[arg-type]
 
 
 # ---- request translation -----------------------------------------------
@@ -88,6 +190,16 @@ def _messages_to_contents(messages: list[Message]) -> list[dict[str, Any]]:
             for b in m.content:
                 if b.get("type") == "text" and b.get("text"):
                     parts.append({"text": b["text"]})
+                elif b.get("type") == "image":
+                    src = b.get("source") or {}
+                    parts.append(
+                        {
+                            "inline_data": {
+                                "mime_type": src.get("media_type", "image/png"),
+                                "data": src.get("data", ""),
+                            }
+                        }
+                    )
                 elif b.get("type") == "tool_result":
                     raw = b.get("content", "")
                     response: Any
@@ -168,58 +280,3 @@ def _sanitize_schema(input_schema: Any) -> Any:
     return out
 
 
-# ---- response translation ----------------------------------------------
-
-
-def _from_gemini(result: Any, *, model: str) -> NormalisedResponse:
-    content: list[dict[str, Any]] = []
-    has_tool = False
-    seq = 0
-    ts = int(time.time() * 1000)
-
-    candidates = getattr(result, "candidates", None) or []
-    cand = candidates[0] if candidates else None
-    parts = []
-    if cand is not None:
-        cand_content = getattr(cand, "content", None)
-        parts = getattr(cand_content, "parts", None) or []
-
-    for p in parts:
-        text = getattr(p, "text", None)
-        function_call = getattr(p, "function_call", None)
-        if text:
-            content.append({"type": "text", "text": text})
-        elif function_call is not None:
-            has_tool = True
-            content.append(
-                {
-                    "type": "tool_use",
-                    "id": f"gemini_call_{ts}_{seq}",
-                    "name": getattr(function_call, "name", "") or "",
-                    "input": dict(getattr(function_call, "args", {}) or {}),
-                }
-            )
-            seq += 1
-
-    if has_tool:
-        stop_reason = "tool_use"
-    else:
-        finish = getattr(cand, "finish_reason", None) if cand is not None else None
-        finish_str = str(finish) if finish else ""
-        stop_reason = "max_tokens" if "MAX_TOKENS" in finish_str else "end_turn"
-
-    raw_usage = getattr(result, "usage_metadata", None)
-    usage = Usage(
-        input_tokens=getattr(raw_usage, "prompt_token_count", 0) or 0,
-        output_tokens=getattr(raw_usage, "candidates_token_count", 0) or 0,
-        cache_read_input_tokens=getattr(raw_usage, "cached_content_token_count", 0) or 0,
-        cache_creation_input_tokens=0,
-    )
-
-    return NormalisedResponse(
-        content=content,
-        stop_reason=stop_reason,  # type: ignore[arg-type]
-        usage=usage,
-        model=model,
-        raw=result,
-    )

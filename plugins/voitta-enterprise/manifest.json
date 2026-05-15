@@ -3,10 +3,46 @@
   "agent_name": "Voitta",
   "hide_brand": true,
   "default_layout": "chat-left",
-  "version": "0.1.0",
-  "description": "Voitta Enterprise portal plugin — scaffolding for tools and primitives on enterprise.voitta.ai.",
+  "version": "0.2.0",
+  "description": "Voitta Enterprise portal plugin — enterprise.voitta.ai branding plus the voitta-rag-enterprise MCP integration.",
   "host_patterns": ["enterprise.voitta.ai"],
   "python_module": "voitta_enterprise",
   "frontend_bundle": "frontend/widget.ts",
-  "docs_dir": "docs"
+  "docs_dir": "docs",
+
+  "mcp_servers": [
+    {
+      "id": "vre",
+      "url_setting": "plugins.voitta-enterprise.mcp.url",
+      "auth": {
+        "type": "bearer",
+        "token_setting": "plugins.voitta-enterprise.mcp.api_key"
+      },
+      "tool_prefix": "vre_",
+      "expose_tools": "*",
+      "transport": "streamable-http"
+    }
+  ],
+
+  "settings_schema": {
+    "title": "Voitta RAG Enterprise · MCP",
+    "fields": [
+      {
+        "key": "plugins.voitta-enterprise.mcp.url",
+        "type": "url",
+        "label": "Server URL",
+        "default": "http://localhost:8000/mcp",
+        "placeholder": "http://host:port/mcp",
+        "help": "localhost:8001/mcp for `make mcp`; 8000/mcp for the unified `make dev` app."
+      },
+      {
+        "key": "plugins.voitta-enterprise.mcp.api_key",
+        "type": "secret",
+        "label": "API key",
+        "placeholder": "vk_…",
+        "help": "Mint in the Enterprise SPA → Settings → API keys. Optional in local-dev modes (VOITTA_SINGLE_USER / VOITTA_DEV_USER)."
+      }
+    ],
+    "status_probe": "mcp:vre"
+  }
 }

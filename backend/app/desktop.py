@@ -507,11 +507,21 @@ class VoittaMenuBarApp(rumps.App):
             self._log.info("show_settings: alert dismissed response=%s", response)
 
     def show_data_folder(self, _sender) -> None:
-        # Open the writable data dir in Finder for the user to inspect
-        # snapshots, logs, scripts.
-        if not PROJECT_ROOT.exists():
-            PROJECT_ROOT.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["open", str(PROJECT_ROOT)], check=False)
+        # Open ``python_storage/`` — the canonical artefact store where
+        # snapshots, downloads, query results, and curves all live.
+        #
+        # We used to open PROJECT_ROOT, but that's only sensible in the
+        # packaged .app (where PROJECT_ROOT == ~/Library/Application
+        # Support/Voitta Bookmarklet/, exclusively writable data). In a
+        # source checkout PROJECT_ROOT IS the repo root, so the user
+        # saw a Finder window full of source files instead of the data
+        # artefacts they were after. python_storage/ is a strict subdir
+        # in both modes — clean signal, no source noise. The broader
+        # data dir is one ↑ click away if needed.
+        from app.services.python_storage import STORAGE_ROOT
+
+        STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(STORAGE_ROOT)], check=False)
 
     def recreate_certs(self, _sender) -> None:
         """Regenerate the TLS cert pair via mkcert and prompt the user

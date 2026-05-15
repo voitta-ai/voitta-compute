@@ -62,6 +62,16 @@ export interface Settings {
   // on the left. "chat-left": mirrored. The server-side default is set via
   // VOITTA_DEFAULT_LAYOUT; the user can override here.
   layout: "chat-right" | "chat-left";
+  // Plugin-namespaced settings tree. Each loaded plugin gets its own
+  // sub-object — the manifest's ``settings_schema`` fields reference
+  // dot-paths like ``plugins.<name>.<...>``. The backend reads these
+  // same dot-paths in :func:`app.services.mcp.registry._dotted_get`
+  // when resolving an MCP server's URL + bearer token.
+  //
+  // Stored as an opaque ``unknown``-valued dict so the core type
+  // doesn't need to learn about every plugin's fields. Plugins access
+  // their slice via :func:`getPluginSetting` / :func:`setPluginSetting`.
+  plugins: Record<string, Record<string, unknown>>;
 }
 
 export const MODELS_BY_PROVIDER: Record<ProviderId, string[]> = {
@@ -105,6 +115,7 @@ export const DEFAULT_SETTINGS: Settings = {
   driveDownloadViaPickup: false,
   pickupDownloadsDir: "~/Downloads",
   layout: "chat-right",
+  plugins: {},
 };
 
 const listeners = new Set<(s: Settings) => void>();
@@ -241,7 +252,59 @@ function sanitise(s: Settings): Settings {
         ? s.pickupDownloadsDir.trim()
         : DEFAULT_SETTINGS.pickupDownloadsDir,
     layout: s.layout === "chat-left" ? "chat-left" : "chat-right",
+    // Plugins tree: shallow-copy the object so identity-based listeners
+    // notice changes; per-plugin shape is left opaque because the
+    // schemas are plugin-defined.
+    plugins:
+      s.plugins && typeof s.plugins === "object" && !Array.isArray(s.plugins)
+        ? { ...(s.plugins as Record<string, Record<string, unknown>>) }
+        : {},
   };
+}
+
+/** Walk a dot-path like ``plugins.voitta-enterprise.mcp.url`` through
+ * the settings blob. Returns ``undefined`` for any missing segment.
+ *
+ * Mirror of the backend's ``_dotted_get`` helper in
+ * ``app.services.mcp.registry`` — same path syntax, same shape. Plugin
+ * settings_schema fields reference dot-paths so the same string works
+ * on both sides of the wire. */
+export function getDotted(s: Settings, path: string): unknown {
+  let cur: unknown = s as unknown;
+  for (const part of path.split(".")) {
+    if (cur === null || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+    if (cur === undefined) return undefined;
+  }
+  return cur;
+}
+
+/** Apply a dot-path patch onto a deep-cloned settings blob and return
+ * the new value. Intermediate objects are created on demand; existing
+ * sibling fields are preserved. Pass via :func:`saveSettings` to persist.
+ *
+ * Only used for plugin settings today (``plugins.<name>.<key>``). The
+ * core top-level fields stay flat and use the regular ``saveSettings``
+ * patch shape — no reason to route them through this. */
+export function setDotted(s: Settings, path: string, value: unknown): Settings {
+  // Cheap deep-clone for the path we're touching: walk a copy. We don't
+  // structuredClone the whole settings blob because most of it is
+  // primitives and shallow copies are fine for listener identity.
+  const out: Record<string, unknown> = { ...(s as unknown as Record<string, unknown>) };
+  const parts = path.split(".");
+  let cur: Record<string, unknown> = out;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    const existing = cur[k];
+    const next: Record<string, unknown> =
+      existing && typeof existing === "object" && !Array.isArray(existing)
+        ? { ...(existing as Record<string, unknown>) }
+        : {};
+    cur[k] = next;
+    cur = next;
+  }
+  cur[parts[parts.length - 1]] = value;
+  return out as unknown as Settings;
 }
 
 function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
