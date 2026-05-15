@@ -240,6 +240,15 @@ class ScriptContext:
         # both in one call.
         self._raw_css: list[str] = []
 
+        # Design + template-theme intent. Both default to None, meaning
+        # "don't touch Panel's defaults" — calling ``ctx.set_design`` /
+        # ``ctx.set_template_theme`` sets them, and ``panel_app._wrap_template``
+        # reads them via the explicit ctx handoff (no magic attribute
+        # stamping on the layout). See ``ctx.set_design`` for the full
+        # design vocabulary.
+        self._design: str | None = None
+        self._template_theme: str | None = None
+
     # ---- data access -----------------------------------------------------
 
     def snapshot(self, handle: str) -> dict:
@@ -897,6 +906,134 @@ __USER_SCENE_JS__
         _attach_shadow_stylesheets(layout, css)
         return layout
 
+    # ── Design / template theme — Panel-native scheme machinery ─────────
+
+    _VALID_DESIGNS = ("material", "bootstrap", "fast", "native")
+    _VALID_TEMPLATE_THEMES = ("default", "dark")
+
+    def set_design(self, name: str) -> None:
+        """Pick a Panel **design** for widget chrome (Material / Bootstrap /
+        Fast / Native).
+
+        Panel's design system attaches a curated set of CSS variables AND
+        per-widget-class modifiers (e.g. Bootstrap design tells Tabulator
+        to use its ``bootstrap5`` built-in theme). This single call covers
+        widget chrome for nearly every widget class — the equivalent of
+        threading ``stylesheets=`` through dozens of widgets by hand.
+
+        Panel-side reference: ``panel/theme/{material,bootstrap,fast,
+        native}.py``. Setting a design from inside ``build(ctx)`` is
+        equivalent to ``pn.config.design = Material`` (the class, not the
+        string) — we accept the string form here and let
+        ``panel_app._wrap_template`` resolve to the class.
+
+        Default: unset → no design applied → Panel's compatibility chrome
+        (the closest thing to "raw HTML defaults").
+
+        Use this when you want widgets that look properly themed without
+        hand-rolling stylesheets. Compose with ``ctx.apply_theme`` to
+        overlay your ``--voitta-*`` palette on top of the design's
+        built-in colours.
+        """
+        if name not in self._VALID_DESIGNS:
+            raise ValueError(
+                f"ctx.set_design name must be one of {self._VALID_DESIGNS}, "
+                f"got {name!r}"
+            )
+        self._design = name
+
+    def set_template_theme(self, name: str) -> None:
+        """Pick a Panel **template theme** — ``default`` (light) or
+        ``dark``.
+
+        Drives ``pn.config.theme`` which Panel's templates and bundled
+        bokeh figures read at render time. Light/dark switches a number
+        of Panel-internal variables (header background, sidebar fill,
+        Bokeh figure background) — independent of design.
+
+        Set this in tandem with ``ctx.apply_theme(...)`` and
+        ``ctx.set_design(...)`` for a fully-coordinated dark report on a
+        dark host.
+        """
+        if name not in self._VALID_TEMPLATE_THEMES:
+            raise ValueError(
+                f"ctx.set_template_theme name must be one of "
+                f"{self._VALID_TEMPLATE_THEMES}, got {name!r}"
+            )
+        self._template_theme = name
+
+    # ── fill_cards — make resizable cards stretch their content ─────────
+
+    def fill_cards(self, layout: Any) -> Any:
+        """Promote ``sizing_mode="stretch_both"`` recursively on charts /
+        tables / layouts inside ``layout``.
+
+        Why this exists: when a report is shown in **editable mode**
+        (Muuri drag-resize), Panel's ``EditableTemplate`` only flips the
+        top-level root to ``stretch_both`` on its ``document_ready``
+        hook. Reports that wrap a chart in ``pn.Column(header, figure)``
+        therefore don't propagate vertical resize to the inner figure —
+        the Column stretches but the figure stays at its declared height,
+        leaving whitespace below.
+
+        Calling this BEFORE returning from ``build(ctx)`` walks the layout
+        and flips the inner panes/widgets to ``stretch_both`` so resize
+        works as expected. Skipped types: ``Markdown`` / ``HTML`` /
+        indicators / individual input widgets — those should keep their
+        natural size or controls become chart-shaped voids.
+
+        Only relevant for editable reports. Calling it on a non-editable
+        report is harmless (the override only matters when something
+        resizes the container).
+
+        Returns ``layout`` unchanged so the call chains naturally::
+
+            return ctx.apply_theme(
+                ctx.fill_cards(pn.GridSpec(...)),
+                host="enterprise.voitta.ai",
+            )
+        """
+        # Lazy import — keeps panel_app's responsive-type tuple
+        # canonical and Panel's imports cheap at module load.
+        from app.services.panel_app import _promote_sizing_mode
+
+        _promote_sizing_mode(layout)
+        return layout
+
+    # ── add_widget_stylesheets — explicit single-widget version ────────
+
+    def add_widget_stylesheets(self, widget: Any, css: str) -> Any:
+        """Append ``css`` to a single widget's ``stylesheets`` list.
+
+        The explicit, single-widget version of what ``apply_theme`` does
+        in bulk. Use this when you want to theme ONE widget differently
+        from the rest of the layout (e.g. a callout Tabulator with a
+        warning palette).
+
+        Raises ``TypeError`` if ``widget`` doesn't expose a
+        ``stylesheets`` attribute — that's almost always a sign you're
+        passing the wrong object (a Bokeh primitive or a layout).
+
+        Returns ``widget`` so the call chains naturally::
+
+            t = ctx.add_widget_stylesheets(
+                pn.widgets.Tabulator(df),
+                ctx.theme_css(overrides={"--voitta-surface": "#7f1d1d"}),
+            )
+        """
+        if not isinstance(css, str) or not css.strip():
+            return widget
+        if not hasattr(widget, "stylesheets"):
+            raise TypeError(
+                f"ctx.add_widget_stylesheets: {type(widget).__name__} has no "
+                f"stylesheets attribute (use ctx.add_css for non-shadow-DOM "
+                f"styling, or pass the actual widget instance)."
+            )
+        existing = list(widget.stylesheets or [])
+        existing.append(css)
+        widget.stylesheets = existing
+        return widget
+
     def log(self, *args: Any) -> None:
         if len(self._log_lines) >= MAX_LOG_LINES:
             return
@@ -1301,12 +1438,20 @@ def edit_script(kind: str, name: str, edits: list[dict]) -> dict:
     return {"name": slug, "code_path": str(code_path), "applied": applied}
 
 
-def report_script_layout(report_id: str) -> Any | None:
-    """Run a stored report script and return its Panel layout.
+def report_script_layout(
+    report_id: str,
+) -> tuple[Any, "ScriptContext"] | None:
+    """Run a stored report script and return ``(layout, ctx)``.
 
     Returns ``None`` if no script with slugified ``report_id`` exists —
     the caller (typically ``app.services.panel_app.panel_factory``)
     falls back to the mock layout in that case.
+
+    The ``ctx`` returned alongside the layout carries everything the
+    user's ``build(ctx)`` accumulated: ``ctx._raw_css``, ``ctx._js_files``,
+    ``ctx._design``, ``ctx._template_theme``. ``panel_app._wrap_template``
+    reads these explicitly rather than via a hidden attribute on
+    ``layout`` — keeps the data flow visible.
 
     Synchronous on purpose: it's called inside a Bokeh session document,
     where async wait isn't useful and ``run_in_executor`` would just add
@@ -1343,27 +1488,7 @@ def report_script_layout(report_id: str) -> Any | None:
         _update_run_meta(
             "reports", slug, ok=ok, run_id=run_id, elapsed_s=elapsed_s, error=error
         )
-    # Forward any ctx.add_js() registrations onto the layout so the
-    # template wrapper can merge them into ``js_files`` (see
-    # app.services.panel_app._wrap_template).
-    if layout is not None and ctx._js_files:
-        try:
-            layout._voitta_extra_js_files = dict(ctx._js_files)
-        except (AttributeError, TypeError):
-            # Some Bokeh objects refuse arbitrary attributes; that's OK,
-            # the user just doesn't get the extra scripts.
-            pass
-    # Same plumbing for ctx.add_css() / ctx.apply_theme() outer-doc
-    # CSS — stamped under a separate attr so _wrap_template can route
-    # into ``template.config.raw_css``. apply_theme additionally walks
-    # the layout itself to attach shadow-DOM stylesheets at build
-    # time — see ScriptContext.apply_theme.
-    if layout is not None and ctx._raw_css:
-        try:
-            layout._voitta_extra_raw_css = list(ctx._raw_css)
-        except (AttributeError, TypeError):
-            pass
-    return layout
+    return layout, ctx
 
 
 # Cap the smoke-test error message so the LLM doesn't burn its context

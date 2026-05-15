@@ -231,10 +231,10 @@ HARD RULE, NOT A SUGGESTION:
   ║                              corpus="docs")                  ║
   ║                    Read 17-flow-authoring-guide.md hits.    ║
   ║                                                              ║
-  ║    HoloViz    ─►  rag_query(query="define_report build ctx  ║
-  ║                              Panel layout theming",          ║
+  ║    HoloViz    ─►  rag_query(query="HoloViz report authoring ║
+  ║                              ctx surface design theme tokens",║
   ║                              corpus="docs")                  ║
-  ║                    Read 07-report-scripts.md and             ║
+  ║                    Read 18-holoviz-authoring-guide.md and    ║
   ║                    15-theming-architecture.md hits.          ║
   ║                                                              ║
   ║  Skip the lookup ONLY when the user explicitly says "don't   ║
@@ -255,13 +255,36 @@ mappings:
     crowded → 17-flow-authoring-guide.md § 6 (Decision shapes — \
     picking the right shape).
   • shadow-DOM widget not themed (Tabulator etc.) → \
-    15-theming-architecture.md § Limit 4.
+    15-theming-architecture.md § Limit 4 + \
+    18-holoviz-authoring-guide.md § ctx.apply_theme.
   • CSS rejected by safe-list → 16-flow-reports.md § Visual \
     customization (style escape hatch).
+  • ListLike / wrong return type → 18-holoviz-authoring-guide.md § 6 \
+    (Return value rules — return a content layout, NOT a template).
+  • SlickGrid stylesheet race → 18-holoviz-authoring-guide.md § \
+    Common mistakes (swap pn.widgets.DataFrame for Tabulator).
+
+WHEN THE DOCS DON'T COVER IT — Panel internals lookup: \
+If the smoke_error / render_error references a Panel/Bokeh class or \
+selector that isn't covered in our docs (e.g. ReactiveHTML internals, \
+a specific Tabulator method name, a Bokeh theme attribute), reach \
+for the AUTHORITATIVE PANEL SOURCE via the voitta_rag_search MCP \
+tool:
+
+    voitta_rag_search(query="<offending class or selector>",
+                      include_folders=["Panel HoloViz Source"])
+
+That index contains the full Panel + Bokeh source tree (~6000 chunks) \
+including panel/template/*, panel/theme/*, panel/widgets/*, \
+panel/reactive.py, and the bundled Tabulator CSS. Same pattern as \
+ReactFlow source lookups for flow-chart debugging. Use the SOURCE \
+when our docs say "this is documented in the upstream library" — \
+priors on Panel internals are unreliable.
 
 STYLE — these reports are emotional pivots in the conversation, not \
 throwaway sketches. After grounding in the docs:
 
+  Flow charts:
   • Tones deliberately: info=entry, success=happy end, \
     critical=failure, warning=stakes/SLA. All-default = boring.
   • Icons that say something specific (`git-merge` for merges, \
@@ -271,6 +294,20 @@ throwaway sketches. After grounding in the docs:
     labels). This is the engineering-schematic vocabulary the user \
     actually cares about; using `rect` here is the #1 cause of \
     "this looks wrong" feedback.
+
+  HoloViz reports:
+  • Set all three theming axes for a polished result: \
+    ctx.set_design('material') + ctx.set_template_theme('dark') + \
+    ctx.apply_theme(layout, host=...). Skipping any of them on a \
+    dark host produces white widgets surrounded by your tokens — \
+    the worst of all worlds.
+  • matplotlib palette must be set BEFORE plotting via plt.rcParams \
+    pulled from ctx.get_theme()['palette']. Setting it after = the \
+    figure renders with default white backgrounds.
+  • Tabulator > DataFrame, always. DataFrame's SlickGrid stylesheet \
+    race silently breaks reports inside EditableTemplate.
+  • Return a content layout (Column / GridSpec / Card), NEVER a \
+    pn.template.*. The host wraps for you.
 
 SAFETY:
 

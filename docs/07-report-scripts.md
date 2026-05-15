@@ -1,6 +1,8 @@
 # Report scripts — Panel + matplotlib best practices
 
-Report scripts are stored Python files of the form `def build(ctx) -> pn.viewable.Viewable`. The Panel-served route `/panel/reports?id=<slug>` calls `build(ctx)` once per browser session, returns the layout, and Bokeh serialises that document to the iframe. See [01-architecture.md](01-architecture.md) for the bigger picture; this doc is just the matplotlib-embedding rules.
+Report scripts are stored Python files of the form `def build(ctx) -> pn.viewable.Viewable`. The Panel-served route `/panel/reports?id=<slug>` calls `build(ctx)` once per browser session, returns the layout, and Bokeh serialises that document to the iframe.
+
+> **For authoring guidance** — what to put inside `build(ctx)`, when to use which ctx helper, design / theme axes, common patterns, and the worked example — see [18-holoviz-authoring-guide.md](18-holoviz-authoring-guide.md). This file is the **infrastructure reference**: lifecycle, embedding rules, server-side error plumbing. See [01-architecture.md](01-architecture.md) for the bigger picture; this doc is just the matplotlib-embedding rules.
 
 ## Return a plain layout — NEVER a template
 

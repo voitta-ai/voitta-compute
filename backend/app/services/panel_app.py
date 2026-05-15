@@ -49,6 +49,34 @@ def _read_session_arg(name: str, default: str = "") -> str:
 _PROMOTABLE_FROM = (None, "fixed", "stretch_width", "stretch_height")
 
 
+def _resolve_design(name: str):
+    """Resolve a design name ('material'/'bootstrap'/'fast'/'native')
+    to the Panel Design CLASS that template constructors expect.
+
+    Panel's ``pn.config.design`` and ``Template(design=…)`` both expect
+    a Design subclass (not a string). The user-facing ``ctx.set_design()``
+    accepts the LLM-friendly string form; this is the resolver.
+    """
+    import panel as pn
+
+    name_l = name.lower()
+    # Panel's import paths: panel.theme.{material,bootstrap,fast,native}
+    # — each module exports the class with the title-cased name.
+    if name_l == "material":
+        from panel.theme.material import Material
+        return Material
+    if name_l == "bootstrap":
+        from panel.theme.bootstrap import Bootstrap
+        return Bootstrap
+    if name_l == "fast":
+        from panel.theme.fast import Fast
+        return Fast
+    if name_l == "native":
+        from panel.theme.native import Native
+        return Native
+    raise ValueError(f"unknown design {name!r}")
+
+
 def _responsive_types_tuple() -> tuple[type, ...]:
     """Panel/widget classes whose content should fill an editable card.
 
@@ -133,7 +161,13 @@ def _promote_sizing_mode(obj: Any, _seen: set[int] | None = None) -> None:
         _promote_sizing_mode(child, _seen)
 
 
-def _wrap_template(layout: Any, title: str, *, editable: bool):
+def _wrap_template(
+    layout: Any,
+    title: str,
+    *,
+    editable: bool,
+    ctx: Any = None,
+):
     """Wrap ``layout`` in a Panel template so the report iframe always
     loads our JS shim (``/api/_panel_shim.js``).
 
@@ -150,6 +184,18 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
       2. Signals "document ready" so the await wakes up cleanly on
          success.
 
+    The ``ctx`` parameter is the ``ScriptContext`` from the user's
+    ``build(ctx)`` call — passed in explicitly by ``panel_factory``
+    (no magic layout-attribute stamping). We read:
+
+      * ``ctx._raw_css`` → appended to ``template.config.raw_css``
+      * ``ctx._js_files`` → merged into the template's ``js_files``
+      * ``ctx._design`` → resolved to a Design class for the template
+      * ``ctx._template_theme`` → forwarded as ``theme=``
+
+    When ``ctx`` is ``None`` (mock layouts, error layouts), none of
+    these are applied.
+
     Why two template classes:
       * ``editable=True`` → ``EditableTemplate`` (Muuri drag-resize +
         undo/reset toolbar buttons, hidden behind our own header).
@@ -158,12 +204,6 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
         unconditionally references ``roots.editor`` — which only exists
         when ``editable=True`` — so ``EditableTemplate(editable=False)``
         crashes with ``ValueError: root with 'editor' name not found``.
-        VanillaTemplate is the lightest template that still threads
-        ``js_files`` through the same resource pipeline.
-
-    Both templates accept ``js_files`` via ``_base_config.param.update``
-    (see panel/template/base.py:127–130 — kwargs matching ``_base_config``
-    params get applied to ``self.config``).
 
     If ``layout`` is a ``pn.Column`` we splat ``.objects`` into ``main``;
     anything else becomes a single main entry.
@@ -176,25 +216,15 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
     else:
         main = [layout]
 
-    # In editable mode, propagate stretch_both deep into each card so
-    # resizing actually reflows the inner chart/table — Panel's own
-    # ready hook only flips the top-level root. See _promote_sizing_mode.
-    if editable:
-        for item in main:
-            _promote_sizing_mode(item)
-
-    # Report scripts can request extra <script src=...> entries via
-    # ``ctx.add_js(name, url)``; report_script_layout forwards them onto
-    # ``layout._voitta_extra_js_files``. We merge them into the template's
-    # ``js_files`` kwarg so they end up in the iframe's <head>. Script
-    # names must not collide with voitta's own entries below — we win.
+    # Merge user-supplied js_files from ctx.add_js() into our shim
+    # entries. Reserved names ("voitta_panel_shim", "voitta_html2canvas")
+    # win — the shim is load-bearing.
     extra_js: dict[str, str] = {}
-    raw_extra = getattr(layout, "_voitta_extra_js_files", None)
-    if isinstance(raw_extra, dict):
-        for k, v in raw_extra.items():
+    if ctx is not None:
+        for k, v in (ctx._js_files or {}).items():
             if isinstance(k, str) and isinstance(v, str) and k and v:
                 if k in ("voitta_panel_shim", "voitta_html2canvas"):
-                    continue  # don't let scripts shadow our shim
+                    continue
                 extra_js[k] = v
 
     common_kwargs: dict[str, Any] = dict(
@@ -217,6 +247,17 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
             **extra_js,
         },
     )
+
+    # Resolve ctx-supplied design/theme to constructor kwargs. ``design``
+    # accepts a Design CLASS (Material / Bootstrap / Fast / Native);
+    # ``theme`` accepts "default" or "dark" — both are read by Panel's
+    # BasicTemplate constructor and apply per-template (no leak to other
+    # sessions). Default None → Panel falls back to its own defaults.
+    if ctx is not None:
+        if ctx._design is not None:
+            common_kwargs["design"] = _resolve_design(ctx._design)
+        if ctx._template_theme is not None:
+            common_kwargs["theme"] = ctx._template_theme
 
     if editable:
         template = pn.template.EditableTemplate(
@@ -272,19 +313,14 @@ def _wrap_template(layout: Any, title: str, *, editable: bool):
         """
     )
 
-    # Report scripts can stamp ctx.add_css(...) blocks onto the layout.
-    # Each entry is a raw CSS string that the user wanted in the iframe's
-    # document <head>. We append into the per-template raw_css list so
-    # the CSS lands as a real <style> block in <head>, sibling to Panel's
-    # bundled stylesheets — the same path our own theme CSS uses below.
-    # Routing via ``pn.pane.HTML('<style>…</style>')`` would not work:
-    # Panel sanitises HTML panes (entity-encodes the text), so the
-    # browser sees "&lt;style&gt;…" inside a <div>, not a stylesheet,
-    # and the rules never reach widgets in the outer document
-    # (Tabulator, Bokeh DataTable, Plotly modebar).
-    raw_css_extras = getattr(layout, "_voitta_extra_raw_css", None)
-    if isinstance(raw_css_extras, list):
-        for css in raw_css_extras:
+    # ctx.add_css() / ctx.apply_theme() raw CSS — routed into the
+    # template's raw_css list. Lands as a real <style> block in <head>,
+    # sibling to Panel's bundled stylesheets. The naive alternative
+    # ``pn.pane.HTML('<style>…</style>')`` does NOT work — Panel
+    # sanitises HTML panes, so rules become literal text in a <div>
+    # and never reach Tabulator / Bokeh widgets.
+    if ctx is not None:
+        for css in (ctx._raw_css or []):
             if isinstance(css, str) and css.strip():
                 template.config.raw_css.append(css)
 
@@ -657,29 +693,31 @@ def panel_factory():
     render_id = _read_session_arg("render_id", default="")
     title = f"Report {report_id}" if report_id else "Report"
 
+    layout: Any = None
+    ctx: Any = None
     try:
-        layout = report_script_layout(report_id) if report_id else None
+        if report_id:
+            result = report_script_layout(report_id)
+            if result is not None:
+                layout, ctx = result
     except ScriptError as exc:
         log.warning("report script %r failed: %s", report_id, exc)
         _record_server_error(render_events, render_id, report_id, exc, source="server:script")
         layout = _error_layout(str(exc))
+        # ctx stays None — error layouts don't carry user-supplied
+        # raw_css / js_files / design / theme.
 
     if layout is None:
         layout = panel_renderer.mock_layout(report_id or "(unspecified)")
 
     # Always wrap — the template injects the shim that captures
     # render-time errors and signals ready. ``editable`` controls
-    # whether Muuri activates drag/resize.
+    # whether Muuri activates drag/resize. ``ctx`` carries
+    # ctx.add_css / ctx.add_js / ctx.set_design / ctx.set_template_theme
+    # explicitly (no magic layout-attribute reads).
     try:
-        return _wrap_template(layout, title, editable=editable)
+        return _wrap_template(layout, title, editable=editable, ctx=ctx)
     except Exception as exc:
-        # Template-stage failures (Panel param validation, theme CSS,
-        # type coercion) don't reach the iframe shim because Panel
-        # serves an HTML error page directly. Record into the same
-        # store the shim uses so show_holoviz_report wakes up with
-        # the error in hand, and render a visible error layout
-        # (re-wrapped under the safest path: VanillaTemplate, no
-        # promotion, no theme).
         log.warning(
             "_wrap_template raised for report %r: %s", report_id, exc,
         )

@@ -84,7 +84,31 @@ def build(ctx):
 
 `ctx.apply_theme(layout, host=…)` is a 4-line convenience that does steps 1-3 for you — it walks the layout, finds the shadow-DOM widget classes (Tabulator, DataTable, DatePicker, DatetimePicker, DateRangePicker, DatetimeRangePicker), and appends `css` to each one's `stylesheets`. Use it when you're happy with the defaults; reach for the explicit three-line form when you want one widget unthemed, want different overrides per widget, etc.
 
-There's no `_voitta_theme_tokens` attribute, no post-build server transform. The CSS is just text — the LLM can `print(ctx.theme_css(host=...))` and see exactly what's about to be injected.
+There's no hidden post-build server transform, no magic attribute stamped on the layout. The `ctx` your `build()` mutated is passed *explicitly* into `_wrap_template` — its `_raw_css`, `_js_files`, `_design`, `_template_theme` slots are read directly. The CSS is just text — the LLM can `print(ctx.theme_css(host=...))` and see exactly what's about to be injected, or `ctx.log(ctx.theme_css(host=...))` to surface it in the tool result.
+
+### Three orthogonal axes (Panel-native)
+
+Theming has three independent layers, all opt-in:
+
+1. **Design** — `ctx.set_design("material"|"bootstrap"|"fast"|"native")`. Picks a Panel-native widget chrome family. Sets per-class modifiers (Tabulator's built-in theme, Card padding, button styling) automatically. Default: unset → Panel's bare defaults.
+2. **Template theme** — `ctx.set_template_theme("default"|"dark")`. Drives Panel's light/dark scheme on the template wrapper (header bg, sidebar fill, bundled Bokeh figure colours). Default: unset → Panel's `default`.
+3. **Tokens** — `ctx.apply_theme(layout, host=…)`. Overlays the host's `--voitta-*` palette on top of (1) and (2). This is YOUR palette winning over Panel's.
+
+The three compose cleanly because they target different selectors:
+
+```
+┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
+│ Design          │  │ Template theme  │  │ apply_theme     │
+│                 │  │                 │  │                 │
+│ Tabulator chr.  │  │ #header bg      │  │ --voitta-*      │
+│ Button shape    │  │ Bokeh fig bg    │  │ surfaces        │
+│ Card padding    │  │ Sidebar fill    │  │ accents         │
+│ Slider styling  │  │                 │  │ typography      │
+│ Form chrome     │  │                 │  │ Markdown text   │
+└─────────────────┘  └─────────────────┘  └─────────────────┘
+```
+
+For a fully-coordinated dark report on a dark host: set all three.
 
 ## Surfaces — what gets themed automatically
 

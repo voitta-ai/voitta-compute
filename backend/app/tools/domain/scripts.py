@@ -36,6 +36,68 @@ from app.services import scripts
 from app.tools.registry import ToolCtx, ToolSpec, registry
 
 
+# Pattern-based doc-section hints for HoloViz report smoke errors. When
+# build(ctx) raises something matching one of these substrings, we
+# include the corresponding hint so the LLM goes straight to the right
+# doc section instead of guessing.
+#
+# Pattern matching is intentionally substring-based and ORDERED — the
+# first match wins. Add more entries as patterns surface in real
+# tracebacks; conservative is fine, we'd rather miss a hint than give
+# a wrong one.
+_REPORT_ERROR_HINTS: list[tuple[str, str]] = [
+    (
+        "ListLike",
+        "Looks like you returned a pn.template.* from build(ctx). "
+        "Return a content layout (Column / Row / GridSpec / Card) "
+        "instead — the host wraps it in EditableTemplate itself. See "
+        "docs/18-holoviz-authoring-guide.md § Return value.",
+    ),
+    (
+        "stylesheets",
+        "Stylesheets-related error. Shadow-DOM widgets (Tabulator, "
+        "DataTable, date pickers, Markdown / HTML / Str panes) need "
+        "ctx.add_widget_stylesheets or ctx.apply_theme — outer-doc CSS "
+        "can't pierce their shadow roots. See "
+        "docs/15-theming-architecture.md § Limit 4.",
+    ),
+    (
+        "SlickGrid",
+        "SlickGrid stylesheet race. Common with pn.widgets.DataFrame "
+        "inside EditableTemplate. Switch to pn.widgets.Tabulator. See "
+        "docs/07-report-scripts.md § Tables.",
+    ),
+    (
+        "RecursionError",
+        "Recursive layout — usually a self-reference or a circular "
+        "include in a pn.pane.HTML. See "
+        "docs/18-holoviz-authoring-guide.md § Common mistakes.",
+    ),
+    (
+        "no module named",
+        "Import error in the script. The full venv is available "
+        "(pandas, numpy, scipy, matplotlib, panel, holoviews, bokeh, "
+        "h5py, plotly, …) but exotic libs aren't. List what's "
+        "available with `import importlib.util; importlib.util.find_spec(...)`.",
+    ),
+]
+
+
+def _smoke_error_hint(smoke_error: str | None) -> str | None:
+    """Return a doc-section hint for a smoke-test traceback.
+
+    Substring-matches the FIRST entry in ``_REPORT_ERROR_HINTS`` whose
+    pattern appears in the error. None if nothing matches — the caller
+    falls back to the generic 'fix via edit_report_script' hint.
+    """
+    if not smoke_error:
+        return None
+    for pattern, hint in _REPORT_ERROR_HINTS:
+        if pattern.lower() in smoke_error.lower():
+            return hint
+    return None
+
+
 # ---- run_compute ----------------------------------------------------------
 
 
@@ -212,12 +274,20 @@ async def _define_report(args: dict[str, Any], ctx: ToolCtx) -> Any:
     }
     if smoke_error:
         response["smoke_error"] = smoke_error
-        response["hint"] = (
-            f"The script was saved, but build(ctx) raised at smoke-test time. "
-            f"Fix it via edit_report_script (or another define_report) and "
-            f"re-test before calling show_holoviz_report(report_id="
-            f"{rec['name']!r})."
-        )
+        pattern_hint = _smoke_error_hint(smoke_error)
+        if pattern_hint:
+            response["hint"] = pattern_hint + (
+                f" Fix via edit_report_script(name={rec['name']!r}, ...) "
+                f"and re-test."
+            )
+        else:
+            response["hint"] = (
+                f"The script was saved, but build(ctx) raised at smoke-test "
+                f"time. rag_query 'docs' corpus for "
+                f"'18-holoviz-authoring-guide' if the error class is "
+                f"unfamiliar, then fix via "
+                f"edit_report_script(name={rec['name']!r}, ...) and re-test."
+            )
     else:
         response["hint"] = (
             f"Use show_holoviz_report(report_id={rec['name']!r}) to open it "
@@ -230,56 +300,49 @@ registry.register(
     ToolSpec(
         name="define_report",
         description=(
-            "Define-or-update a report script. The script is persisted "
-            "under `scripts/reports/<name>.py`. Rendering happens once "
-            "per browser session at /panel/reports?id=<name> (live Panel "
-            "app, not static HTML) — open the pane via "
+            "Define-or-update a HoloViz Panel report. Persisted under "
+            "`scripts/reports/<name>/code.py`. Open via "
             "`show_holoviz_report(report_id=<name>)`.\n"
             "\n"
-            "Script signature: `def build(ctx) -> pn.viewable.Viewable`.\n"
+            "BEFORE AUTHORING: rag_query docs corpus for "
+            "'18-holoviz-authoring-guide' — picks ctx surface, themes, "
+            "design system, gotchas. Do not author from priors; the API "
+            "evolves.\n"
             "\n"
-            "ctx is the same ScriptContext as run_compute — except "
-            "ctx.text / ctx.image / ctx.log have NO effect for report "
-            "scripts (the layout itself IS the output). Use "
-            "ctx.snapshot() / ctx.dataframe() / ctx.raw() to load data; "
-            "compose the layout with `import panel as pn` and return it.\n"
+            "Script signature: `def build(ctx) -> pn.viewable.Viewable`. "
+            "Return a content layout (Column / Row / GridSpec / Card) — "
+            "NOT a pn.template.*. The host wraps in EditableTemplate.\n"
             "\n"
-            "Report-only ctx helpers (no effect in run_compute):\n"
-            "  • ctx.add_js(name, url)  → adds <script src=...> to iframe <head>\n"
-            "  • ctx.add_css(css_text)  → outer-document <head> CSS. Reaches\n"
-            "    Markdown / Card / inputs / template chrome. Does NOT reach\n"
-            "    shadow-DOM widgets (Tabulator, Bokeh DataTable, date pickers).\n"
-            "    `pn.pane.HTML('<style>…')` does NOT work — Panel\n"
-            "    entity-encodes HTML panes, so rules become literal text in\n"
-            "    a <div>.\n"
-            "  • ctx.theme_css(host=…) → returns the theme as a CSS STRING.\n"
-            "    Pass it to ctx.add_css for outer doc, AND/OR pass via\n"
-            "    stylesheets=[css] on shadow-DOM widgets — same string works\n"
-            "    in both because the variable block uses ':root, :host'.\n"
-            "  • ctx.apply_theme(layout, host=…) → convenience: calls\n"
-            "    add_css + walks layout to attach stylesheets= on every\n"
-            "    Tabulator/DataTable/DatePicker. Use this by default; reach\n"
-            "    for theme_css+add_css explicitly when you want one widget\n"
-            "    unthemed.\n"
-            "  • ctx.three_scene(scene_js, …) → interactive 3D pane.\n"
+            "ctx surface (full reference in 18-holoviz-authoring-guide):\n"
+            "  • Data:    ctx.snapshot/dataframe/raw(handle)\n"
+            "  • CSS:     ctx.add_css(css) → outer-doc <head>\n"
+            "             ctx.add_widget_stylesheets(w, css) → shadow root\n"
+            "  • JS:      ctx.add_js(name, url) → outer-doc <head>\n"
+            "  • Theme:   ctx.get_theme(host=) / ctx.theme_css(host=)\n"
+            "             ctx.apply_theme(layout, host=) — sugar over\n"
+            "               add_css + add_widget_stylesheets for every\n"
+            "               Tabulator / DataTable / DatePicker / Markdown\n"
+            "               / HTML / Str in the layout.\n"
+            "  • Design:  ctx.set_design('material'|'bootstrap'|'fast'|'native')\n"
+            "             — Panel's native widget design system; covers\n"
+            "             most widget chrome via per-class modifiers.\n"
+            "  • Theme:   ctx.set_template_theme('default'|'dark')\n"
+            "             — Panel's light/dark template scheme.\n"
+            "  • Cards:   ctx.fill_cards(layout) — promote stretch_both\n"
+            "             into inner panes so editable-mode resize actually\n"
+            "             reflows charts. Opt-in.\n"
+            "  • 3D:      ctx.three_scene(scene_js, bg=)\n"
+            "  • Debug:   ctx.log(*args)\n"
             "\n"
-            "Return value MUST be a content layout (pn.Column / Row / Card),\n"
-            "NOT a pn.template.*. The host wraps your layout in EditableTemplate\n"
-            "itself; nesting templates throws `ListLike` validation errors\n"
-            "(source='server:template') before the iframe even loads.\n"
+            "Theming axes (independent, layer cleanly):\n"
+            "  1. Design  — set_design picks Panel widget chrome.\n"
+            "  2. Template theme — set_template_theme picks light/dark.\n"
+            "  3. Tokens — apply_theme overlays --voitta-* on top.\n"
+            "All three default to OFF (Panel's bare defaults).\n"
             "\n"
-            "The full Panel + HoloViews + bokeh + matplotlib surface is "
-            "available. Default to matplotlib.pyplot (rendered to PNG and "
-            "wrapped with `pn.pane.PNG`) unless interactivity is "
-            "explicitly required — then reach for Bokeh / HoloViews. "
-            "120 s default render timeout.\n"
-            "\n"
-            "After persisting, the tool runs `build(ctx)` once as a smoke "
-            "test. If it raises, the truncated traceback (~1500 bytes) is "
-            "returned in `smoke_error` and the tool result includes a hint "
-            "to fix it via `edit_report_script` BEFORE calling "
-            "`show_holoviz_report` — otherwise the user will see a red "
-            "error page in the iframe."
+            "Smoke test: tool re-runs build(ctx) after persist. Failures "
+            "land in `smoke_error` with a doc-section hint. Fix via "
+            "edit_report_script before calling show_holoviz_report."
         ),
         input_schema={
             "type": "object",
@@ -466,6 +529,9 @@ async def _edit_report_script(args: dict[str, Any], ctx: ToolCtx) -> Any:
     }
     if smoke_error:
         response["smoke_error"] = smoke_error
+        pattern_hint = _smoke_error_hint(smoke_error)
+        if pattern_hint:
+            response["hint"] = pattern_hint
     return response
 
 
