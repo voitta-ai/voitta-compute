@@ -63,6 +63,31 @@ _VALID_BACKGROUNDS = ("dots", "lines", "cross", "none")
 _VALID_DECISION_SHAPES = ("rect", "port", "diamond", "junction")
 _VALID_MARKERS = ("arrow", "arrow-closed", "none")
 _VALID_COLOR_MODES = ("light", "dark", "system", "auto")
+_VALID_PALETTES = ("light", "dark")
+
+
+# Canonical palette presets. These are the SOURCE OF TRUTH for the
+# diagram-level node-body look; they ship verbatim on the wire so the
+# LLM can `ctx.log(p.to_dict())` and see exactly what's being applied.
+# Per-node `style=` overrides win at the CSS cascade level; plugin
+# `theme.css` `:host { --voitta-flow-node-*: ... }` overrides win at
+# the variable-resolution level.
+PALETTE_PRESETS: dict[str, dict[str, str]] = {
+    "light": {
+        "node_bg":       "#f8fafc",
+        "node_fg":       "#0f172a",
+        "node_fg_muted": "#475569",
+        "node_fg_faint": "#64748b",
+        "node_border":   "#cbd5e1",
+    },
+    "dark": {
+        "node_bg":       "#1e293b",   # slate-800
+        "node_fg":       "#e2e8f0",
+        "node_fg_muted": "#94a3b8",
+        "node_fg_faint": "#64748b",
+        "node_border":   "#334155",
+    },
+}
 
 
 # ─── CSS safe-list ─────────────────────────────────────────────────────────
@@ -362,12 +387,48 @@ class FlowBuilder:
         class on the wrapper and swaps an internal CSS-variable bundle
         (``--xy-edge-stroke``, ``--xy-node-background``, etc.) for
         better contrast.
+
+        NB: ``color_mode`` controls ReactFlow's internal chrome (Controls
+        panel, attribution). For NODE BODY colours, use ``p.palette(...)``
+        (or per-node ``style=`` overrides). The two are independent.
         """
         if mode not in _VALID_COLOR_MODES:
             raise FlowBuilderError(
                 f"color_mode must be one of {_VALID_COLOR_MODES}, got {mode!r}"
             )
         self._config["color_mode"] = mode
+        return self
+
+    def palette(self, name: str = "light") -> "FlowBuilder":
+        """Pick the node-body palette for this diagram.
+
+        Two presets — ``"light"`` (default) and ``"dark"``. The selected
+        preset ships verbatim on the wire under ``config.palette`` and
+        is applied as inline CSS variables on the ReactFlow wrapper
+        (no class-name automation, no specificity wars).
+
+        Override hierarchy:
+
+          1. Per-node ``style={...}`` wins (CSS cascade).
+          2. Diagram-level ``p.palette(...)`` wins over plugin theme.
+          3. Plugin ``theme.css`` ``:host { --voitta-flow-node-*: ... }``
+             wins over the bare defaults.
+
+        Resolved palette dict (5 keys — ``node_bg`` / ``node_fg`` /
+        ``node_fg_muted`` / ``node_fg_faint`` / ``node_border``)::
+
+            ctx.log(p.to_dict()["process"]["config"]["palette"])
+
+        Tones (info / success / warning / critical / default) are
+        INDEPENDENT — they style the title bar and outgoing edges and
+        are not affected by ``palette``.
+        """
+        if name not in _VALID_PALETTES:
+            raise FlowBuilderError(
+                f"palette must be one of {_VALID_PALETTES}, got {name!r}"
+            )
+        self._config["palette"] = dict(PALETTE_PRESETS[name])
+        self._config["palette_name"] = name
         return self
 
     def background(self, kind: str) -> "FlowBuilder":

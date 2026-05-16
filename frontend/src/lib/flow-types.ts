@@ -90,6 +90,14 @@ export interface FlowGroup {
   color: string;
 }
 
+export interface FlowPalette {
+  node_bg: string;
+  node_fg: string;
+  node_fg_muted: string;
+  node_fg_faint: string;
+  node_border: string;
+}
+
 export interface FlowConfig {
   direction?: FlowDirection;
   layout_engine?: FlowLayoutEngine;
@@ -98,6 +106,10 @@ export interface FlowConfig {
   background?: FlowBackground;
   show_minimap?: boolean;
   color_mode?: FlowColorMode;
+  // Node-body palette — five resolved colour values. When unset, the
+  // diagram uses the bare token defaults from theme.css (light cards).
+  palette?: FlowPalette;
+  palette_name?: "light" | "dark";
   title_block?: {
     drawing_id?: string;
     rev?: string;

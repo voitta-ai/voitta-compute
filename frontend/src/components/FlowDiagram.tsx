@@ -37,6 +37,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { layoutFlow } from "../lib/flow-layout";
 import type {
+  FlowConfig,
   FlowConnection,
   FlowDefinition,
   FlowEdgeStyle,
@@ -122,27 +123,21 @@ function stepToNode(
   };
 }
 
-// Probe whether `--voitta-bg` (read from a node INSIDE the shadow root)
-// resolves to a dark or light colour. Returns null if the value can't
-// be parsed — caller falls back to "light".
-function detectColorMode(el: Element | null): "dark" | "light" | null {
-  if (!el || typeof window === "undefined") return null;
-  const bg = getComputedStyle(el).getPropertyValue("--voitta-bg").trim();
-  if (!bg) return null;
-  // Tokens are usually 6-char hex; accept 3-char hex too.
-  let m = bg.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-  let r: number, g: number, b: number;
-  if (m) {
-    r = parseInt(m[1], 16); g = parseInt(m[2], 16); b = parseInt(m[3], 16);
-  } else {
-    m = bg.match(/^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i);
-    if (!m) return null;
-    r = parseInt(m[1] + m[1], 16);
-    g = parseInt(m[2] + m[2], 16);
-    b = parseInt(m[3] + m[3], 16);
-  }
-  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return lum < 0.5 ? "dark" : "light";
+// Build inline-style CSS variable bindings for the diagram-level
+// palette. The result is dropped onto the ReactFlow wrapper as a
+// `style` prop so the variables resolve via inline-style specificity,
+// which beats both `theme.css` `:host { ... }` defaults AND any
+// plugin-supplied theme.css overrides. Per-node `style={...}` still
+// wins above this layer (separate cascade level).
+function paletteInlineStyle(palette: FlowConfig["palette"]): React.CSSProperties {
+  if (!palette) return {};
+  return {
+    ["--voitta-flow-node-bg" as any]:       palette.node_bg,
+    ["--voitta-flow-node-fg" as any]:       palette.node_fg,
+    ["--voitta-flow-node-fg-muted" as any]: palette.node_fg_muted,
+    ["--voitta-flow-node-fg-faint" as any]: palette.node_fg_faint,
+    ["--voitta-flow-node-border" as any]:   palette.node_border,
+  };
 }
 
 export function FlowDiagram({ definition, onReady, onError }: Props) {
@@ -152,30 +147,22 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
   const showMinimap = !!cfg.show_minimap;
   const titleBlock = cfg.title_block;
 
-  // Wrapper ref lives INSIDE the widget's shadow DOM, so
-  // getComputedStyle(wrapperRef.current) resolves :host { --voitta-* }
-  // variables correctly. document.documentElement does NOT — that's
-  // the host page's <html>, which has no --voitta-* tokens.
-  const wrapperRef = useRef<HTMLDivElement | null>(null);
-  const [resolvedMode, setResolvedMode] = useState<ColorMode>("light");
-
-  // For explicit "dark" / "light" / "system" — use directly.
-  // For "auto" (or unset → defaults to auto) — probe the wrapper post-mount.
-  useEffect(() => {
+  // color_mode for ReactFlow's internal chrome (Controls panel,
+  // attribution, edge stroke fallbacks). "auto" is treated as
+  // matching the palette name when present, otherwise "light".
+  // Simple and predictable — no DOM probe, no async resolve.
+  const colorModeProp: ColorMode = (() => {
     const m = cfg.color_mode;
-    if (m === "dark" || m === "light" || m === "system") {
-      setResolvedMode(m);
-      return;
-    }
-    // auto: probe after mount; rAF gives the DOM one tick to settle
-    // any pending plugin-theme-link load.
-    const probe = () => {
-      const mode = detectColorMode(wrapperRef.current);
-      if (mode) setResolvedMode(mode);
-    };
-    const id = requestAnimationFrame(probe);
-    return () => cancelAnimationFrame(id);
-  }, [cfg.color_mode]);
+    if (m === "dark" || m === "light" || m === "system") return m;
+    if (cfg.palette_name === "dark") return "dark";
+    return "light";
+  })();
+
+  // Diagram-level palette → inline CSS variables on the wrapper.
+  // Inline-style specificity beats `theme.css` :host defaults but
+  // loses to per-node `style={...}` overrides — exactly the cascade
+  // we want.
+  const paletteStyle = paletteInlineStyle(cfg.palette);
 
   const [layoutState, setLayoutState] = useState<
     | { kind: "loading" }
@@ -242,8 +229,16 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
   return (
     <ReactFlowProvider>
       <div
-        ref={wrapperRef}
-        style={{ width: "100%", height: "100%", position: "relative" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          position: "relative",
+          // Diagram-level palette as inline CSS variables. Each
+          // .flow-node inside reads var(--voitta-flow-node-*) — these
+          // bindings win over theme.css defaults but lose to per-node
+          // style={...}, exactly the cascade we want.
+          ...paletteStyle,
+        }}
       >
         <ReactFlow
           nodes={layoutState.nodes}
@@ -258,7 +253,7 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
           // in styles.css so arrowheads automatically follow the
           // stroke colour.
           defaultMarkerColor={null as unknown as string}
-          colorMode={resolvedMode}
+          colorMode={colorModeProp}
           elevateEdgesOnSelect={true}
           fitView
           fitViewOptions={{ padding: 0.15 }}

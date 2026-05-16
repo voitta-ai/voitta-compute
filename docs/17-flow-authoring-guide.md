@@ -24,7 +24,8 @@ def build(ctx):
     p.edge_style("smoothstep")
     p.edge_options(border_radius=8, offset=20, step_position=0.5)
     p.background("dots")
-    p.color_mode("auto")
+    p.palette("dark")          # node body colours; "light" default
+    p.color_mode("auto")       # ReactFlow internal chrome; follows palette
 
     # steps
     p.trigger(...)
@@ -348,20 +349,72 @@ Lower `step_position` (e.g. 0.2) makes the trunk turn close to the
 source — useful for fan-out from a single hub. Higher (e.g. 0.8) puts
 the turn near the target — useful when many edges converge on one node.
 
-## 6.6. `color_mode` — dark / light scheme
+## 6.6. `palette` — node body colours (THE main control)
 
 ```python
-p.color_mode("auto")     # derive from host theme (recommended)
+p.palette("light")   # default — light cards
+p.palette("dark")    # dark cards
+```
+
+Picks the **node-body palette** for this diagram: background, text,
+muted text, faint text, border. The selected preset ships verbatim
+on the wire under `config.palette` — five keys, fully visible:
+
+```python
+ctx.log(p.to_dict()["process"]["config"]["palette"])
+# {"node_bg": "#1e293b", "node_fg": "#e2e8f0",
+#  "node_fg_muted": "#94a3b8", "node_fg_faint": "#64748b",
+#  "node_border": "#334155"}
+```
+
+Applied as inline CSS variables on the ReactFlow wrapper. **No
+class-name automation, no media queries, no luminance probe**.
+What you set is what renders.
+
+### Override hierarchy (most-specific wins)
+
+```
+per-node style={"background": "#7f1d1d"}    ← LLM, wins everything
+        │
+diagram p.palette("dark")                   ← LLM, diagram default
+        │
+plugin theme.css :host {                    ← plugin author, host default
+  --voitta-flow-node-bg: ...; }
+        │
+bare CSS-token default                      ← built-in light card
+```
+
+### Per-node override pattern
+
+```python
+p.activity("normal", "Standard step")  # uses palette default
+p.activity("hot", "Critical Path",
+           style={"background": "#7f1d1d", "color": "#fee2e2"})
+p.activity("good", "Success",
+           style={"background": "#064e3b"})
+```
+
+Tones (info / success / warning / critical) still control the title
+bar — those are independent of the palette. So a node with
+`tone="critical"` + `style={"background": "#7f1d1d"}` paints the
+title bar amber-on-red and the body red — distinct but coordinated.
+
+## 6.7. `color_mode` — ReactFlow internal chrome only
+
+```python
+p.color_mode("auto")     # follows palette name (default)
 p.color_mode("light")    # force light
 p.color_mode("dark")     # force dark
 p.color_mode("system")   # follow OS prefers-color-scheme at runtime
 ```
 
-`"auto"` reads the host plugin's `--voitta-bg` luminance at render
-time and picks the appropriate ReactFlow scheme. This swaps an
-internal `--xy-*` CSS-variable bundle (canvas pattern, edge stroke
-defaults, control button chrome, minimap fill) so the flow chart
-matches the host shell. Default behaviour matches `"auto"`.
+Drives ReactFlow's INTERNAL `--xy-*` variable bundle — Controls
+panel chrome, attribution badge, default edge stroke fallback,
+minimap fill. **Does NOT** affect node bodies (that's `p.palette()`).
+
+`"auto"` (default) picks `"dark"` when `p.palette("dark")` was
+called, otherwise `"light"`. Usually you don't need to think about
+this; setting `p.palette()` is enough.
 
 ## 7. Title block — the polish touch
 

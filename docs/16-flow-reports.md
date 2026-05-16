@@ -302,19 +302,60 @@ freely in their `theme.css`:
 }
 ```
 
-### Other tokens
+### Node-body palette (controlled by `p.palette()`)
 
 ```
---voitta-flow-node-bg          /* body fill — usually --voitta-bg */
+--voitta-flow-node-bg          /* body fill */
 --voitta-flow-node-fg          /* body text */
+--voitta-flow-node-fg-muted    /* meta-row text */
+--voitta-flow-node-fg-faint    /* meta-row labels */
 --voitta-flow-node-border      /* node outer border */
 --voitta-flow-grid             /* dotted-grid colour */
 ```
 
-That's the entire surface. No `apply_theme` calls, no `stylesheets=`
-threading, no `--panel-*` bridge — the bridging existed to push
-themes into Panel's iframe + Bokeh shadow roots, and flow reports
-have neither.
+These live as bare defaults in `frontend/src/theme.css` (light card
+preset). Override sources, most-specific wins:
+
+  1. **Per-node `style={...}`** on a step in the build script —
+     cascades onto `.flow-node` directly; wins everything below.
+  2. **Diagram-level `p.palette("dark")`** in the build script —
+     emitted on the wire as `config.palette` and applied as inline
+     CSS variables on the ReactFlow wrapper.
+  3. **Plugin `theme.css` `:host { --voitta-flow-node-*: ... }`** —
+     host-wide override; loses to (1) and (2) but wins over (4).
+  4. **Bare CSS defaults** in `frontend/src/theme.css` — light card.
+
+The CSS rule `.flow-node__body { background: inherit }` makes (1)
+paint the body directly without per-rule overrides — set
+`style={"background": "#7f1d1d"}` on a step and the body turns red.
+
+### Tone palette (independent of `palette`)
+
+```
+--voitta-flow-tone-{default|info|success|warning|critical}-bg
+                                                          -fg
+                                                          -border
+--voitta-flow-edge-{default|info|success|warning|critical}
+```
+
+Tones drive the **title bar** of each node + the **outgoing edge
+accent**, independent of the body palette. So a `tone="critical"`
+node with `style={"background": "#0f172a"}` paints amber-on-red
+title + nearly-black body. Plugins can override the tone tokens
+in their `theme.css` like any other variable.
+
+```css
+:host {
+  --voitta-flow-tone-info-bg:     #003e7e;
+  --voitta-flow-tone-info-border: #4ea0ff;
+  --voitta-flow-edge-info:        #4ea0ff;
+}
+```
+
+That's the entire theming surface. No `apply_theme` walk-and-attach,
+no shadow-root stylesheet machinery, no `.react-flow.dark`
+auto-rebind — flow reports live in the widget's own shadow DOM where
+plain CSS variables already inherit correctly.
 
 ## Layout engines
 
@@ -334,7 +375,7 @@ Both produce the same output shape, so swapping is a one-line change:
 | `style` validation rejected | Used a layout-affecting property (`position`, `transform`, etc.) or a value containing `url(...)`. | Drop the property or use a different visual approach via tones / icons. |
 | Tool returns `status: "timeout"` | Layout took longer than `wait_s` (default 3s) or the user has no chat pane open. | Try increasing `wait_s`, or check for >100 nodes. |
 | Unknown icon name | Spelling mistake — the icon falls back to the step-type default silently. | Check the curated list in `flow-nodes/icons.tsx`. |
-| Node body colour is wrong on dark plugin theme | Plugin overrode `--voitta-bg` but not `--voitta-flow-node-bg`. | Set both in the plugin's `theme.css`. |
+| Node body colour is wrong on dark plugin theme | Forgot to call `p.palette("dark")` — flow renders with the light-card default regardless of the host. | Call `p.palette("dark")` at the top of `build(ctx)`. Or override per-node via `style={"background": ...}`. |
 | Edges look thin / too pale on dark theme | `--voitta-flow-edge-default` falls back to `--voitta-border` which a dark plugin may have set very subtle. | Override `--voitta-flow-edge-default` to a more visible value. |
 
 Errors that fire after `show_flow_report` returns post to

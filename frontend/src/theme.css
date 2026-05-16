@@ -76,22 +76,16 @@
   --voitta-flow-tone-critical-border:#fca5a5;
   --voitta-flow-edge-critical:       #dc2626;
 
-  /* Node body — two palettes, swapped at runtime based on ReactFlow's
-     resolved colorMode. ReactFlow adds a `.dark` class on its
-     wrapper when colorMode="dark"; .react-flow.dark .flow-node uses
-     the -dark variants below (see styles.css). Light hosts keep the
-     light card; dark hosts get a properly dark card. */
+  /* Node body — bare defaults (light card). Diagram-level
+     `p.palette("dark")` overrides these via inline style on the
+     ReactFlow wrapper; per-node `style={...}` overrides BOTH via
+     normal CSS cascade. Plugin theme.css can re-bind these at
+     :host level for host-wide palette changes. */
   --voitta-flow-node-bg:          #f8fafc;
   --voitta-flow-node-fg:          #0f172a;
   --voitta-flow-node-fg-muted:    #475569;
   --voitta-flow-node-fg-faint:    #64748b;
   --voitta-flow-node-border:      #cbd5e1;
-
-  --voitta-flow-node-bg-dark:     #1e293b;   /* slate-800 */
-  --voitta-flow-node-fg-dark:     #e2e8f0;
-  --voitta-flow-node-fg-muted-dark:#94a3b8;
-  --voitta-flow-node-fg-faint-dark:#64748b;
-  --voitta-flow-node-border-dark: #334155;
 
   /* ── Tool-call chips ─────────────────────────────────────────── */
   --voitta-tool-bg:     #f4f4f4;
