@@ -100,6 +100,45 @@ def _load_manifest(plugin_dir: Path) -> dict | None:
         return None
 
 
+def _load_system_prompt(plugin_dir: Path, manifest: dict) -> str | None:
+    """Read the manifest's optional ``system_prompt`` file once at discovery.
+
+    The file (typically ``prompt.md``) is appended to the chat system
+    prompt on any request whose page host matches this plugin's
+    ``host_patterns`` — see :func:`plugins_for_host` and the chat
+    route. Plugin-dir-relative; absent field → ``None`` (no addendum).
+
+    A declared-but-missing file is logged and treated as "no addendum"
+    rather than crashing discovery — a typo'd path shouldn't take the
+    whole backend down. The plugin still loads; the LLM just doesn't
+    get the host-scoped rules.
+    """
+    rel = manifest.get("system_prompt")
+    if not rel:
+        return None
+    if not isinstance(rel, str):
+        _logger.warning(
+            "plugin %s: manifest.system_prompt must be a string path, got %s",
+            plugin_dir.name, type(rel).__name__,
+        )
+        return None
+    path = plugin_dir / rel
+    if not path.is_file():
+        _logger.warning(
+            "plugin %s: manifest.system_prompt=%r not found at %s",
+            plugin_dir.name, rel, path,
+        )
+        return None
+    try:
+        return path.read_text()
+    except Exception as exc:
+        _logger.warning(
+            "plugin %s: failed to read system_prompt %s: %s",
+            plugin_dir.name, path, exc,
+        )
+        return None
+
+
 def _import_plugin(plugin_dir: Path, manifest: dict) -> None:
     """Import the plugin's Python package so its ToolSpecs register.
 
@@ -248,8 +287,43 @@ def _discover() -> list[dict]:
             if manifest is None:
                 continue
             _import_plugin(child, manifest)
-            loaded.append({"name": child.name, "manifest": manifest, "path": str(child)})
+            loaded.append({
+                "name": child.name,
+                "manifest": manifest,
+                "path": str(child),
+                "system_prompt": _load_system_prompt(child, manifest),
+            })
     return loaded
+
+
+def plugins_for_host(host: str | None) -> list[dict]:
+    """Return every loaded plugin whose ``host_patterns`` matches ``host``.
+
+    Strict suffix match on the hostname (port stripped). Returns a list
+    even though today's plugins are mutually exclusive on hostname —
+    callers shouldn't bake that one-to-one assumption in.
+
+    ``host=None`` or empty returns ``[]``: there's nothing to match
+    against, so no plugin contributes host-scoped behavior (system
+    prompt addendum, etc.).
+    """
+    if not host:
+        return []
+    hostname = host.split(":", 1)[0].lower().rstrip(".")
+    matched: list[dict] = []
+    for plugin in LOADED_PLUGINS:
+        raw_patterns = plugin["manifest"].get("host_patterns", [])
+        patterns: list[str] = []
+        if isinstance(raw_patterns, list):
+            patterns = [p for p in raw_patterns if isinstance(p, str) and p]
+        elif isinstance(raw_patterns, str):
+            patterns = [raw_patterns]
+        for pat in patterns:
+            p = pat.lower().rstrip(".")
+            if hostname == p or hostname.endswith("." + p):
+                matched.append(plugin)
+                break
+    return matched
 
 
 # Discovery used to run at module import time. That created a subtle

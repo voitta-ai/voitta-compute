@@ -15,12 +15,23 @@ def test_voitta_system_prompt_is_clean():
 
     haystack = VOITTA_SYSTEM_PROMPT.lower()
     # Hostnames + product names that historically leaked from forks of
-    # this repo. If you legitimately need to mention a provider in core,
-    # update this list AND the docs/13-plugins.md note about boundaries.
-    forbidden = ("force.com", "datastudio")
+    # this repo, plus the voitta-rag-enterprise vocabulary which now
+    # belongs in the plugin's prompt.md (loaded only on
+    # enterprise.voitta.ai). If you legitimately need to mention a
+    # provider in core, update this list AND the docs/13-plugins.md
+    # note about boundaries.
+    forbidden = (
+        "force.com",
+        "datastudio",
+        "vre_",
+        "voitta-rag-enterprise",
+        ".fcstd",
+        "cad_mesh",
+        "cad_projection",
+    )
     for f in forbidden:
         assert f not in haystack, (
-            f"system prompt still mentions {f!r}"
+            f"system prompt still mentions {f!r} — move to a plugin prompt.md"
         )
 
 

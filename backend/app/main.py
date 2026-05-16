@@ -204,24 +204,18 @@ async def health() -> dict:
     }
 
 
-def _as_list(v: object) -> list[str]:
-    if isinstance(v, list):
-        return [x for x in v if isinstance(x, str)]
-    if isinstance(v, str):
-        return [v]
-    return []
-
-
 def _plugin_for_host(host: str) -> dict | None:
-    from app.tools.providers import LOADED_PLUGINS
+    """First plugin whose host_patterns matches — back-compat shim.
 
-    hostname = host.split(":", 1)[0].lower().rstrip(".")
-    for plugin in LOADED_PLUGINS:
-        for raw in _as_list(plugin["manifest"].get("host_patterns", [])):
-            pat = raw.lower().rstrip(".")
-            if hostname == pat or hostname.endswith("." + pat):
-                return plugin
-    return None
+    Delegates to :func:`plugins_for_host`. Used by the single-plugin
+    endpoints (``GET /api/plugin``, theme-css) where today's data model
+    really is one-to-one. Multi-plugin callers should use
+    :func:`plugins_for_host` directly.
+    """
+    from app.tools.providers import plugins_for_host
+
+    matches = plugins_for_host(host)
+    return matches[0] if matches else None
 
 
 @app.get("/api/plugin")

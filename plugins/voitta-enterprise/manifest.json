@@ -9,6 +9,7 @@
   "python_module": "voitta_enterprise",
   "frontend_bundle": "frontend/widget.ts",
   "docs_dir": "docs",
+  "system_prompt": "prompt.md",
 
   "mcp_servers": [
     {

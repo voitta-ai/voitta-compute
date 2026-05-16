@@ -6,6 +6,15 @@ No Python code in this plugin — the bridge is declared entirely in
 `manifest.json` and materialised by Voitta core's MCP infrastructure
 (`backend/app/services/mcp/`).
 
+## What the LLM sees automatically
+
+On `enterprise.voitta.ai` the backend appends [`prompt.md`](../prompt.md) to the chat system prompt — that's wired by the manifest's `system_prompt: "prompt.md"` field plus the plugin-prompt mechanism described in [docs/13-plugins.md § System prompt addendum](../../../docs/13-plugins.md#system-prompt-addendum). The LLM therefore already has:
+
+- A pointer at `vre_search` as the platform-docs oracle.
+- A mandatory-lookup rule before touching `.FCStd` files, `cad_mesh`, `cad_projection`, or `request_asset` for CAD — the LLM must `vre_search` the docs first so it doesn't guess at slugs, BOM layout, or `x-fcstd-kind` semantics.
+
+No user setup needed. The rules fire only on hosts matching this plugin's `host_patterns`; on every other site the chat prompt is core-only.
+
 ## What it exposes
 
 Every tool the remote MCP server lists becomes an LLM-visible tool with
@@ -210,6 +219,39 @@ Renderable via:
 - If a file was reindexed and the slug is stale → `KeyError: slug … not in asset menu` from `vre_request_asset` itself, before any URL is minted. Re-run `vre_list_assets` to get the fresh slugs.
 - `vre_request_asset(asset_type="cad_mesh")` on a non-CAD extension → `ValueError: cad_mesh: unsupported extension …`. Check the file's extension via `vre_get_file` or `vre_list_assets` first.
 
+### FreeCAD-specific behavior (`.FCStd`) — via the `vre_*` MCP tools
+
+Everything in this subsection is surfaced through the **MCP tools** documented above (`vre_search`, `vre_list_assets`, `vre_request_asset`, `vre_get_chunk_range`) — there is no separate FreeCAD endpoint. The notes below describe what you'll see in those tools' responses when the source file is a `.FCStd`.
+
+The system prompt on `enterprise.voitta.ai` instructs the LLM to `vre_search` the docs corpus before touching `.FCStd` files (see [`prompt.md`](../prompt.md)) — this section is what those search hits land in.
+
+`.FCStd` files are parsed natively (zip + XML — no FreeCAD install on the server). Three extras land in the chunk index — reachable via `vre_search` / `vre_get_chunk_range` — that STEP / IGES don't have:
+
+1. **Spreadsheet workbench tabs.** Every `Spreadsheet::Sheet` object becomes part of the file's markdown, grouped under a `## Spreadsheets` section with one `### Sheet: <label>` per tab. Cell values **and the formulas themselves** are indexed (formulas keep their source expression, e.g. `=A1*0.5`, not the evaluated result), so `vre_search("M8 bolt torque spec")` can hit a torque table embedded in a CAD doc. Each cell appears as `` `A1`: <content> `` in spreadsheet-natural order (row-then-column). No special asset call — `vre_search` finds it, `vre_get_chunk_range` retrieves the surrounding context.
+
+2. **Per-component BOM and engineering notes inside each component chunk.** Every addressable component lands in its own chunk (the parser emits one `## Component: <name>` heading per slug and the chunker splits on those headings). Each chunk carries:
+   - `Slug:` / `Internal path:` / `Kind:` header lines, plus the literal `request_asset(...)` invocations the LLM can copy-paste.
+   - **Fabricated parts** — distinct leaf-label list for `Part::Feature` descendants whose label has no `[bracket]` suffix.
+   - **Standard hardware** — quantity-counted list (`12× M8 hex nut`) of `Part::Feature` descendants whose label ends in `[bracket]` (see label-convention note below).
+   - **Engineering notes** — any `App::PropertyString` named `Description`, `Note`, `Comment`, `Remark`, or `EngineeringNote` (case-insensitive, plural and underscored variants accepted) on the component *or any descendant*. Surfaced as `**<part>** — _<prop>_: <value>`. Designers use these for material specs, vendor SKUs, tolerances, assembly notes — `vre_search("stainless 316 hex nut")` lands on the component whose property mentions it.
+
+3. **Label conventions: BOM routing only — not slug structure.** Two patterns on `Part::Feature` *labels* (not on App::Part containers) discriminate hardware from fabricated parts within a component:
+   - `Foo :: Bar` (space-colon-colon-space) → the prefix is stripped; the part is listed as a **fabricated part** named `Bar`.
+   - `Foo [hardware]` (trailing `[group]`) → the part is listed under **Standard hardware** as `Foo` with a count.
+   Trailing FreeCAD instance digits (`Foo123`) are stripped from the displayed name.
+   These conventions **do not** alter slugs or the assembly tree — slugs come strictly from the `App::Part` hierarchy in `Document.xml`. STEP / IGES do not apply these conventions at all.
+
+Four `x-fcstd-kind` values appear in `vre_list_assets` output:
+
+- `container` — an `App::Part`. Rendering returns the entire subtree.
+- `feature` — a single `Part::Feature`. Rendering returns just that part.
+- `orphans` — synthetic bucket for `Part::Feature` objects that aren't reachable from any `App::Part`. Common in older or hand-built docs.
+- `whole` — synthetic "render everything" aggregate, emitted only when the document lacks a single top-level `App::Part` to play that role. (When a wrapper App::Part already exists, no `whole` is emitted — the wrapper is `container`.)
+
+`App::Part`s labelled `Origin*` (FreeCAD's per-body coordinate-system containers, geometry-less) are filtered out of `vre_list_assets`.
+
+> **Leaf-placement quirk.** A `Part::Feature` slug renders the part in its *local* coordinates, not its position in the parent assembly — FreeCAD bakes the leaf placement into the embedded `.brp` already, and re-applying it would double-transform. Sub-assembly and whole-assembly renders compose placements correctly. If a single-part projection looks "centered" while the parent shows it offset, that's expected.
+
 ### Refreshing after a source change
 
 If a CAD file changed in the source folder, hit **Reindex** on that folder in the SPA (or `POST /api/folders/{id}/reindex`). The new component breakdown appears on the next `vre_list_assets` / `vre_search` call. No service restart; no cache to bust on the bookmarklet side.
@@ -241,6 +283,8 @@ If a CAD file changed in the source folder, hit **Reindex** on that folder in th
      mode.
 
    Hit **Save**. The schema renderer auto-saves each field on input.
+
+   The plugin's [`prompt.md`](../prompt.md) ships in the plugin folder — no configuration required. The backend picks it up at startup via the `system_prompt` manifest field.
 
 4. **Click "Refresh tool list."** The plugin probes the MCP server,
    pulls `list_tools()`, and synthesises a `ToolSpec` per remote tool.

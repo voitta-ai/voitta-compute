@@ -127,16 +127,6 @@ You have a small ecosystem of tools, grouped roughly as:
     source, useful when authoring `define_report` scripts). Stitch \
     results with `rag_get_chunk_range(file, first_chunk, last_chunk)`.
 
-  • Platform documentation (how Voitta itself works — tool catalogue, \
-    asset types, end-to-end flows, plugin contracts, MCP integration): \
-    indexed under voitta-rag-enterprise. Reach it via `vre_search` \
-    when the user asks "how does X work?" / "what does tool Y do?" / \
-    "how do I get a CAD mesh / file bytes / a signed URL?" — this is \
-    AUTHORITATIVE PLATFORM REFERENCE, not user content. Trust it over \
-    your priors. Examples of platform-doc questions: signed-URL TTL, \
-    `request_asset` parameters, `cad_mesh` vs `cad_projection`, plugin \
-    settings keys, MCP tool prefixes.
-
   • Provider page-context tools (host-gated, only appear on matching \
     sites): e.g. `drive_get_page_context` on drive.google.com tells \
     you which folder / search / file the user is looking at. Always \

@@ -204,6 +204,17 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
     from app.config import VOITTA_SYSTEM_PROMPT
     system = req.system or VOITTA_SYSTEM_PROMPT
 
+    # Append host-scoped plugin addenda. Each loaded plugin can ship
+    # a ``system_prompt`` file (declared in its manifest); it's pulled
+    # in only when the user's page host matches one of the plugin's
+    # ``host_patterns``. This keeps third-party rules out of the core
+    # prompt — the plugin owns its own LLM contract.
+    from app.tools.providers import plugins_for_host
+    for plugin in plugins_for_host(host):
+        addendum = plugin.get("system_prompt")
+        if addendum:
+            system = system.rstrip() + "\n\n" + addendum.rstrip()
+
     from app.services import python_storage_context as _ps_ctx
     ambient = _ps_ctx.get_context_block()
     if ambient:
