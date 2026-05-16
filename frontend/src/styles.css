@@ -836,6 +836,41 @@ header .provider-chip:hover {
 }
 /* Junction handles — invisible (FloatingEdge computes endpoints). */
 
+/* ─── dark-mode token swap ─────────────────────────────────────────────
+   ReactFlow adds `.dark` class on its `.react-flow` wrapper when
+   colorMode="dark" resolves. We re-bind the node-body tokens at that
+   scope so the active --voitta-flow-node-* vars point at the -dark
+   variants. All node rules below already consume the (now-swapped)
+   tokens, so nothing else needs to change.
+
+   This pattern (token re-binding via CSS) keeps the node-style rules
+   themselves theme-agnostic and limits the dark/light branch to one
+   block per surface. */
+.react-flow.dark {
+  --voitta-flow-node-bg:       var(--voitta-flow-node-bg-dark);
+  --voitta-flow-node-fg:       var(--voitta-flow-node-fg-dark);
+  --voitta-flow-node-fg-muted: var(--voitta-flow-node-fg-muted-dark);
+  --voitta-flow-node-fg-faint: var(--voitta-flow-node-fg-faint-dark);
+  --voitta-flow-node-border:   var(--voitta-flow-node-border-dark);
+}
+
+/* Badges read poorly on dark cards if their backgrounds stay at the
+   light-host `rgba(<colour>, 0.16)` (the colour blends down to near-
+   black). Bump the alpha so badge fill is visible on slate-800. */
+.react-flow.dark .flow-node__badge                  { background: rgba(148, 163, 184, 0.22); color: #e2e8f0; }
+.react-flow.dark .flow-node__badge.tone-info        { background: rgba(125, 211, 252, 0.22); color: #bae6fd; }
+.react-flow.dark .flow-node__badge.tone-success     { background: rgba(110, 231, 183, 0.22); color: #a7f3d0; }
+.react-flow.dark .flow-node__badge.tone-warning     { background: rgba(252, 211, 77, 0.22);  color: #fde68a; }
+.react-flow.dark .flow-node__badge.tone-critical    { background: rgba(252, 165, 165, 0.22); color: #fecaca; }
+
+/* Edge-label backgrounds in dark mode — light bg + dark text reads as
+   a sticker on the canvas; flip to dark bg + light text. */
+.react-flow.dark .flow-edge-label                   { background: #1e293b; color: #e2e8f0; border-color: #475569; }
+.react-flow.dark .flow-edge-label.tone-info         { background: #0c4a6e; color: #e0f2fe; border-color: #0284c7; }
+.react-flow.dark .flow-edge-label.tone-success      { background: #064e3b; color: #d1fae5; border-color: #059669; }
+.react-flow.dark .flow-edge-label.tone-warning      { background: #78350f; color: #fef3c7; border-color: #d97706; }
+.react-flow.dark .flow-edge-label.tone-critical     { background: #7f1d1d; color: #fee2e2; border-color: #dc2626; }
+
 /* ─── flow edges ──────────────────────────────────────────────────────── */
 /* Per-tone edge stroke colour. The trick: we set the `--xy-edge-stroke`
    CSS variable on the edge element. ReactFlow's bundled stylesheet
