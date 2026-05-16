@@ -6,5 +6,6 @@
   "python_module": "voitta_google",
   "frontend_bundle": "frontend/widget.ts",
   "docs_dir": "docs",
+  "system_prompt": "prompt.md",
   "settings_panel": "custom"
 }

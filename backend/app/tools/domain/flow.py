@@ -205,7 +205,7 @@ registry.register(
         name="define_flow_report",
         description=(
             "Define-or-update a flow-chart report. The script is persisted "
-            "under `scripts/flows/<name>/code.py`. Rendering is "
+            "under `python_storage/flows/<name>/code.py`. Rendering is "
             "ReactFlow-based inside the widget shadow DOM — there is no "
             "iframe, no Panel app, no Bokeh session.\n"
             "\n" + _FLOW_SCRIPT_DOC +

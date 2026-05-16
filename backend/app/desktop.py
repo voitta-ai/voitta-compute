@@ -19,8 +19,9 @@ Layout:
     a checkout, the Dock icon stays — fine for development.
 
 Mutable state location:
-  • Source checkout: `<repo>/python_storage/`, `<repo>/scripts/`, etc.
-    (unchanged — picks up `app.config.PROJECT_ROOT` from `parents[2]`).
+  • Source checkout: `<repo>/python_storage/` (cache + compute/reports/
+    flows all live under here) — picks up `app.config.PROJECT_ROOT`
+    from `parents[2]`.
   • Frozen .app: `~/Library/Application Support/Voitta/`. The build
     script sets `VOITTA_PROJECT_ROOT` in the bundled launcher so the
     same config.py code path picks the writable directory.

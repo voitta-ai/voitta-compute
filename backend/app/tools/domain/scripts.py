@@ -121,7 +121,7 @@ registry.register(
         description=(
             "Define-and-run a Python compute script that operates on "
             "`python_storage` snapshots. The script is persisted under "
-            "`scripts/compute/<name>.py` (re-running the same name "
+            "`python_storage/compute/<name>/code.py` (re-running the same name "
             "overwrites — that's the intended iteration loop).\n"
             "\n"
             "Script signature: `def run(ctx, args=None) -> any`.\n"
@@ -301,7 +301,7 @@ registry.register(
         name="define_report",
         description=(
             "Define-or-update a HoloViz Panel report. Persisted under "
-            "`scripts/reports/<name>/code.py`. Open via "
+            "`python_storage/reports/<name>/code.py`. Open via "
             "`show_holoviz_report(report_id=<name>)`.\n"
             "\n"
             "BEFORE AUTHORING: rag_query docs corpus for "

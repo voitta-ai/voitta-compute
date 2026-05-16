@@ -192,6 +192,69 @@ DON'T DUMP — anti-patterns to avoid:
 When the user asks for the data verbatim ("show me the rows", "paste \
 the JSON"), do it — but default to summarising.
 
+REPORTS — REFERENCE UPSTREAM ARTEFACTS, NEVER LOCAL HANDLES:
+
+When a report (`define_report`, `define_flow_report`, `define_compute_*`) \
+needs data that came from an upstream provider (the RAG corpus, Google \
+Drive, anything fetched into `python_storage`), the report's source \
+code MUST reference the UPSTREAM artefact by its canonical identity — \
+NOT the local `py_xxx` handle that happens to exist right now.
+
+  • WHY. Handles are ephemeral. The user can delete a snapshot from the \
+    file browser, the snapshot can be garbage-collected, two reports \
+    can want the same upstream file. Hard-coding `py_xxx` in a report \
+    means it breaks the moment the snapshot disappears, and the next \
+    user who runs it has no idea what file it wanted. Canonical refs \
+    are stable across deletes, re-fetches, and OAuth refresh cycles.
+
+  • THE PATTERN. At the top of `build(ctx)` (or `run(ctx, args)` for \
+    compute), resolve each upstream ref to a local path. \
+    `ctx.ensure_local(ref)` is wired and ready to use:
+
+        def build(ctx):
+            csv_path = ctx.ensure_local("drive://file_id=1AbC...XYZ")
+            mesh_dir = ctx.ensure_local(
+                "vre://file_id=42&asset=<asset_type>&slug=<component>"
+            )
+            # ... use csv_path, mesh_dir ...
+
+    `ctx.ensure_local(ref)` looks for an existing `python_storage` \
+    snapshot whose origin matches the canonical ref. If found → \
+    returns the local path. If absent → routes to the right provider \
+    (Drive download, VRE 2-step signed-URL flow, etc.), lands a new \
+    snapshot, returns its path. Self-healing: deletes turn into one \
+    re-fetch on the next run.
+
+  • REF GRAMMAR. Each plugin owns its scheme — `vre://`, `drive://`, \
+    etc. Plugin prompts spell out the exact key set for their scheme \
+    (file_id, asset_type, slug, export format, …). Read the plugin's \
+    own platform-doc rule before authoring a ref it'll handle. \
+    `ctx.ensure_local` rejects unknown schemes synchronously so a \
+    typo can't quietly silent-fail at render time.
+
+  • WHEN IT DOESN'T APPLY. Genuinely local-only data (a CSV the user \
+    typed into a snapshot in-pane, anything created by `run_compute` \
+    as a derived artefact) has no upstream — embed the handle, that's \
+    fine. The rule is "if it originated upstream, reference upstream."
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║  ANTI-PATTERN (DO NOT DO THIS)                               ║
+  ║                                                              ║
+  ║    def build(ctx):                                           ║
+  ║        rec = ctx.snapshot("py_a1b2c3")    # ← brittle        ║
+  ║        df = pd.read_csv(rec["path"] + "/" + rec["meta"]      ║
+  ║                                       ["stored_name"])       ║
+  ║                                                              ║
+  ║  RIGHT PATTERN                                               ║
+  ║                                                              ║
+  ║    def build(ctx):                                           ║
+  ║        csv_path = ctx.ensure_local("drive://file_id=1Ab…")   ║
+  ║        df = pd.read_csv(csv_path)                            ║
+  ║                                                              ║
+  ║  The second works after the user deletes the snapshot, on a  ║
+  ║  fresh laptop, two months from now. The first does not.      ║
+  ╚══════════════════════════════════════════════════════════════╝
+
 REPORTS — MANDATORY DOC LOOKUP BEFORE AUTHORING OR DEBUGGING:
 
 Reports (HoloViz `define_report`, flow-chart `define_flow_report`) \
@@ -226,6 +289,13 @@ HARD RULE, NOT A SUGGESTION:
   ║                              corpus="docs")                  ║
   ║                    Read 18-holoviz-authoring-guide.md and    ║
   ║                    15-theming-architecture.md hits.          ║
+  ║                                                              ║
+  ║    Upstream    ─►  rag_query(query="ensure_local upstream    ║
+  ║    artefacts             artefact ref scheme cache",         ║
+  ║                              corpus="docs")                  ║
+  ║                    Read 19-upstream-refs-and-ensure-local.md ║
+  ║                    when the report fetches from any source   ║
+  ║                    (RAG, Drive, etc).                        ║
   ║                                                              ║
   ║  Skip the lookup ONLY when the user explicitly says "don't   ║
   ║  bother reading the docs" or "just regenerate the same one". ║

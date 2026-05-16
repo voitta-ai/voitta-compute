@@ -243,16 +243,19 @@ The helper emits a `<script type="module">` with a Three.js importmap, so `scene
 - **Top-level `await`** — `await new GLTFLoader().loadAsync(url)` works.
 - **`import 'three/addons/...'`** — bare specifier, resolved by the importmap. Mapping is `"three"` → `three.module.js` build, `"three/addons/"` → `examples/jsm/`. Anything in `examples/jsm/` (`OrbitControls`, `GLTFLoader`, `DRACOLoader`, `EXRLoader`, …) is reachable.
 
-**Recipe** — copy this, change the snapshot handle:
+**Recipe** — copy this, change the ref:
 
 ```python
 def build(ctx):
-    # GLB already pulled into python_storage via fetch_to_python_storage
-    rec = ctx.snapshot("py_6cd983a9")
+    # Resolve the upstream artefact through ensure_local — the runtime
+    # caches it under python_storage/cache/ on first call, hits cache
+    # thereafter. Never bake a py_<handle> string into a saved report
+    # (see docs/19-upstream-refs-and-ensure-local.md for the why).
+    glb_path = ctx.ensure_local(
+        "vre://file_id=42&asset=cad_mesh&slug=base-frame"
+    )
     import base64, pathlib
-    b64 = base64.b64encode(
-        (pathlib.Path(rec["path"]) / rec["meta"]["stored_name"]).read_bytes()
-    ).decode()
+    b64 = base64.b64encode(pathlib.Path(glb_path).read_bytes()).decode()
 
     scene_js = f"""
         // GLTFLoader is in examples/jsm/, addressable via the importmap
@@ -266,11 +269,46 @@ def build(ctx):
         const url = URL.createObjectURL(new Blob([bin], {{type: 'model/gltf-binary'}}));
 
         const gltf = await new GLTFLoader().loadAsync(url);
-        scene.add(gltf.scene);
+        const model = gltf.scene;
+
+        // FreeCAD / STEP / Rhino / Revit are Z-up; Three.js is Y-up.
+        // Apply BEFORE the bounding-box pass so centroid + scale see
+        // the corrected orientation. See "Up-axis" below.
+        model.rotation.x = -Math.PI / 2;
+        model.updateMatrixWorld(true);
+
+        scene.add(model);
         camera.position.set(5, 3, 8);
     """
     return ctx.three_scene(scene_js, height=600)
 ```
+
+#### Up-axis: CAD is Z-up, Three.js is Y-up
+
+The single most common "model looks tipped over" bug. FreeCAD bakes the Z-up convention into the exported GLB; Three.js expects Y-up. The fix is a one-liner on the root group:
+
+```js
+model.rotation.x = -Math.PI / 2;
+```
+
+**Order matters.** Apply the rotation **before** computing the bounding box, otherwise the centroid + scale you compute will be from the *tipped* model and the final render is centred wrong:
+
+1. `await new GLTFLoader().loadAsync(url)` → `model` (root Group)
+2. `model.rotation.x = -Math.PI / 2` → Z-up flipped to Y-up
+3. `model.updateMatrixWorld(true)` → propagate the rotation to children before measuring
+4. `new THREE.Box3().setFromObject(model)` → bounding box of correctly-oriented geometry
+5. Translate to origin + scale → centred and upright
+
+**Cheat sheet for common CAD sources → Three.js:**
+
+| Source                | Native up | Fix                  |
+|-----------------------|-----------|----------------------|
+| FreeCAD / STEP        | Z         | `rot.x = -π/2`       |
+| Rhino                 | Z         | `rot.x = -π/2`       |
+| Revit                 | Z         | `rot.x = -π/2`       |
+| Blender (GLB export)  | Y         | none (already Y-up)  |
+
+Almost everything CAD is Z-up. Three.js is Y-up. `-Math.PI / 2` on X is the universal adapter — apply it once on the root group right after loading, before any measurement.
 
 **Wrong patterns and what breaks** — the LLM has burned hours on each of these. Don't redo them.
 

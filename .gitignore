@@ -15,21 +15,18 @@ rag/.bm25/
 rag/.chroma_panel/
 rag/.bm25_panel/
 
-# Server-side snapshot cache (provider download tools, e.g.
-# drive_download_to_python_storage)
-python_storage/
-
-# User-defined Python scripts (run_compute + define_report tools).
-# Ignore *contents* (not the dirs themselves) so individual adapters
+# Unified state dir: snapshot cache + LLM-authored scripts. Ignore
+# contents (not the dirs themselves) so individual shipped adapters
 # can be re-included with !-patterns below.
-scripts/compute/*
-scripts/reports/*
-scripts/flows/*
+python_storage/cache/
+python_storage/compute/*
+python_storage/reports/*
+python_storage/flows/*
 # Shipped adapters that wrap permanent backend modules.
-!scripts/compute/a4db_parse/
-!scripts/compute/dat_parse/
-!scripts/reports/a4db_3d/
-!scripts/reports/dat_curves/
+!python_storage/compute/a4db_parse/
+!python_storage/compute/dat_parse/
+!python_storage/reports/a4db_3d/
+!python_storage/reports/dat_curves/
 
 # TLS material
 backend/certs/*.pem

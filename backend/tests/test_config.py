@@ -20,10 +20,18 @@ def test_voitta_system_prompt_is_clean():
     # enterprise.voitta.ai). If you legitimately need to mention a
     # provider in core, update this list AND the docs/13-plugins.md
     # note about boundaries.
+    #
+    # Note: ``vre://`` and ``drive://`` URI examples in the upstream-refs
+    # block are intentional — those names describe the *public* ref
+    # scheme contract every plugin implements, not plugin internals.
+    # The forbidden list targets actual VRE-specific vocabulary
+    # (``vre_search``, ``.fcstd``, asset_type names).
     forbidden = (
         "force.com",
         "datastudio",
-        "vre_",
+        "vre_search",
+        "vre_request_asset",
+        "vre_list_assets",
         "voitta-rag-enterprise",
         ".fcstd",
         "cad_mesh",

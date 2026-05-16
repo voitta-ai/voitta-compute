@@ -177,22 +177,22 @@ cp -f "$ROOT/bookmarklet/bookmarklet.js" "$ROOT/src/voitta/resources/bookmarklet
 
 # Seed scripts — the curated compute+report pairs the agent calls
 # automatically (a4db_parse / a4db_3d / dat_parse / dat_curves). They
-# get copied out of the bundle into PROJECT_ROOT/scripts/ at first
-# launch so they live in a user-writable directory (the bundle is
-# read-only). Track the names explicitly rather than copying every
-# scripts/ entry: most local scripts are dev-only experiments and
-# don't belong in a redistributable bundle.
+# get copied out of the bundle into PROJECT_ROOT/python_storage/ at
+# first launch so they live in a user-writable directory (the bundle
+# is read-only). Track the names explicitly rather than copying every
+# python_storage/{compute,reports}/ entry: most local scripts are
+# dev-only experiments and don't belong in a redistributable bundle.
 rm -rf "$ROOT/src/voitta/resources/seed_scripts" 2>/dev/null || true
 mkdir -p "$ROOT/src/voitta/resources/seed_scripts/compute" \
          "$ROOT/src/voitta/resources/seed_scripts/reports"
 for s in a4db_parse dat_parse; do
-  if [ -f "$ROOT/scripts/compute/$s/code.py" ]; then
-    cp -R "$ROOT/scripts/compute/$s" "$ROOT/src/voitta/resources/seed_scripts/compute/"
+  if [ -f "$ROOT/python_storage/compute/$s/code.py" ]; then
+    cp -R "$ROOT/python_storage/compute/$s" "$ROOT/src/voitta/resources/seed_scripts/compute/"
   fi
 done
 for s in a4db_3d dat_curves; do
-  if [ -f "$ROOT/scripts/reports/$s/code.py" ]; then
-    cp -R "$ROOT/scripts/reports/$s" "$ROOT/src/voitta/resources/seed_scripts/reports/"
+  if [ -f "$ROOT/python_storage/reports/$s/code.py" ]; then
+    cp -R "$ROOT/python_storage/reports/$s" "$ROOT/src/voitta/resources/seed_scripts/reports/"
   fi
 done
 # Plugins. Each plugin's whole tree gets staged into the bundle so the
@@ -208,12 +208,14 @@ if [ -d "$ROOT/plugins" ]; then
 fi
 
 # Plugin seed scripts — same idea as core seed_scripts, but pulled
-# from each plugin's scripts/{compute,reports}/. Extra subdirectories
-# (e.g. nested docs of compute scripts) are preserved.
+# from each plugin's seed_scripts/{compute,reports}/ (plugins ship
+# their seeds under that path; they're copied into the user's
+# python_storage/ at first launch alongside the core seeds). Extra
+# subdirectories (e.g. nested docs of compute scripts) are preserved.
 for plugin_dir in "$ROOT/plugins"/*; do
   [ -d "$plugin_dir" ] || continue
   for kind in compute reports; do
-    src="$plugin_dir/scripts/$kind"
+    src="$plugin_dir/seed_scripts/$kind"
     [ -d "$src" ] || continue
     for entry in "$src"/*; do
       [ -d "$entry" ] || continue

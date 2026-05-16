@@ -20,7 +20,8 @@ Path layout when frozen:
         │                                     launch only; user-trusted
         │                                     certs persist)
         ├── python_storage/
-        ├── scripts/{compute,reports}/
+        │   ├── cache/                       (download snapshots)
+        │   └── {compute,reports,flows}/     (LLM-authored scripts)
         └── voitta.log
 """
 

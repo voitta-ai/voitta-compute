@@ -1,6 +1,6 @@
 """Python-side on-disk storage for downloaded VOITTA data.
 
-Each download creates ``python_storage/snapshot_<handle>/`` at the
+Each download creates ``python_storage/cache/snapshot_<handle>/`` at the
 project root. Inside each snapshot:
 
   • ``meta.json``  — provenance: source URL, file id, parser, fetched_at,
@@ -46,7 +46,13 @@ META_VALUE_CAP = 20
 # on where mutable state lives. See app/config.py for the env-var override.
 from app.config import PROJECT_ROOT  # noqa: E402
 
-STORAGE_ROOT = PROJECT_ROOT / "python_storage"
+# Snapshot cache lives under ``python_storage/cache/``. The parent
+# ``python_storage/`` is the unified state dir; sibling subdirs
+# (``compute/`` / ``reports/`` / ``flows/`` — see services/scripts.py)
+# hold persisted LLM-authored code. Keeping snapshots in a named
+# subdir means the namespace at the top is meaningful (cache vs
+# durable code) rather than a soup of mixed kinds.
+STORAGE_ROOT = PROJECT_ROOT / "python_storage" / "cache"
 
 
 def _ensure_root() -> None:
@@ -382,7 +388,7 @@ def put_file(
 
     Used by the Drive download-pickup flow: the browser triggered a
     download, the user-side filesystem now has the file at ``src_path``,
-    and we move it into ``python_storage/snapshot_<handle>/`` next to a
+    and we move it into ``python_storage/cache/snapshot_<handle>/`` next to a
     ``meta.json`` describing where it came from. Symmetric with
     ``put(...)`` for response bodies — same handle/dir layout so the
     rest of the system (compute scripts, ctx.snapshot, etc.) sees both

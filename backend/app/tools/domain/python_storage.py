@@ -1,6 +1,6 @@
 """Python-side storage management tools.
 
-Snapshots live under ``python_storage/snapshot_<handle>/`` at the
+Snapshots live under ``python_storage/cache/snapshot_<handle>/`` at the
 project root. Each subdir contains ``meta.json`` (provenance) plus
 whatever payload files the writer emitted.
 

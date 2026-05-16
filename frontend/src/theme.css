@@ -145,6 +145,15 @@
   --voitta-art-row-rule:         #f4f4f5;
   --voitta-art-row-stripe:       #fafafa;
   --voitta-art-row-hover:        #e8f0fe;
+  --voitta-art-row-selected-bg:  #0a84ff;
+  --voitta-art-row-selected-fg:  #ffffff;
+  --voitta-art-ctxmenu-bg:       #ffffff;
+  --voitta-art-ctxmenu-border:   #d4d4d8;
+  --voitta-art-ctxmenu-hover:    #0a84ff;
+  --voitta-art-ctxmenu-fg:       #1f2937;
+  --voitta-art-ctxmenu-fg-hover: #ffffff;
+  --voitta-art-ctxmenu-disabled: #9ca3af;
+  --voitta-art-ctxmenu-shadow:   0 6px 24px rgba(0,0,0,0.15);
   --voitta-art-footer-bg:        #fafafa;
   --voitta-art-footer-rule:      #ececec;
   --voitta-art-badge-bg:         #eef2f7;

@@ -151,6 +151,22 @@ component in the GLB scene. Downstream three.js code can iterate
 slugs `cad_projection` emits, so a single `vre_list_assets` call
 gives the LLM the vocabulary for both view types.
 
+> **Up-axis gotcha.** FreeCAD (and STEP, IGES, Rhino, Revit) is
+> **Z-up**; Three.js is **Y-up**. The GLB bakes the source convention
+> in — without correction, the model renders tipped 90° on its side.
+> Fix is one line on the root group, applied **before** the
+> bounding-box pass:
+>
+> ```js
+> model.rotation.x = -Math.PI / 2;
+> model.updateMatrixWorld(true);
+> ```
+>
+> Then compute the bounding box, centre, and scale. See
+> [docs/09-panel-threejs-reports.md § Up-axis](../../../docs/09-panel-threejs-reports.md#up-axis-cad-is-z-up-threejs-is-y-up)
+> for the full ordering and a cheat sheet covering Rhino / Revit /
+> Blender.
+
 ## CAD retrieval — the component-slug model
 
 Every indexed CAD file (`.fcstd`, `.step` / `.stp`, `.iges` / `.igs`) is a **tree of addressable components**, each named by a filesystem-shaped slug. Slugs are the single vocabulary the LLM uses to request anything CAD-related — projections, meshes, sub-assemblies, individual parts.

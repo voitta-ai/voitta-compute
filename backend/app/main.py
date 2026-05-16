@@ -8,6 +8,8 @@ URLs match `voitta-bookmarklet`), and serves the built widget bundle from
 from __future__ import annotations
 
 import json
+import re
+import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -188,6 +190,21 @@ async def _bootstrap_plugins_and_mcp() -> None:
         await _refresh_mcp()
     except Exception:
         log.exception("MCP startup refresh raised")
+
+    # Bind the main event loop into ensure_local so that script-side
+    # ``ctx.ensure_local(ref)`` calls — which run in a thread-pool
+    # executor — can dispatch async resolvers back to this loop via
+    # ``run_coroutine_threadsafe``. Also import the resolvers package
+    # so its modules register themselves with the ensure_local
+    # registry (side-effect imports).
+    try:
+        import asyncio
+        from app.services import ensure_local as _ensure_local
+        from app.services import resolvers as _resolvers  # noqa: F401
+
+        _ensure_local.bind_loop(asyncio.get_running_loop())
+    except Exception:
+        log.exception("ensure_local startup wiring raised")
 # Localhost-only back-channel for external automation (Claude Code,
 # scripts). NOT exposed to the in-pane chat LLM. See app/routes/cli.py.
 app.include_router(cli_router)
@@ -1148,13 +1165,18 @@ patch_send_message()
 async def list_artifacts() -> dict:
     """Return a tree of server-side artifacts for the in-pane file browser.
 
-    Walks ``python_storage/`` (snapshot dirs + their files, plus
-    ``script_output/<run_id>/`` image runs) and ``scripts/`` (compute +
-    report sources and sidecar meta). Paths in the response are relative
-    to PROJECT_ROOT so the browser never sees absolute filesystem paths.
-    """
+    Walks the four buckets under ``python_storage/``:
 
-    import time
+      * ``cache/`` — snapshot dirs from downloads + their files
+        (plus ``script_output/<run_id>/`` image runs).
+      * ``compute/`` — LLM-authored compute scripts (code.py +
+        meta.json) and their ``runs/<run_id>/`` outputs.
+      * ``reports/`` — HoloViz report scripts.
+      * ``flows/`` — flow report scripts.
+
+    Paths in the response are relative to PROJECT_ROOT so the browser
+    never sees absolute filesystem paths.
+    """
 
     def _enrich_snapshot_dir(path: Path) -> dict | None:
         """If this is a python_storage snapshot dir, return its
@@ -1235,27 +1257,276 @@ async def list_artifacts() -> dict:
         }
 
     roots: list[dict] = []
-    for sub in ("python_storage", "scripts"):
+    for sub in (
+        "python_storage/cache",
+        "python_storage/compute",
+        "python_storage/reports",
+        "python_storage/flows",
+    ):
         p = PROJECT_ROOT / sub
         if p.exists() and p.is_dir():
             roots.append(_node(p, PROJECT_ROOT))
         else:
             roots.append(
-                {"name": sub, "path": sub, "kind": "dir", "size": 0, "mtime": None,
+                {"name": sub.split("/")[-1], "path": sub, "kind": "dir",
+                 "size": 0, "mtime": None,
                  "child_count": 0, "children": [], "missing": True}
             )
 
     return {"roots": roots, "total_size": sum(r.get("size") or 0 for r in roots)}
 
 
+# ---------------------------------------------------------------------------
+# Artifact mutation — delete / rename / run.
+#
+# The in-pane Finder-style browser (ArtifactsView) writes through these
+# endpoints. Each one enforces a strict allow-list: only the four "unit"
+# shapes are mutable, and never the namespace roots above them. Mutating
+# a derived file (a meta.json, a single run output image) is impossible
+# by design — the unit is the snapshot dir, the slug dir, or the run
+# dir. This keeps the LLM's data model coherent with what the user can
+# do by hand: the same things `delete_python_storage(handle)` cleans up.
+# ---------------------------------------------------------------------------
+
+
+_ARTIFACT_SNAPSHOT_RE = re.compile(r"^python_storage/cache/snapshot_[A-Za-z0-9_-]+$")
+_ARTIFACT_SLUG_RE = re.compile(r"^python_storage/(compute|reports|flows)/[a-z0-9_-]{1,64}$")
+_ARTIFACT_RUN_RE = re.compile(
+    r"^python_storage/compute/[a-z0-9_-]{1,64}/runs/[A-Za-z0-9_-]{4,64}$"
+)
+_SLUG_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+
+
+def _classify_artifact_path(rel: str) -> str | None:
+    """Return the unit kind for ``rel`` or ``None`` if it's not mutable.
+
+    Kinds:
+      * ``"snapshot"`` — a python_storage snapshot dir (handle is canonical;
+        rename adjusts ``meta.json::display_name``).
+      * ``"compute"`` / ``"reports"`` / ``"flows"`` — a script slug dir
+        (the dir name IS the slug; rename = real dir rename).
+      * ``"run"`` — a compute run dir under ``runs/<run_id>`` (canonical;
+        not renameable).
+
+    The check is path-shape only; existence is verified by the caller
+    after the regex matches.
+    """
+    if _ARTIFACT_SNAPSHOT_RE.match(rel):
+        return "snapshot"
+    if _ARTIFACT_RUN_RE.match(rel):
+        return "run"
+    m = _ARTIFACT_SLUG_RE.match(rel)
+    if m:
+        return m.group(1)  # "compute" | "reports" | "flows"
+    return None
+
+
+def _resolve_artifact_path(rel: str) -> tuple[Path, str]:
+    """Validate ``rel`` against the allow-list and resolve to an absolute
+    path under PROJECT_ROOT. Raises HTTPException on any rule violation.
+
+    Returns ``(absolute_path, unit_kind)``. The absolute path is guaranteed
+    to live under PROJECT_ROOT (no traversal escape).
+    """
+    if not rel or rel.startswith("/") or ".." in rel.split("/"):
+        raise HTTPException(status_code=400, detail="invalid path")
+    kind = _classify_artifact_path(rel)
+    if kind is None:
+        raise HTTPException(
+            status_code=400, detail="not_a_unit (path is a namespace or derived item)"
+        )
+    abs_path = (PROJECT_ROOT / rel).resolve()
+    root = PROJECT_ROOT.resolve()
+    if not (abs_path == root or str(abs_path).startswith(str(root) + "/")):
+        raise HTTPException(status_code=400, detail="path escapes project root")
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+    return abs_path, kind
+
+
+@app.delete("/api/artifacts/{rel_path:path}")
+async def delete_artifact(rel_path: str) -> dict:
+    """Remove one artifact unit. Allow-list enforced.
+
+    Snapshots route through ``python_storage.delete(handle)`` so handle-
+    aware bookkeeping fires (mirrors the LLM-callable
+    ``delete_python_storage`` tool). Slug + run units use ``shutil.rmtree``
+    after the allow-list check — there's no handle bookkeeping for those.
+    """
+    import shutil
+
+    abs_path, kind = _resolve_artifact_path(rel_path)
+
+    if kind == "snapshot":
+        # ``rel_path = python_storage/cache/snapshot_<handle>`` — recover the
+        # handle from meta.json (canonical) rather than parsing the dir
+        # name, in case anything ever drifts.
+        from app.services import python_storage
+
+        meta_path = abs_path / "meta.json"
+        handle: str | None = None
+        if meta_path.exists():
+            try:
+                handle = json.loads(meta_path.read_text()).get("handle")
+            except Exception:
+                handle = None
+        if not handle:
+            # Fall back to dir-name suffix; still validate against the
+            # canonical regex shape so a hand-mangled dir can't sneak in
+            # an unsafe handle string.
+            handle = abs_path.name.removeprefix("snapshot_")
+        if not python_storage.delete(handle):
+            # delete() returns False when the handle wasn't found, but
+            # the dir clearly exists — rmtree as fallback so the user
+            # isn't stuck staring at a zombie row.
+            shutil.rmtree(abs_path, ignore_errors=False)
+        return {"ok": True, "deleted": rel_path, "kind": kind}
+
+    # Plain script-tree directory: rmtree.
+    shutil.rmtree(abs_path, ignore_errors=False)
+    return {"ok": True, "deleted": rel_path, "kind": kind}
+
+
+@app.patch("/api/artifacts/{rel_path:path}")
+async def patch_artifact(rel_path: str, body: dict) -> dict:
+    """Rename one artifact unit. Allow-list enforced.
+
+    Body shape depends on the unit:
+
+      * snapshot: ``{"display_name": "..."}`` — edits ``meta.json``,
+        does NOT rename the dir (the handle is canonical and used by
+        the LLM and python_storage internals).
+      * compute / reports / flows slug: ``{"slug": "new-slug"}`` —
+        renames the dir on disk. New slug must match ``[a-z0-9_-]{1,64}``
+        and must not collide with an existing sibling.
+      * run: never renameable (canonical id).
+    """
+    abs_path, kind = _resolve_artifact_path(rel_path)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+
+    if kind == "snapshot":
+        new_name = body.get("display_name")
+        if not isinstance(new_name, str):
+            raise HTTPException(
+                status_code=400, detail="display_name (string) required for snapshots"
+            )
+        new_name = new_name.strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="display_name cannot be empty")
+        meta_path = abs_path / "meta.json"
+        if not meta_path.exists():
+            raise HTTPException(status_code=404, detail="meta.json missing for snapshot")
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"meta.json unreadable: {exc}")
+        if not isinstance(meta, dict):
+            raise HTTPException(status_code=500, detail="meta.json malformed")
+        # ``display_name`` is computed from ``stored_name`` /
+        # ``original_name`` / ``files[0].name`` (see _enrich_snapshot_dir
+        # in /api/artifacts). Writing ``stored_name`` is the most
+        # specific override and what the browser then surfaces.
+        meta["stored_name"] = new_name
+        meta_path.write_text(json.dumps(meta, indent=2))
+        return {"ok": True, "path": rel_path, "display_name": new_name, "kind": kind}
+
+    if kind in ("compute", "reports", "flows"):
+        new_slug = body.get("slug")
+        if not isinstance(new_slug, str) or not _SLUG_RE.match(new_slug):
+            raise HTTPException(
+                status_code=400, detail="slug must match [a-z0-9_-]{1,64}"
+            )
+        new_path = abs_path.parent / new_slug
+        if new_path.exists():
+            raise HTTPException(status_code=409, detail=f"slug {new_slug!r} already exists")
+        abs_path.rename(new_path)
+        new_rel = f"python_storage/{kind}/{new_slug}"
+        return {"ok": True, "path": new_rel, "kind": kind}
+
+    raise HTTPException(status_code=400, detail=f"unit {kind!r} is not renameable")
+
+
+@app.post("/api/artifacts/{rel_path:path}/run")
+async def run_artifact(rel_path: str) -> dict:
+    """Re-execute a report slug and return what the frontend needs to
+    mount the iframe / flow pane.
+
+    Two flavours, distinguished by the slug's parent dir:
+
+      * ``python_storage/reports/<slug>`` — HoloViz Panel iframe. We
+        mint a ``render_id``, register an awaiter so render-time
+        errors are captured the same way ``show_holoviz_report`` does,
+        and return the iframe URL the frontend should hand to
+        ``show_report``.
+      * ``python_storage/flows/<slug>`` — server-side build of the
+        flow definition (same path ``show_flow_report`` uses),
+        returned in the response body. The frontend hands it to
+        ``show_flow_report``.
+
+    Compute slugs and run dirs are not runnable: those are LLM-only
+    flows that need a ToolCtx.
+    """
+    abs_path, kind = _resolve_artifact_path(rel_path)
+    if kind not in ("reports", "flows"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"unit {kind!r} is not runnable (only reports/ and flows/)",
+        )
+    code_path = abs_path / "code.py"
+    if not code_path.exists():
+        raise HTTPException(status_code=404, detail="code.py missing")
+    slug = abs_path.name
+    title = f"Report {slug}" if kind == "reports" else f"Flow {slug}"
+
+    from app.services import render_events
+
+    render_id = render_events.new_render_id()
+    render_events.begin_await(render_id, slug)
+
+    if kind == "reports":
+        from urllib.parse import quote
+
+        cache_t = int(time.time() * 1000)
+        path = (
+            f"/panel/reports?id={quote(slug, safe='')}"
+            f"&render_id={quote(render_id, safe='')}"
+            f"&_t={cache_t}"
+        )
+        return {
+            "ok": True,
+            "kind": "holoviz",
+            "report_id": slug,
+            "render_id": render_id,
+            "title": title,
+            "path": path,
+        }
+
+    # kind == "flows"
+    from app.services import flows
+    from app.services.scripts import ScriptError
+
+    try:
+        definition, _log_lines = flows.build_flow_definition(slug)
+    except ScriptError as exc:
+        render_events.end_await(render_id)
+        raise HTTPException(status_code=400, detail=f"build error: {exc}")
+    return {
+        "ok": True,
+        "kind": "flow",
+        "report_id": slug,
+        "render_id": render_id,
+        "title": title,
+        "definition": definition,
+    }
+
+
 @app.get("/api/script-output/{slug}/{run_id}/{filename}")
 async def get_script_output(slug: str, run_id: str, filename: str) -> FileResponse:
     """Serve files written by ``ctx.image()`` from a compute script run.
-    Files live under ``scripts/compute/<slug>/runs/<run_id>/<file>``;
+    Files live under ``python_storage/compute/<slug>/runs/<run_id>/<file>``;
     the slug+run_id+filename are tightly validated and the resolved
-    path must stay inside ``scripts/compute/``."""
-
-    import re
+    path must stay inside the compute root."""
 
     if not re.match(r"^[a-z0-9_-]{1,64}$", slug):
         raise HTTPException(status_code=400, detail="invalid slug")
@@ -1269,7 +1540,7 @@ async def get_script_output(slug: str, run_id: str, filename: str) -> FileRespon
     candidate = (SCRIPTS_COMPUTE / slug / "runs" / run_id / filename).resolve()
     root = SCRIPTS_COMPUTE.resolve()
     if not str(candidate).startswith(str(root) + "/"):
-        raise HTTPException(status_code=400, detail="path escapes scripts/compute root")
+        raise HTTPException(status_code=400, detail="path escapes compute root")
     if not candidate.exists() or not candidate.is_file():
         raise HTTPException(status_code=404, detail="not found")
 
@@ -1296,12 +1567,10 @@ async def get_python_storage_file(handle: str, filename: str) -> FileResponse:
     typically have a CSP that blocks ``data:`` in ``img-src``, so
     backend HTTPS URLs are the only path that consistently renders.
 
-    Path: ``python_storage/snapshot_<handle>/<filename>``. Both segments
-    are tightly validated and the resolved path must stay inside
-    ``python_storage/``.
+    Path: ``python_storage/cache/snapshot_<handle>/<filename>``. Both
+    segments are tightly validated and the resolved path must stay
+    inside the cache root.
     """
-    import re
-
     # Handle shape per python_storage._new_handle: ``py_<8 hex>``. Allow
     # a small range around that to stay forward-compatible if the
     # handle generator changes.

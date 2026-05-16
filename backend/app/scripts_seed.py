@@ -3,15 +3,15 @@ data dir at first launch.
 
 Briefcase ships every file under ``src/voitta/resources/`` inside the
 read-only .app bundle. ``app.services.scripts`` writes script source
-+ run state to ``<PROJECT_ROOT>/scripts/`` (writable user data dir),
-so on first launch the writable dir is empty and the LLM can't call
-the canonical ``dat_parse`` / ``a4db_parse`` compute scripts (or open
-their reports).
++ run state to ``<PROJECT_ROOT>/python_storage/{compute,reports,flows}/``
+(writable user data dir), so on first launch the writable dir is empty
+and the LLM can't call the canonical ``dat_parse`` / ``a4db_parse``
+compute scripts (or open their reports).
 
 Solution: at first launch — same flow as the RAG build — copy the
-bundled seed_scripts/ tree out to ``<PROJECT_ROOT>/scripts/``. We do
-not overwrite existing files, so a user who edited a seed script
-keeps their edits across upgrades.
+bundled seed_scripts/ tree out to ``<PROJECT_ROOT>/python_storage/``.
+We do not overwrite existing files, so a user who edited a seed
+script keeps their edits across upgrades.
 
 Idempotent: ``status_summary()`` reflects what's currently on disk and
 ``seed()`` is a no-op when every expected script is already present.
@@ -36,7 +36,8 @@ def _seed_source_dir() -> Path | None:
 
     Source-checkout: ``<repo>/src/voitta/resources/seed_scripts/`` (only
     exists once ``build_app.sh`` has been run; in pure-dev mode the
-    real ``<repo>/scripts/`` is already on disk so seeding is a no-op).
+    real ``<repo>/python_storage/{compute,reports}/`` is already on
+    disk so seeding is a no-op).
     Packaged .app: same path inside the bundle, found via the ``voitta``
     package's ``__file__``.
     """
@@ -49,7 +50,10 @@ def _seed_source_dir() -> Path | None:
 
 
 def _target_dirs() -> tuple[Path, Path]:
-    target = PROJECT_ROOT / "scripts"
+    # Scripts live under ``python_storage/`` alongside the snapshot
+    # cache — single unified state dir. See
+    # ``app.services.scripts.SCRIPTS_ROOT``.
+    target = PROJECT_ROOT / "python_storage"
     return target / "compute", target / "reports"
 
 

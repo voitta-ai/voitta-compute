@@ -15,19 +15,25 @@ Two flavours, one host:
 
 Persistence layout — one folder per script, with run output co-located::
 
-    scripts/
+    python_storage/
+    ├── cache/                                  (snapshot dirs — see
+    │   └── snapshot_<handle>/                   services/python_storage.py)
     ├── compute/
     │   └── <slug>/
     │       ├── code.py
     │       ├── meta.json
     │       └── runs/<run_id>/img_*.png
-    └── reports/
+    ├── reports/
+    │   └── <slug>/
+    │       ├── code.py
+    │       └── meta.json
+    └── flows/
         └── <slug>/
             ├── code.py
             └── meta.json
 
 Image outputs from compute scripts land under
-``scripts/compute/<slug>/runs/<run_id>/img_N.png`` and are served by
+``python_storage/compute/<slug>/runs/<run_id>/img_N.png`` and are served by
 the ``/api/script-output/<slug>/<run_id>/<file>`` route.
 
 Trust model — same as ``buffer_eval``:
@@ -62,7 +68,12 @@ from typing import Any
 # create scripts/compute/<slug>/.
 from app.config import PROJECT_ROOT  # noqa: E402
 
-SCRIPTS_ROOT = PROJECT_ROOT / "scripts"
+# Scripts live alongside the snapshot cache under the single
+# ``python_storage/`` state dir. The cache sits at
+# ``python_storage/cache/`` (see services/python_storage.py);
+# durable LLM-authored code sits at ``python_storage/{compute,
+# reports,flows}/``. One state root, one .gitignore line.
+SCRIPTS_ROOT = PROJECT_ROOT / "python_storage"
 SCRIPTS_COMPUTE = SCRIPTS_ROOT / "compute"
 SCRIPTS_REPORTS = SCRIPTS_ROOT / "reports"
 SCRIPTS_FLOWS = SCRIPTS_ROOT / "flows"
@@ -276,6 +287,26 @@ class ScriptContext:
         if not path.exists():
             raise FileNotFoundError(f"snapshot {handle!r} has no raw.json")
         return json.loads(path.read_text())
+
+    def ensure_local(self, ref: str) -> str:
+        """Materialise an upstream-artefact ref into a local path.
+
+        See VOITTA_SYSTEM_PROMPT § "REPORTS — REFERENCE UPSTREAM
+        ARTEFACTS" and the plugin prompt files for the ref grammar.
+        Returns the local file or directory path as a string —
+        ``pathlib.Path(p).read_bytes()`` Just Works.
+
+        The first call for a given ref fetches and caches; subsequent
+        calls with the same ref hit the cache and skip the network.
+        If the user deletes the cached snapshot, the next ensure_local
+        call refetches transparently. Raises :class:`EnsureLocalError`
+        on any unrecoverable failure (unknown scheme, network error,
+        provider rejected the request) — script authors can wrap the
+        call in ``try/except`` to degrade gracefully.
+        """
+        from app.services.ensure_local import ensure_local
+
+        return ensure_local(ref)
 
     # ---- output ---------------------------------------------------------
 

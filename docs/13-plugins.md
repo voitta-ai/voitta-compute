@@ -15,7 +15,7 @@ plugins/<name>/
 │   └── widget.ts              # registerPrimitive(...) side-effect imports
 ├── docs/
 │   └── *.md                   # auto-indexed into the RAG corpus
-└── scripts/                   # optional curated compute / report scripts
+└── seed_scripts/              # optional curated compute / report scripts (copied into python_storage/ at first launch)
     ├── compute/<slug>/{code.py, meta.json}
     └── reports/<slug>/{code.py, meta.json}
 ```
@@ -27,7 +27,7 @@ Voitta core auto-discovers all four pieces:
 | Backend tools | `pkgutil`-style scan: every `plugins/<name>/manifest.json` reads `python_module`, the loader adds `backend/` to `sys.path` and imports the module | [backend/app/tools/providers/__init__.py](../backend/app/tools/providers/__init__.py) |
 | Browser primitives | `import.meta.glob("../../plugins/*/frontend/widget.ts", { eager: true })` in widget.tsx | [frontend/src/widget.tsx](../frontend/src/widget.tsx) |
 | Docs → RAG | `_discover_plugin_docs()` walks every `plugins/<name>/docs/*.md` into the same corpus core docs land in | [rag/build_rag.py](../rag/build_rag.py) |
-| Seed scripts | `build_app.sh` walks `plugins/<name>/scripts/{compute,reports}/*` and stages alongside core seed scripts | [build_app.sh](../build_app.sh) |
+| Seed scripts | `build_app.sh` walks `plugins/<name>/seed_scripts/{compute,reports}/*` and stages alongside core seed scripts; at first launch they're copied into the user's `python_storage/{compute,reports}/` | [build_app.sh](../build_app.sh) |
 
 ## The manifest
 
@@ -161,6 +161,6 @@ To verify your plugin is loaded: launch the .app, open the menu-bar Settings dia
 - [ ] `plugins/<name>/frontend/widget.ts` (only if you need browser primitives)
 - [ ] At least one `plugins/<name>/docs/*.md` describing your tools — the LLM relies on RAG hits to know what's available
 - [ ] Optional: `plugins/<name>/prompt.md` + `"system_prompt": "prompt.md"` in the manifest, for host-scoped LLM rules ("before X, call Y first")
-- [ ] Optional: `plugins/<name>/scripts/compute/<slug>/{code.py, meta.json}` for curated analysis flows the LLM should call automatically when relevant data lands in `python_storage`
+- [ ] Optional: `plugins/<name>/seed_scripts/compute/<slug>/{code.py, meta.json}` for curated analysis flows the LLM should call automatically when relevant data lands in `python_storage`
 
 After the first run, your plugin's tools appear in the LLM's tool catalogue automatically (gated to your hosts), your docs flow into the RAG corpus, and your seed scripts get copied into the user's writable scripts directory.

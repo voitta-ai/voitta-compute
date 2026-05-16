@@ -61,6 +61,20 @@ export function registerPrimitive(name: string, fn: Primitive): void {
   primitives.set(name, fn);
 }
 
+/** Invoke a registered primitive directly from frontend code (no server
+ * round-trip). Used by the in-pane artifacts browser to mount a report
+ * iframe / flow pane the same way the LLM-driven tools do — without
+ * going through the chat. Throws if no primitive of that name has been
+ * registered yet (e.g. called before `widget.tsx` mounted). */
+export async function invokePrimitive(name: string, args: unknown): Promise<unknown> {
+  const fn = primitives.get(name);
+  if (!fn) {
+    throw new Error(`primitive ${JSON.stringify(name)} not registered`);
+  }
+  const ctx: PrimitiveContext = { signal: new AbortController().signal };
+  return await fn((args || {}) as Record<string, unknown>, ctx);
+}
+
 export function startBridge(
   backendOrigin: string,
   pluginDefaults?: Parameters<typeof bootstrapSettings>[1],
