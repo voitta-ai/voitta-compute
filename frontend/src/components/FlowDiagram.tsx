@@ -122,37 +122,60 @@ function stepToNode(
   };
 }
 
+// Probe whether `--voitta-bg` (read from a node INSIDE the shadow root)
+// resolves to a dark or light colour. Returns null if the value can't
+// be parsed — caller falls back to "light".
+function detectColorMode(el: Element | null): "dark" | "light" | null {
+  if (!el || typeof window === "undefined") return null;
+  const bg = getComputedStyle(el).getPropertyValue("--voitta-bg").trim();
+  if (!bg) return null;
+  // Tokens are usually 6-char hex; accept 3-char hex too.
+  let m = bg.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  let r: number, g: number, b: number;
+  if (m) {
+    r = parseInt(m[1], 16); g = parseInt(m[2], 16); b = parseInt(m[3], 16);
+  } else {
+    m = bg.match(/^#?([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+    if (!m) return null;
+    r = parseInt(m[1] + m[1], 16);
+    g = parseInt(m[2] + m[2], 16);
+    b = parseInt(m[3] + m[3], 16);
+  }
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return lum < 0.5 ? "dark" : "light";
+}
+
 export function FlowDiagram({ definition, onReady, onError }: Props) {
   const cfg = definition.process.config ?? {};
   const defaultEdgeType: FlowEdgeStyle = cfg.edge_style ?? "smoothstep";
   const bgVariant = cfg.background ?? "dots";
   const showMinimap = !!cfg.show_minimap;
   const titleBlock = cfg.title_block;
-  const colorModeProp: ColorMode = (() => {
+
+  // Wrapper ref lives INSIDE the widget's shadow DOM, so
+  // getComputedStyle(wrapperRef.current) resolves :host { --voitta-* }
+  // variables correctly. document.documentElement does NOT — that's
+  // the host page's <html>, which has no --voitta-* tokens.
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [resolvedMode, setResolvedMode] = useState<ColorMode>("light");
+
+  // For explicit "dark" / "light" / "system" — use directly.
+  // For "auto" (or unset → defaults to auto) — probe the wrapper post-mount.
+  useEffect(() => {
     const m = cfg.color_mode;
-    if (m === "dark" || m === "light" || m === "system") return m;
-    if (m === "auto") {
-      // Probe whether the host shadow root is currently dark by
-      // reading a token. `--voitta-bg` is the canvas; if its
-      // luminance is low, we're dark. Fall back to "light".
-      if (typeof window !== "undefined") {
-        const root = document.documentElement;
-        const bg = getComputedStyle(root).getPropertyValue("--voitta-bg").trim();
-        if (bg) {
-          // crude RGB-luminance check — tokens are hex
-          const m2 = bg.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-          if (m2) {
-            const r = parseInt(m2[1], 16);
-            const g = parseInt(m2[2], 16);
-            const b = parseInt(m2[3], 16);
-            const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-            return lum < 0.5 ? "dark" : "light";
-          }
-        }
-      }
+    if (m === "dark" || m === "light" || m === "system") {
+      setResolvedMode(m);
+      return;
     }
-    return "light";
-  })();
+    // auto: probe after mount; rAF gives the DOM one tick to settle
+    // any pending plugin-theme-link load.
+    const probe = () => {
+      const mode = detectColorMode(wrapperRef.current);
+      if (mode) setResolvedMode(mode);
+    };
+    const id = requestAnimationFrame(probe);
+    return () => cancelAnimationFrame(id);
+  }, [cfg.color_mode]);
 
   const [layoutState, setLayoutState] = useState<
     | { kind: "loading" }
@@ -218,7 +241,10 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
 
   return (
     <ReactFlowProvider>
-      <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      <div
+        ref={wrapperRef}
+        style={{ width: "100%", height: "100%", position: "relative" }}
+      >
         <ReactFlow
           nodes={layoutState.nodes}
           edges={layoutState.edges}
@@ -232,7 +258,7 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
           // in styles.css so arrowheads automatically follow the
           // stroke colour.
           defaultMarkerColor={null as unknown as string}
-          colorMode={colorModeProp}
+          colorMode={resolvedMode}
           elevateEdgesOnSelect={true}
           fitView
           fitViewOptions={{ padding: 0.15 }}
@@ -259,7 +285,7 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
               variant={bgVariant as BackgroundVariant}
               gap={16}
               size={1}
-              color="var(--xy-background-pattern-color, #475569)"
+              color="var(--voitta-flow-grid, #d4d4d8)"
             />
           )}
           <Controls showInteractive={false} position="bottom-left" />
