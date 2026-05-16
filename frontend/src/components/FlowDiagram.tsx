@@ -58,24 +58,38 @@ const ARROW_TYPE: Record<string, MarkerType | null> = {
   "none": null,
 };
 
+interface LaidOutEdgeInfo {
+  bendPoints: { x: number; y: number }[];
+  sourcePoint?: { x: number; y: number };
+  targetPoint?: { x: number; y: number };
+}
+
 function connectionToEdge(
   c: FlowConnection,
   defaultEdgeType: FlowEdgeStyle,
   edgeOptions: NonNullable<FlowDefinition["process"]["config"]>["edge_options"] = {},
+  laidOut?: LaidOutEdgeInfo,
 ): Edge {
   const tone = c.tone ?? "default";
   const dashed = c.style === "dashed";
   const isPortBranch = !!c.source_handle;
   const markerType = ARROW_TYPE[c.marker ?? "arrow-closed"] ?? null;
 
+  // Three-way pick:
+  //   • Port-shape decisions → FixedEdge (explicit handle attach).
+  //   • Have ELK bend points → OrthogonalEdge (true rectilinear path).
+  //   • Otherwise            → FloatingEdge (smoothstep approximation).
+  let edgeKind: "fixed" | "orthogonal" | "floating";
+  if (isPortBranch) edgeKind = "fixed";
+  else if (laidOut && laidOut.bendPoints.length > 0) edgeKind = "orthogonal";
+  else edgeKind = "floating";
+
   return {
     id: `${c.from}->${c.to}`,
     source: c.from,
     target: c.to,
     sourceHandle: c.source_handle,
-    // Port-decision branches use FixedEdge (explicit handle attach);
-    // everything else uses FloatingEdge (computed endpoints).
-    type: isPortBranch ? "fixed" : "floating",
+    type: edgeKind,
     label: c.label || undefined,
     animated: c.animated === true,
     data: {
@@ -84,6 +98,12 @@ function connectionToEdge(
       borderRadius: c.border_radius ?? edgeOptions.border_radius,
       offset: edgeOptions.offset,
       stepPosition: edgeOptions.step_position,
+      // Orthogonal-only: bend-point geometry from the ELK pass.
+      // Empty arrays / undefined are fine for non-orthogonal edges —
+      // the OrthogonalEdge component ignores them when it's not used.
+      bendPoints: laidOut?.bendPoints ?? [],
+      sourcePoint: laidOut?.sourcePoint,
+      targetPoint: laidOut?.targetPoint,
     },
     style: {
       strokeWidth: 2,
@@ -198,9 +218,26 @@ export function FlowDiagram({ definition, onReady, onError }: Props) {
             pos?.height ?? 80,
           );
         });
-        const edges: Edge[] = definition.process.connections.map((c) =>
-          connectionToEdge(c, defaultEdgeType, cfg.edge_options),
-        );
+        // Build a lookup of per-edge ELK results by `${from}->${to}#${i}`.
+        // ELK keys edges in the order we sent them (we use the source/
+        // target id pair + index to disambiguate parallel edges).
+        const layoutEdgeById = new Map<string, LaidOutEdgeInfo>();
+        for (const le of lay.edges) {
+          layoutEdgeById.set(le.id, {
+            bendPoints: le.bendPoints,
+            sourcePoint: le.sourcePoint,
+            targetPoint: le.targetPoint,
+          });
+        }
+        const edges: Edge[] = definition.process.connections.map((c, i) => {
+          const elkKey = `${c.from}->${c.to}#${i}`;
+          return connectionToEdge(
+            c,
+            defaultEdgeType,
+            cfg.edge_options,
+            layoutEdgeById.get(elkKey),
+          );
+        });
         setLayoutState({ kind: "ready", nodes, edges });
         onReady?.();
       } catch (err) {

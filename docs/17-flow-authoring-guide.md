@@ -20,8 +20,11 @@ def build(ctx):
     p = FlowBuilder("Process Name", "One-line description")
 
     # diagram-level config (all optional)
-    p.layout(direction="TB", engine="elk")
-    p.edge_style("smoothstep")
+    p.layout(direction="TB", engine="elk",
+             edge_routing="orthogonal",   # ← true rectilinear routing
+             node_spacing=60, layer_spacing=90,
+             thoroughness=10)              # tune for cleaner layouts
+    p.edge_style("smoothstep")              # fallback when ELK can't route
     p.edge_options(border_radius=8, offset=20, step_position=0.5)
     p.background("dots")
     p.palette("dark")          # node body colours; "light" default
@@ -467,6 +470,90 @@ Switch to `dagre` when:
 - The user explicitly asks for "lighter / faster"
 
 Otherwise: ELK.
+
+---
+
+## 9.5. Layout tuning — edge routing & spacing
+
+ELK (the default engine) exposes several knobs that change layout
+quality dramatically. All are kwargs on `p.layout()`:
+
+```python
+p.layout(
+    engine="elk",
+    edge_routing="orthogonal",            # true rectilinear (default)
+    node_spacing=60,                       # px between sibling nodes
+    layer_spacing=90,                      # px between layers
+    crossing_minimization="LAYER_SWEEP",   # LAYER_SWEEP | INTERACTIVE | NONE
+    node_placement="NETWORK_SIMPLEX",      # NETWORK_SIMPLEX | BRANDES_KOEPF
+                                           # | LINEAR_SEGMENTS | SIMPLE
+    thoroughness=7,                        # 1..100; higher = better, slower
+    elk_options={"elk.layered.cycleBreaking.strategy": "DEPTH_FIRST"},
+)
+```
+
+### `edge_routing` — the single biggest quality knob
+
+| Value | What it does |
+|---|---|
+| `"orthogonal"` (default) | True rectilinear routing. ELK computes N-bend polylines that avoid crossings. Renders as a `<path>` with hard 90° corners — the schematic look. **Use this for engineering diagrams.** |
+| `"polyline"` | Polyline with no orthogonal constraint — diagonal segments allowed. Looks like a sketch. |
+| `"splines"` | Smooth curves through nodes. Looks like a designer's flowchart, not engineering. |
+
+When `edge_routing="orthogonal"`, each edge is rendered by the
+`OrthogonalEdge` component using ELK's computed bend points — NOT by
+ReactFlow's bundled `getSmoothStepPath` (which is a 2-bend
+approximation, not a real router). With the other options ELK still
+runs, but we fall back to ReactFlow's smoothstep for the visual.
+
+### `node_spacing` / `layer_spacing`
+
+Bigger numbers = more space for the router to bend without crossings.
+Defaults (60 / 90) are tight; bump to ~80 / 110 if your diagram has
+many edges and looks cramped. Going below the defaults often
+produces overlapping edges — ELK can't route inside a wall of nodes.
+
+### `crossing_minimization` / `node_placement` / `thoroughness`
+
+The ELK algorithm tuning trio. Worth touching when:
+
+- **Lots of edge crossings**: increase `thoroughness` to 15–25.
+- **Layout feels "loose"**: switch `node_placement` to `BRANDES_KOEPF`
+  (tighter).
+- **User dragged nodes manually and you want to keep their order**:
+  switch `crossing_minimization` to `INTERACTIVE`.
+
+### `elk_options` — the escape hatch
+
+Any ELK config not exposed as a typed kwarg goes here:
+
+```python
+p.layout(elk_options={
+    "elk.layered.cycleBreaking.strategy": "DEPTH_FIRST",
+    "elk.layered.feedbackEdges": "true",
+    "elk.layered.mergeEdges": "true",
+})
+```
+
+Full reference: https://eclipse.dev/elk/reference/options.html
+
+### Per-edge handle hints
+
+When ELK's auto-routing picks an awkward side for a particular edge
+(common with back-edges / retry loops), pin it manually:
+
+```python
+p.connect("retry", "decision",
+          source_side="bottom",   # retry exits its bottom
+          target_side="left")     # enters decision's left
+
+p.connect("order", "decision",
+          source_side="bottom",
+          target_side="top")      # canonical top-to-bottom flow
+```
+
+Most diagrams never need this — the auto-routing is good. Reach for
+side hints when you can see a specific edge taking a bad route.
 
 ---
 

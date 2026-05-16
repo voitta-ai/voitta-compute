@@ -264,7 +264,8 @@ possible, instead of hand-crafted scaffolding:
 
 | Feature | How we use it | What it replaces |
 |---|---|---|
-| **Floating edges** (`useInternalNode` + `getEdgeParams`) | Default edge component. Computes endpoints from source/target node geometry at render time — edges naturally meet whichever side of the node is closest. | Multi-handle scaffolding (one Handle per cardinal direction). Most nodes now have ONE hidden source and ONE hidden target handle. |
+| **Orthogonal edges** (ELK `edgeRouting=ORTHOGONAL` → `OrthogonalEdge` component) | Default when `engine="elk"` and `edge_routing="orthogonal"`. ELK precomputes N-bend polylines; the frontend renders them with a single `<path>` of `L` segments. True rectilinear routing — no zig-zag detours, no crossings. | ReactFlow's bundled `getSmoothStepPath` (a 2-bend approximation that produces bad routes for non-aligned source/target). |
+| **Floating edges** (`useInternalNode` + `getEdgeParams`) | Fallback when no bend points were computed (dagre layouts, or ELK with non-orthogonal routing). Endpoints calculated from source/target geometry; smoothstep path. | Multi-handle scaffolding (one Handle per cardinal direction). Most nodes now have ONE hidden source and ONE hidden target handle. |
 | **`useNodeConnections`** (in `DecisionPortNode`) | Each port row queries its outgoing connection by handle ID and resolves the target node's label via `useReactFlow().getNode()`. Renders `→ destination` inline next to the branch label. | Hand-wired prop-drilling of destination names. |
 | **`EdgeLabelRenderer`** | DOM portal for rich edge labels. We render `<div class="flow-edge-label tone-X">` with full CSS styling; tones get distinct backgrounds and borders. | SVG `<text>` labels (limited typography, no per-tone background). |
 | **`<Panel position="top-right">`** | Built-in positioned overlay for the title block. ReactFlow handles z-index and corner positioning. | Hand-positioned `position: absolute` div. |

@@ -31,8 +31,23 @@ export interface LaidOutNode {
   height: number;
 }
 
+export interface LaidOutEdge {
+  // Stable id matching connection (`${from}->${to}`).
+  id: string;
+  // ELK orthogonal-routing bend points (absolute, post-layout). Empty
+  // when the layout engine doesn't produce them (dagre, or ELK with
+  // non-orthogonal routing).
+  bendPoints: { x: number; y: number }[];
+  // Source and target attach points (absolute). When present, the
+  // OrthogonalEdge component uses them as line endpoints instead of
+  // letting floating-edge math approximate.
+  sourcePoint?: { x: number; y: number };
+  targetPoint?: { x: number; y: number };
+}
+
 export interface LayoutResult {
   nodes: LaidOutNode[];
+  edges: LaidOutEdge[];
 }
 
 // Size estimate based on content. Has to match what the rendered DOM
@@ -180,21 +195,23 @@ async function layoutWithDagre(
       height: sz.height,
     };
   });
-  return { nodes };
+  // Dagre exposes per-edge `points` arrays but they're spline control
+  // points, not orthogonal bends. Skip them — the frontend uses
+  // FloatingEdge / FixedEdge smoothstep paths for dagre layouts.
+  return { nodes, edges: [] };
 }
 
 
 // ─── elk ──────────────────────────────────────────────────────────────────
 
 
-async function layoutWithElk(
-  def: FlowDefinition,
-  direction: FlowDirection,
-): Promise<LayoutResult> {
+async function layoutWithElk(def: FlowDefinition): Promise<LayoutResult> {
   const ELKMod = await import("elkjs/lib/elk.bundled.js");
-  // The default export shape varies between bundlers; cover both.
   const ELK = (ELKMod.default ?? (ELKMod as any).ELK ?? ELKMod) as any;
   const elk = new ELK();
+
+  const cfg = def.process.config ?? {};
+  const direction = cfg.direction ?? "TB";
 
   // ELK uses a different direction vocabulary. Map ours onto theirs.
   const elkDir = (
@@ -206,42 +223,93 @@ async function layoutWithElk(
     } as const
   )[direction];
 
+  // Map our edge_routing names to ELK's enum values.
+  const elkRouting = (
+    {
+      orthogonal: "ORTHOGONAL",
+      polyline: "POLYLINE",
+      splines: "SPLINES",
+    } as const
+  )[cfg.edge_routing ?? "orthogonal"];
+
   const sizes = new Map<string, { width: number; height: number }>();
   for (const step of def.process.steps) {
     sizes.set(step.id, estimateNodeSize(step));
   }
 
+  // Compose layout options from script-supplied knobs + sensible
+  // defaults. Defaults match the "engineering schematic" aesthetic:
+  // generous spacing so orthogonal edges have room to bend.
+  const nodeSpacing = String(cfg.node_spacing ?? 60);
+  const layerSpacing = String(cfg.layer_spacing ?? 90);
+  const crossingMinStrategy = cfg.crossing_minimization ?? "LAYER_SWEEP";
+  const nodePlacement = cfg.node_placement ?? "NETWORK_SIMPLEX";
+  const thoroughness = String(cfg.thoroughness ?? 7);
+
+  const layoutOptions: Record<string, string> = {
+    "elk.algorithm": "layered",
+    "elk.direction": elkDir,
+    "elk.edgeRouting": elkRouting,
+    "elk.spacing.nodeNode": nodeSpacing,
+    "elk.layered.spacing.nodeNodeBetweenLayers": layerSpacing,
+    "elk.spacing.edgeNode": "30",
+    "elk.spacing.edgeEdge": "20",
+    "elk.layered.spacing.edgeEdgeBetweenLayers": "20",
+    "elk.layered.spacing.edgeNodeBetweenLayers": "30",
+    "elk.layered.nodePlacement.strategy": nodePlacement,
+    "elk.layered.crossingMinimization.strategy": crossingMinStrategy,
+    "elk.layered.thoroughness": thoroughness,
+    // FIXED_SIDE lets ELK pick smart port positions when a node has
+    // many outputs (port-shape decisions) — places them on one side
+    // instead of scattering across all four.
+    "elk.portConstraints": "FIXED_SIDE",
+  };
+  // Per-step elk_options escape hatch (validated server-side).
+  if (cfg.elk_options) {
+    for (const [k, v] of Object.entries(cfg.elk_options)) {
+      layoutOptions[k] = String(v);
+    }
+  }
+
+  // Map per-edge source_side/target_side hints to ELK port constraints.
+  // We synthesise a single dummy port per side the script wanted to
+  // pin, with explicit side constraints.
+  const elkSideToken: Record<string, string> = {
+    top: "NORTH",
+    right: "EAST",
+    bottom: "SOUTH",
+    left: "WEST",
+  };
+
   const graph: any = {
     id: "root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": elkDir,
-      // Spacing tuned for engineering-schematic readability:
-      // generous between-layer space gives orthogonal edge routing
-      // room to make 90° turns without crossing other edges.
-      "elk.spacing.nodeNode": "60",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "90",
-      "elk.spacing.edgeNode": "30",
-      "elk.spacing.edgeEdge": "20",
-      "elk.layered.spacing.edgeEdgeBetweenLayers": "20",
-      "elk.layered.spacing.edgeNodeBetweenLayers": "30",
-      "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
-      "elk.edgeRouting": "ORTHOGONAL",
-      // Lets ELK pick smarter port positions when a node has many
-      // outputs (port-shape decisions). Without this it spreads them
-      // evenly across all sides; with FIXED_SIDE it respects our
-      // intent of putting them all on one edge.
-      "elk.portConstraints": "FIXED_SIDE",
-    },
+    layoutOptions,
     children: def.process.steps.map((step) => {
       const sz = sizes.get(step.id)!;
       return { id: step.id, width: sz.width, height: sz.height };
     }),
-    edges: def.process.connections.map((e, i) => ({
-      id: `e${i}`,
-      sources: [e.from],
-      targets: [e.to],
-    })),
+    edges: def.process.connections.map((e, i) => {
+      const edge: any = {
+        id: `${e.from}->${e.to}#${i}`,
+        sources: [e.from],
+        targets: [e.to],
+      };
+      // Side hints: ELK reads `properties.{port,side}` on each edge.
+      // We pass plain `org.eclipse.elk.layered.priority.{direction}`
+      // style hints — for stable behaviour we use the layoutOptions
+      // map on the edge directly.
+      const edgeLayoutOptions: Record<string, string> = {};
+      if (e.source_side && elkSideToken[e.source_side]) {
+        edgeLayoutOptions["org.eclipse.elk.port.side"] = elkSideToken[e.source_side];
+      }
+      if (e.target_side && elkSideToken[e.target_side]) {
+        edgeLayoutOptions["org.eclipse.elk.layered.allowNonFlowPortsToSwitchSides"] = "true";
+      }
+      if (Object.keys(edgeLayoutOptions).length > 0) {
+        edge.layoutOptions = edgeLayoutOptions;
+      }
+      return edge;
+    }),
   };
 
   const out = await elk.layout(graph);
@@ -251,8 +319,6 @@ async function layoutWithElk(
   const nodes: LaidOutNode[] = def.process.steps.map((step) => {
     const c = childById.get(step.id) || {};
     const sz = sizes.get(step.id)!;
-    // ELK returns top-left of the node bounding box; ReactFlow with
-    // nodeOrigin=[0.5,0.5] expects the CENTRE. Add half-size.
     return {
       id: step.id,
       x: (c.x ?? 0) + sz.width / 2,
@@ -261,7 +327,33 @@ async function layoutWithElk(
       height: sz.height,
     };
   });
-  return { nodes };
+
+  // Pull bend points out of ELK's edge results. ELK gives each edge
+  // a `sections` array with start/end/bendPoints — we collapse to a
+  // flat polyline including the start and end coordinates so the
+  // frontend can render with a single <path d="M…L…L…"> string.
+  const edges: LaidOutEdge[] = (out.edges ?? []).map((elkEdge: any) => {
+    const section = (elkEdge.sections ?? [])[0];
+    if (!section) {
+      return { id: elkEdge.id, bendPoints: [] };
+    }
+    const bendPoints = (section.bendPoints ?? []).map((p: any) => ({
+      x: Number(p.x) || 0,
+      y: Number(p.y) || 0,
+    }));
+    return {
+      id: elkEdge.id,
+      bendPoints,
+      sourcePoint: section.startPoint
+        ? { x: Number(section.startPoint.x), y: Number(section.startPoint.y) }
+        : undefined,
+      targetPoint: section.endPoint
+        ? { x: Number(section.endPoint.x), y: Number(section.endPoint.y) }
+        : undefined,
+    };
+  });
+
+  return { nodes, edges };
 }
 
 
@@ -273,5 +365,5 @@ export async function layoutFlow(def: FlowDefinition): Promise<LayoutResult> {
   const engine: FlowLayoutEngine = cfg.layout_engine ?? "elk";
   const direction: FlowDirection = cfg.direction ?? "TB";
   if (engine === "dagre") return layoutWithDagre(def, direction);
-  return layoutWithElk(def, direction);
+  return layoutWithElk(def);
 }

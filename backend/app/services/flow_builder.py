@@ -301,16 +301,54 @@ class FlowBuilder:
         *,
         direction: str = "TB",
         engine: str = "elk",
+        edge_routing: str = "orthogonal",
+        node_spacing: int | None = None,
+        layer_spacing: int | None = None,
+        crossing_minimization: str = "LAYER_SWEEP",
+        node_placement: str = "NETWORK_SIMPLEX",
+        thoroughness: int | None = None,
+        elk_options: dict[str, str] | None = None,
     ) -> "FlowBuilder":
         """Configure the auto-layout pass.
 
-        ``direction`` is one of ``TB`` (top-bottom, default), ``LR``
-        (left-right), ``BT``, ``RL``.
+        ``direction`` — TB (default) | LR | BT | RL.
 
-        ``engine`` is ``elk`` (default — Sugiyama-style layered routing,
-        higher quality, ~250 KB JS) or ``dagre`` (~80 KB, faster, less
-        clever about edge routing). Engineering diagrams typically want
-        ``elk`` for better orthogonal edge crossings.
+        ``engine`` — ``"elk"`` (default; Sugiyama layered routing, can do
+        true orthogonal edge routing) or ``"dagre"`` (smaller / faster /
+        simpler, edges are spline-only — no orthogonal mode).
+
+        Engineering-diagram knobs (ELK only — ignored by dagre):
+
+          • ``edge_routing`` — ``"orthogonal"`` (default, recommended:
+            true rectilinear routing with bend points; renders as
+            polyline edges with crisp 90° turns) | ``"polyline"`` |
+            ``"splines"``.
+          • ``node_spacing`` — px between sibling nodes (default 60).
+            Increase to ~80 for fewer crossings; decrease to ~40 for
+            denser layouts.
+          • ``layer_spacing`` — px between successive layers (default
+            90). Increase to ~110 to give orthogonal edges room to
+            route without crowding.
+          • ``crossing_minimization`` — ``"LAYER_SWEEP"`` (default,
+            good general-purpose) | ``"INTERACTIVE"`` (preserves user
+            order) | ``"NONE"``.
+          • ``node_placement`` — ``"NETWORK_SIMPLEX"`` (default,
+            balances edge lengths well) | ``"BRANDES_KOEPF"`` (tighter
+            layouts) | ``"LINEAR_SEGMENTS"`` | ``"SIMPLE"``.
+          • ``thoroughness`` — ELK iteration budget (1–100; default 7).
+            Higher = better layouts, slower. 10–20 is a sweet spot for
+            diagrams under 50 nodes.
+
+        ``elk_options`` — escape hatch for raw ELK key/value pairs not
+        exposed above. Keys must start with ``"elk."``; values must be
+        strings. Merged onto the resolved options dict. Use for ELK
+        features we haven't surfaced (port constraints, hierarchy
+        handling, …). Full ELK reference:
+        https://eclipse.dev/elk/reference/options.html
+
+        All knobs ship verbatim on the wire under ``config.layout_*``
+        so the LLM can ``ctx.log`` and inspect what's about to be
+        passed to ELK.
         """
         if direction not in _VALID_DIRECTIONS:
             raise FlowBuilderError(
@@ -321,8 +359,53 @@ class FlowBuilder:
             raise FlowBuilderError(
                 f"layout engine must be one of {_VALID_LAYOUTS}, got {engine!r}"
             )
+        valid_routing = ("orthogonal", "polyline", "splines")
+        if edge_routing not in valid_routing:
+            raise FlowBuilderError(
+                f"edge_routing must be one of {valid_routing}, got {edge_routing!r}"
+            )
+        valid_crossing = ("LAYER_SWEEP", "INTERACTIVE", "NONE")
+        if crossing_minimization not in valid_crossing:
+            raise FlowBuilderError(
+                f"crossing_minimization must be one of {valid_crossing}, "
+                f"got {crossing_minimization!r}"
+            )
+        valid_placement = (
+            "NETWORK_SIMPLEX", "BRANDES_KOEPF", "LINEAR_SEGMENTS", "SIMPLE",
+        )
+        if node_placement not in valid_placement:
+            raise FlowBuilderError(
+                f"node_placement must be one of {valid_placement}, "
+                f"got {node_placement!r}"
+            )
+        if thoroughness is not None and not (1 <= thoroughness <= 100):
+            raise FlowBuilderError("thoroughness must be 1..100")
+
         self._config["direction"] = direction
         self._config["layout_engine"] = engine
+        self._config["edge_routing"] = edge_routing
+        if node_spacing is not None:
+            self._config["node_spacing"] = int(node_spacing)
+        if layer_spacing is not None:
+            self._config["layer_spacing"] = int(layer_spacing)
+        self._config["crossing_minimization"] = crossing_minimization
+        self._config["node_placement"] = node_placement
+        if thoroughness is not None:
+            self._config["thoroughness"] = int(thoroughness)
+
+        if elk_options:
+            cleaned: dict[str, str] = {}
+            for k, v in elk_options.items():
+                if not isinstance(k, str) or not k.startswith("elk."):
+                    raise FlowBuilderError(
+                        f"elk_options keys must start with 'elk.', got {k!r}"
+                    )
+                if not isinstance(v, (str, int, float)):
+                    raise FlowBuilderError(
+                        f"elk_options[{k!r}] value must be string/number"
+                    )
+                cleaned[k] = str(v)
+            self._config["elk_options"] = cleaned
         return self
 
     def edge_style(self, style: str) -> "FlowBuilder":
@@ -823,6 +906,8 @@ class FlowBuilder:
         marker: str = "arrow-closed",
         animated: bool = False,
         border_radius: int | None = None,
+        source_side: str | None = None,
+        target_side: str | None = None,
     ) -> "FlowBuilder":
         """Connect two steps.
 
@@ -836,6 +921,14 @@ class FlowBuilder:
           highlight a flowing / active path.
         ``border_radius`` — per-edge override of smoothstep corner
           softness. Falls back to ``edge_options(border_radius=…)``.
+
+        ``source_side`` / ``target_side`` — pin one (or both) ends of
+          the edge to a specific side of the node: ``"top"`` /
+          ``"right"`` / ``"bottom"`` / ``"left"``. Use when ELK's
+          orthogonal routing makes a sub-optimal choice (e.g. a
+          back-edge to a retry node looks cleaner exiting LEFT and
+          entering TOP than the default top-to-top). Most diagrams
+          never need this — the auto-routing picks well.
 
         For decision branches, use ``.decision(branches=…)`` — those
         auto-emit connections.
@@ -866,6 +959,15 @@ class FlowBuilder:
             not isinstance(border_radius, int) or border_radius < 0
         ):
             raise FlowBuilderError("connect(): border_radius must be a non-negative int")
+        valid_sides = ("top", "right", "bottom", "left")
+        if source_side is not None and source_side not in valid_sides:
+            raise FlowBuilderError(
+                f"connect(): source_side must be one of {valid_sides}, got {source_side!r}"
+            )
+        if target_side is not None and target_side not in valid_sides:
+            raise FlowBuilderError(
+                f"connect(): target_side must be one of {valid_sides}, got {target_side!r}"
+            )
         key = (from_id, to_id)
         if key in self._connection_set:
             return self
@@ -879,6 +981,10 @@ class FlowBuilder:
             conn["animated"] = True
         if border_radius is not None:
             conn["border_radius"] = border_radius
+        if source_side is not None:
+            conn["source_side"] = source_side
+        if target_side is not None:
+            conn["target_side"] = target_side
         self._connections.append(conn)
         self._connection_set.add(key)
         return self
