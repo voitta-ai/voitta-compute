@@ -175,10 +175,13 @@ chmod +x "$ROOT/src/voitta/resources/bin/mkcert"
 # Project markdown — the RAG indexer at first launch walks this tree.
 # Copy with -R so subdirectories (none today, but future-proof) survive.
 cp -R "$ROOT/docs/"* "$ROOT/src/voitta/resources/docs/" 2>/dev/null || true
-# RAG builder script itself + sibling. ``app.rag_build`` adds this dir
-# to sys.path at first launch and imports build_rag from it.
-cp -f "$ROOT/rag/build_rag.py"       "$ROOT/src/voitta/resources/rag_scripts/" 2>/dev/null || true
-cp -f "$ROOT/rag/build_panel_rag.py" "$ROOT/src/voitta/resources/rag_scripts/" 2>/dev/null || true
+# RAG builder script. ``app.rag_build`` adds this dir to sys.path at
+# first launch and drives build_rag.main() to materialise the index.
+if [ ! -f "$ROOT/scripts/build_rag.py" ]; then
+  echo "[build_app] scripts/build_rag.py missing — RAG won't work in the bundle" >&2
+  exit 1
+fi
+cp -f "$ROOT/scripts/build_rag.py" "$ROOT/src/voitta/resources/rag_scripts/"
 
 # Bookmarklet source — the "Copy bookmark text" menu item reads this
 # file at runtime, minifies it, and writes the resulting javascript:

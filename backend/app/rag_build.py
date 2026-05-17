@@ -150,16 +150,19 @@ def _find_rag_script_dir() -> Path | None:
 
 
 def build(progress_cb: ProgressCb) -> bool:
-    """Build the docs corpus into ``PROJECT_ROOT/rag/`` with progress.
+    """Build the docs corpus into ``PROJECT_ROOT/rag/``.
 
-    Phases reported via ``progress_cb(current, total, label, log_line)``:
-      1. one tick per .md file as it's chunked
-      2. embedding-model load + dense Chroma build (one tick)
-      3. BM25 sparse index (one tick)
-      4. manifest write + done
+    Drives ``scripts/build_rag.py``'s ``main()`` (the same script
+    developers run locally) with overridden output paths so the index
+    lands in the user-writable data dir instead of next to the script
+    in the read-only bundle.
 
-    Returns True on success. On any failure the index dirs are left in
-    a clean state (wiped) so a retry on next launch starts fresh.
+    progress_cb is invoked once at start, once at end. build_rag.py
+    prints its own per-phase status to stdout — that lands in
+    voitta.log via desktop_launcher's stdout/stderr redirect.
+
+    Returns True on success. On failure, index dirs are wiped so a
+    retry on next launch starts fresh.
     """
     docs_dir = _docs_source_dir()
     if not docs_dir.is_dir():
@@ -176,148 +179,51 @@ def build(progress_cb: ProgressCb) -> bool:
     if str(rag_script_dir) not in sys.path:
         sys.path.insert(0, str(rag_script_dir))
 
+    # Wipe partial output so the indexer starts clean.
+    for d in (chroma_dir, bm25_dir):
+        if d.exists():
+            shutil.rmtree(d, ignore_errors=True)
+    chroma_dir.parent.mkdir(parents=True, exist_ok=True)
+
+    progress_cb(
+        0, 1,
+        "RAG: building (chromadb downloads ~80 MB on first run; may take ~30 s)…",
+        ">>> rag build start",
+    )
+
     try:
-        # build_rag uses module-level constants for paths — override
-        # before calling its helpers so output lands in the user data
-        # dir (writable) rather than next to the script in the bundle
-        # (read-only inside a signed .app).
         import build_rag  # type: ignore[import-not-found]
 
+        # Redirect the script's module-level path constants so the
+        # index lands in the user data dir. DOCS_DIR for input, the
+        # DOCS_CFG corpus config for output.
         build_rag.DOCS_DIR = docs_dir
         build_rag.RAG_DIR = chroma_dir.parent
-        build_rag.CHROMA_DIR = chroma_dir
-        build_rag.BM25_DIR = bm25_dir
-        build_rag.MANIFEST_PATH = bm25_dir / "manifest.json"
+        build_rag.DOCS_CFG.chroma_dir = chroma_dir
+        build_rag.DOCS_CFG.bm25_dir = bm25_dir
 
-        # Wipe partial output before chunking so a re-run after a crash
-        # starts clean. ``build_rag.reset_dirs`` does this too but only
-        # right before the dense pass — running it earlier means the
-        # "RAG: chunking …" progress lines display against an empty
-        # output dir, which is what the user expects.
-        if chroma_dir.exists():
-            shutil.rmtree(chroma_dir, ignore_errors=True)
-        if bm25_dir.exists():
-            shutil.rmtree(bm25_dir, ignore_errors=True)
-        chroma_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        files = build_rag.discover_docs()
-        plugin_pairs: list = []
-        try:
-            plugin_pairs = build_rag._discover_plugin_docs()
-        except Exception:
-            # Older build_rag.py without plugin support — degrade silently.
-            plugin_pairs = []
-        if not files and not plugin_pairs:
-            progress_cb(0, 1, "RAG: no .md files under docs/", "!!!")
-            return False
-
-        # Total ticks: one per file (core + plugin chunking) + embedding
-        # phase + bm25 phase + manifest.
-        total = len(files) + len(plugin_pairs) + 3
-
-        chunks: list = []
-        for i, f in enumerate(files):
-            cs = build_rag.chunk_file(
-                f,
-                target=build_rag.DEFAULT_TARGET,
-                overlap=build_rag.DEFAULT_OVERLAP,
-                minimum=build_rag.DEFAULT_MIN,
-                hard_max=build_rag.HARD_MAX,
-            )
-            chunks.extend(cs)
-            progress_cb(
-                i, total,
-                f"Indexing docs: {f.name} ({len(cs)} chunks)",
-                f"docs/{f.name}: {len(cs)} chunks",
-            )
-
-        # Plugin docs — same chunking pass, but rel paths are stamped
-        # ``plugins/<name>/docs/<file>.md`` so RAG hits self-identify.
-        offset = len(files)
-        for j, (base, md) in enumerate(plugin_pairs):
-            cs = build_rag.chunk_file(
-                md,
-                target=build_rag.DEFAULT_TARGET,
-                overlap=build_rag.DEFAULT_OVERLAP,
-                minimum=build_rag.DEFAULT_MIN,
-                hard_max=build_rag.HARD_MAX,
-                base_dir=base,
-            )
-            chunks.extend(cs)
-            progress_cb(
-                offset + j, total,
-                f"Indexing plugin docs: {md.name} ({len(cs)} chunks)",
-                f"{md.relative_to(base)}: {len(cs)} chunks",
-            )
-
-        if not chunks:
-            progress_cb(0, 1, "RAG: no chunks produced", "!!!")
-            return False
-
-        # Phase 2: dense Chroma. The first call into chromadb downloads
-        # ~80 MB of model weights on first run (sentence-transformers
-        # all-MiniLM-L6-v2). The label warns the user — this can stall
-        # for ~30 s on a slow connection without any feedback otherwise.
-        progress_cb(
-            len(files), total,
-            "RAG: building semantic index (downloading embedding model on first run)…",
-            f">>> chroma: {len(chunks)} chunks",
-        )
-        # build_rag.reset_dirs() recreates both dirs; we already wiped
-        # them above so this is just an mkdir.
-        build_rag.reset_dirs()
-        build_rag.build_dense(chunks)
-
-        # Phase 3: BM25. Fast — usually done in <1 s for the doc tree.
-        progress_cb(
-            len(files) + 1, total,
-            "RAG: building keyword index…",
-            f">>> bm25: {len(chunks)} chunks",
-        )
-        build_rag.build_sparse(chunks)
-
-        progress_cb(
-            len(files) + 2, total,
-            "RAG: writing manifest…",
-            ">>> manifest",
-        )
-        build_rag.write_manifest(chunks)
-
-        progress_cb(
-            total, total,
-            f"RAG: done — {len(chunks)} chunks across {len(files)} docs",
-            "<<< rag build complete",
-        )
-        # Clear any stale error from a previous failed run so the
-        # Settings dialog stops reporting it.
-        err_path = _error_log_path()
-        try:
-            err_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        return True
+        rc = build_rag.main(["--corpus", "docs"])
+        if rc != 0:
+            raise RuntimeError(f"build_rag.main returned exit code {rc}")
     except Exception as exc:
-        # Don't crash the installer — RAG is one tool of many. Surface
-        # the failure in the install window's log pane so we can debug
-        # later, then tell the user it's optional.
         tb = traceback.format_exc()
         progress_cb(
             0, 1,
             f"RAG: build failed — {type(exc).__name__} (rag_query will be unavailable)",
             tb[-2000:],
         )
-        # Persist so the Settings menu can show it across launches.
         err_path = _error_log_path()
         try:
             err_path.parent.mkdir(parents=True, exist_ok=True)
             err_path.write_text(tb, encoding="utf-8")
         except OSError:
             pass
-        # Wipe so a retry starts fresh.
-        if chroma_dir.exists():
-            shutil.rmtree(chroma_dir, ignore_errors=True)
-        if bm25_dir.exists():
-            shutil.rmtree(bm25_dir, ignore_errors=True)
+        for d in (chroma_dir, bm25_dir):
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
         return False
+
+    progress_cb(1, 1, "RAG: build complete", "<<< rag build complete")
+    # Clear any stale error from a previous failed run.
+    _error_log_path().unlink(missing_ok=True)
+    return True
