@@ -188,7 +188,11 @@ cp -f "$ROOT/scripts/build_rag.py" "$ROOT/src/voitta/resources/rag_scripts/"
 # URL to the clipboard. Without it, the menu item shows an error.
 rm -rf "$ROOT/src/voitta/resources/bookmarklet" 2>/dev/null || true
 mkdir -p "$ROOT/src/voitta/resources/bookmarklet"
-cp -f "$ROOT/bookmarklet/bookmarklet.js" "$ROOT/src/voitta/resources/bookmarklet/" 2>/dev/null || true
+if [ ! -f "$ROOT/bookmarklet/bookmarklet.js" ]; then
+  echo "[build_app] bookmarklet/bookmarklet.js missing — the Copy-bookmark menu item will fail" >&2
+  exit 1
+fi
+cp -f "$ROOT/bookmarklet/bookmarklet.js" "$ROOT/src/voitta/resources/bookmarklet/"
 
 # Seed scripts — the curated compute+report pairs the agent calls
 # automatically (a4db_parse / a4db_3d / dat_parse / dat_curves). They
