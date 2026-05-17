@@ -74,6 +74,13 @@ requires = [
     "anthropic>=0.40",
     "openai>=1.50",
     "google-genai>=0.3",
+    # MCP transport. ``app.services.mcp.client`` does
+    # ``from fastmcp import Client`` at module load; ``app.routes.plugins``
+    # pulls in that module unconditionally during startup. So fastmcp
+    # MUST be in the bundle — moving it to HEAVY_PACKAGES (first-launch
+    # install) doesn't work because the import happens before any
+    # installer code can run.
+    "fastmcp>=2.0",
     # Foundational scientific primitives. numpy + h5py are touched
     # by core code paths (a4db parser at minimum); pillow is needed
     # for ctx.image() in compute scripts.
