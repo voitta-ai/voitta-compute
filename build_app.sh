@@ -297,7 +297,14 @@ if [ "$PACKAGE" -eq 1 ]; then
     echo "[build_app] post-package .app missing at $APP_BUNDLE" >&2
     exit 1
   fi
-  VERSION=$(awk -F'"' '/^version\s*=/ {print $2; exit}' "$ROOT/pyproject.toml")
+  # BSD awk (macOS default) doesn't support \s — use [[:space:]] or
+  # bare spaces. Without this, VERSION expands empty and the DMG ends
+  # up named "Voitta Bookmarklet-.dmg".
+  VERSION=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$ROOT/pyproject.toml")
+  if [ -z "$VERSION" ]; then
+    echo "[build_app] failed to extract version from pyproject.toml" >&2
+    exit 1
+  fi
   DMG="$ROOT/dist/Voitta Bookmarklet-${VERSION}.dmg"
   STAGE_DMG="/tmp/voitta-stage-$$.dmg"
   STAGE_VOL="VoittaBookmarkletStage"   # no spaces — see caveat above
