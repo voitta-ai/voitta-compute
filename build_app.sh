@@ -253,26 +253,79 @@ if [ ! -d "$APP" ]; then
 fi
 
 if [ "$PACKAGE" -eq 1 ]; then
+  # Briefcase signs the .app correctly but its DMG packager runs
+  # ``ditto`` to copy the .app into a mounted volume, which fails with
+  # ``Operation not permitted`` whenever TCC denies the parent process
+  # (Terminal.app / iTerm / Claude Code's harness) the right to write
+  # into a freshly-mounted DMG volume. Briefcase swallows the ditto
+  # error and writes an empty 80K DMG that still passes signature +
+  # notarisation checks (Apple's notary doesn't verify the DMG has a
+  # payload). End users get a DMG that opens to a window containing
+  # only Applications symlink and .DS_Store — no .app.
+  #
+  # The workaround: bypass briefcase's DMG step entirely. We sign the
+  # .app with briefcase (which works fine — that uses codesign, not
+  # ditto-into-DMG), then build the DMG by hand with hdiutil + cp -a.
+  # cp -a doesn't preserve the ACLs that confuse macOS's TCC layer, so
+  # it copies cleanly where ditto fails.
+  #
+  # Caveat: the volume name MUST NOT contain spaces during the cp -a
+  # phase or cp also fails with EPERM. We rename the volume after the
+  # copy, before detach, so the final DMG presents the friendly name.
+
   if [ -z "$SIGN_IDENTITY" ]; then
     # Ad-hoc — fastest, free, but recipients see Gatekeeper warning.
-    echo "[build_app] briefcase package (DMG, ad-hoc sign)..."
-    "$VENV/bin/briefcase" package macOS app --adhoc-sign --no-input
+    # We still need a real DMG, so go through the manual path even
+    # without an identity. Sign with --adhoc-sign for the .app only.
+    echo "[build_app] briefcase package (.app, ad-hoc sign — no DMG yet)..."
+    "$VENV/bin/briefcase" package macOS app --packaging-format zip --adhoc-sign --no-input
   else
-    # Developer ID signed. Briefcase walks every Mach-O file in the
-    # bundle and signs it with the given identity, then signs the
-    # outer .app and produces a DMG. ``--no-input`` keeps the run
-    # non-interactive (errors out instead of prompting).
-    echo "[build_app] briefcase package — signing as: $SIGN_IDENTITY"
+    echo "[build_app] briefcase package (.app only, signing as: $SIGN_IDENTITY)..."
+    # ``--packaging-format zip`` tells briefcase to skip the broken DMG
+    # packager and produce a zip alongside the signed .app. We don't
+    # use the zip output but the flag is the documented escape hatch
+    # for "sign the .app, skip DMG".
     "$VENV/bin/briefcase" package macOS app \
+      --packaging-format zip \
       --identity "$SIGN_IDENTITY" \
       --no-input
+  fi
+
+  # ---- Build the real DMG with hdiutil + cp -a -----------------------------
+  APP_BUNDLE="$ROOT/build/voitta/macos/app/Voitta Bookmarklet.app"
+  if [ ! -d "$APP_BUNDLE" ]; then
+    echo "[build_app] post-package .app missing at $APP_BUNDLE" >&2
+    exit 1
+  fi
+  VERSION=$(awk -F'"' '/^version\s*=/ {print $2; exit}' "$ROOT/pyproject.toml")
+  DMG="$ROOT/dist/Voitta Bookmarklet-${VERSION}.dmg"
+  STAGE_DMG="/tmp/voitta-stage-$$.dmg"
+  STAGE_VOL="VoittaBookmarkletStage"   # no spaces — see caveat above
+  FINAL_VOL="Voitta Bookmarklet ${VERSION}"
+
+  echo "[build_app] hdiutil create staging DMG..."
+  rm -f "$DMG" "$STAGE_DMG"
+  mkdir -p "$ROOT/dist"
+  hdiutil create -size 400m -fs HFS+ -volname "$STAGE_VOL" -o "$STAGE_DMG" >/dev/null
+
+  echo "[build_app] hdiutil attach + cp -a (bypassing ditto)..."
+  hdiutil attach "$STAGE_DMG" -nobrowse >/dev/null
+  trap 'hdiutil detach "/Volumes/$STAGE_VOL" 2>/dev/null || hdiutil detach "/Volumes/$FINAL_VOL" 2>/dev/null || true; rm -f "$STAGE_DMG"' EXIT
+  cp -a "$APP_BUNDLE" "/Volumes/$STAGE_VOL/"
+  ln -s /Applications "/Volumes/$STAGE_VOL/Applications"
+  diskutil rename "/Volumes/$STAGE_VOL" "$FINAL_VOL" >/dev/null
+  hdiutil detach "/Volumes/$FINAL_VOL" >/dev/null
+  trap - EXIT
+
+  echo "[build_app] hdiutil convert to UDZO..."
+  hdiutil convert "$STAGE_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
+  rm -f "$STAGE_DMG"
+
+  if [ -n "$SIGN_IDENTITY" ]; then
+    echo "[build_app] codesigning the DMG..."
+    codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
 
     if [ "$NOTARIZE" -eq 1 ]; then
-      DMG=$(ls -1 "$ROOT/dist/"*.dmg 2>/dev/null | head -1)
-      if [ -z "$DMG" ]; then
-        echo "[build_app] expected a .dmg under dist/ but none found." >&2
-        exit 1
-      fi
       echo "[build_app] notarising $DMG (profile: $NOTARY_PROFILE)..."
       # ``--wait`` blocks until Apple's notary service returns Accepted
       # or Invalid. Typical turnaround: 2-15 min.
