@@ -13,7 +13,7 @@
 [tool.briefcase]
 project_name = "Voitta"
 bundle = "ai.voitta"
-version = "0.1.0"
+version = "0.1.4"
 url = "https://voitta.ai"
 license.text = "Proprietary"
 author = "Voitta"

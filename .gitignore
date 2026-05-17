@@ -51,6 +51,7 @@ backend/logs/
 /src/voitta/resources/rag_scripts/
 /src/voitta/resources/seed_scripts/
 /src/voitta/resources/plugins/
+/src/voitta/resources/bin/
 # Briefcase log dir (created on errors).
 /logs/
 
