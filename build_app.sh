@@ -159,6 +159,18 @@ mkdir -p "$ROOT/src/voitta/resources/docs" \
          "$ROOT/src/voitta/resources/rag_scripts"
 cp -f "$ROOT/frontend/dist/"*.js  "$ROOT/src/voitta/resources/frontend_dist/" 2>/dev/null || true
 cp -f "$ROOT/frontend/dist/"*.map "$ROOT/src/voitta/resources/frontend_dist/" 2>/dev/null || true
+# Core theme tokens — the bundled widget.js inlines these for its own
+# shadow DOM, but the server-side `get_active_theme` tool re-reads the
+# raw CSS at request time to surface tokens to the LLM (matplotlib /
+# Plotly / Three.js skinning). Without this file in the bundle the
+# tool returns `core_theme_unavailable` and plugin overrides never
+# get merged on top of anything. See backend/app/tools/domain/theme.py.
+mkdir -p "$ROOT/src/voitta/resources/frontend_src"
+if [ ! -f "$ROOT/frontend/src/theme.css" ]; then
+  echo "[build_app] frontend/src/theme.css missing — required for get_active_theme tool" >&2
+  exit 1
+fi
+cp -f "$ROOT/frontend/src/theme.css" "$ROOT/src/voitta/resources/frontend_src/theme.css"
 # Bundle mkcert so end users don't need to ``brew install mkcert``.
 # ``app.certs._mkcert_path`` prefers this binary over PATH so first
 # launch can run ``mkcert -install`` + issue a localhost cert pair
