@@ -35,6 +35,25 @@ def is_present() -> bool:
 
 
 def _mkcert_path() -> str | None:
+    """Locate mkcert. Prefer the binary bundled inside the .app
+    (``voitta/resources/bin/mkcert``) so end users don't need to
+    ``brew install mkcert`` themselves; fall back to PATH for source
+    checkouts that aren't running from a built bundle.
+    """
+    try:
+        import voitta as _voitta
+        bundled = Path(_voitta.__file__).resolve().parent / "resources" / "bin" / "mkcert"
+        if bundled.is_file():
+            # Permissions are preserved by briefcase's package_data
+            # mechanism, but flip the executable bit defensively in
+            # case a future packager strips it.
+            import os, stat
+            mode = bundled.stat().st_mode
+            if not (mode & stat.S_IXUSR):
+                bundled.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            return str(bundled)
+    except Exception:  # noqa: BLE001
+        pass
     return shutil.which("mkcert")
 
 

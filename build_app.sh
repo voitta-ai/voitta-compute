@@ -145,12 +145,12 @@ fi
 # rebuild propagates without `--clean`.
 echo "[build_app] staging resources into src/voitta/resources/..."
 mkdir -p "$ROOT/src/voitta/resources/frontend_dist" \
-         "$ROOT/src/voitta/resources/default_certs" \
+         "$ROOT/src/voitta/resources/bin" \
          "$ROOT/src/voitta/resources/docs" \
          "$ROOT/src/voitta/resources/rag_scripts" \
          "$ROOT/src/voitta/resources/seed_scripts"
 rm -f  "$ROOT/src/voitta/resources/frontend_dist/"* \
-       "$ROOT/src/voitta/resources/default_certs/"* 2>/dev/null || true
+       "$ROOT/src/voitta/resources/bin/"* 2>/dev/null || true
 # docs/ + rag_scripts/ get a recursive wipe — re-staged below so a doc
 # rename or build_rag.py edit propagates without --clean.
 rm -rf "$ROOT/src/voitta/resources/docs" \
@@ -159,9 +159,19 @@ mkdir -p "$ROOT/src/voitta/resources/docs" \
          "$ROOT/src/voitta/resources/rag_scripts"
 cp -f "$ROOT/frontend/dist/"*.js  "$ROOT/src/voitta/resources/frontend_dist/" 2>/dev/null || true
 cp -f "$ROOT/frontend/dist/"*.map "$ROOT/src/voitta/resources/frontend_dist/" 2>/dev/null || true
-for f in backend/certs/127.0.0.1+1.pem backend/certs/127.0.0.1+1-key.pem; do
-  [ -f "$ROOT/$f" ] && cp -f "$ROOT/$f" "$ROOT/src/voitta/resources/default_certs/"
-done
+# Bundle mkcert so end users don't need to ``brew install mkcert``.
+# ``app.certs._mkcert_path`` prefers this binary over PATH so first
+# launch can run ``mkcert -install`` + issue a localhost cert pair
+# right inside the user's own trust store. ~4 MB arm64 Mach-O.
+# Briefcase re-signs every Mach-O in the bundle at package time so
+# notarisation accepts it under our Developer ID.
+MKCERT_SRC=$(command -v mkcert || true)
+if [ -z "$MKCERT_SRC" ] || [ ! -f "$MKCERT_SRC" ]; then
+  echo "[build_app] mkcert not found on PATH — install with: brew install mkcert" >&2
+  exit 1
+fi
+cp -f "$MKCERT_SRC" "$ROOT/src/voitta/resources/bin/mkcert"
+chmod +x "$ROOT/src/voitta/resources/bin/mkcert"
 # Project markdown — the RAG indexer at first launch walks this tree.
 # Copy with -R so subdirectories (none today, but future-proof) survive.
 cp -R "$ROOT/docs/"* "$ROOT/src/voitta/resources/docs/" 2>/dev/null || true

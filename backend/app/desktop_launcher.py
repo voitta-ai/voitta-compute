@@ -107,9 +107,12 @@ def _prepare_user_data_dir() -> Path:
     # Refresh frontend bundle on every launch — a .app upgrade should
     # ship the newer widget.js.
     _seed(res / "frontend_dist", user_root / "frontend" / "dist", overwrite=True)
-    # Seed certs only once; if the user has trusted a self-signed cert
-    # in their keychain we don't want a launch to overwrite it.
-    _seed(res / "default_certs", user_root / "backend" / "certs", overwrite=False)
+    # Certs are NOT seeded from the bundle. The dev-machine's mkcert
+    # pair would be useless on the recipient's machine (their trust
+    # store doesn't know our CA). Instead, on first launch
+    # ``app.certs.provision_if_missing`` shells out to the bundled
+    # mkcert binary (see ``resources/bin/mkcert``) which writes a
+    # fresh CA + leaf cert into the user's own keychain.
 
     # python_storage + scripts dirs need to exist before app.main is
     # imported (config / services walk them at module load).

@@ -247,11 +247,21 @@ def ensure_fresh_deploy(log) -> None:
     stored = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
     if stored == current:
         return
-    log.info("deploy: stamp=%r current=%r — wiping userbase/ + rag/", stored, current)
+    log.info(
+        "deploy: stamp=%r current=%r — wiping userbase/ + rag/ + backend/certs/",
+        stored, current,
+    )
     for sub in ("userbase", "rag"):
         p = user_root / sub
         if p.is_dir():
             shutil.rmtree(p, ignore_errors=True)
+    # Wipe certs too: existing pairs may have been seeded by an older
+    # bundle (dev-machine signed → untrusted on recipient) or just be
+    # stale. ``app.certs.provision_if_missing`` regenerates against
+    # the bundled mkcert so the user gets a trusted local cert.
+    certs_dir = user_root / "backend" / "certs"
+    if certs_dir.is_dir():
+        shutil.rmtree(certs_dir, ignore_errors=True)
     # Recreate the user site dir so PIP_PREFIX has a target.
     _user_site().mkdir(parents=True, exist_ok=True)
 
