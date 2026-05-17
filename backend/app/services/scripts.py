@@ -51,12 +51,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import secrets
 import shutil
 import time
 import traceback
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 from typing import Any
 
 
@@ -202,6 +205,35 @@ def _update_run_meta(kind: str, slug: str, *, ok: bool, run_id: str, elapsed_s: 
     _write_meta(path, meta)
 
 
+def _write_refs_sidecar(kind: str, slug: str, refs_list: list[str]) -> None:
+    """Persist the set of canonical upstream-artefact refs the latest
+    run of this script resolved through ``ctx.ensure_local``.
+
+    Sidecar file (NOT meta.json — keeps the artefacts-browser display
+    of meta.json clean) under
+    ``python_storage/<kind>/<slug>/last_refs.json``. The frontend
+    report header reads it via ``GET /api/artifacts/<path>/refs``
+    and shows it on a title-click popover so the user can see which
+    data sources the report was built from.
+
+    ``refs_list`` is whatever ``ctx._resolved_refs`` accumulated —
+    canonical (sorted-key) strings, deduplicated, insertion-ordered.
+    An empty list also gets written (overwrites a stale file) so the
+    popover correctly reports "no upstream data sources" after a
+    refactor that removed the ensure_local calls.
+    """
+    target_dir = _code_path(kind, slug).parent
+    if not target_dir.exists():
+        return
+    payload = {
+        "refs": refs_list,
+        "at": _now_iso(),
+    }
+    (target_dir / "last_refs.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False)
+    )
+
+
 # ---- ScriptContext --------------------------------------------------------
 
 
@@ -260,6 +292,13 @@ class ScriptContext:
         self._design: str | None = None
         self._template_theme: str | None = None
 
+        # Canonical upstream-artefact refs resolved during this run.
+        # Populated by ``ctx.ensure_local`` and consumed by
+        # ``_write_refs_sidecar`` so the frontend can show "this report
+        # was built from these data sources" on the title-click popover.
+        # Insertion-ordered, deduplicated.
+        self._resolved_refs: list[str] = []
+
     # ---- data access -----------------------------------------------------
 
     def snapshot(self, handle: str) -> dict:
@@ -305,6 +344,17 @@ class ScriptContext:
         call in ``try/except`` to degrade gracefully.
         """
         from app.services.ensure_local import ensure_local
+        from app.services.refs import canonicalise, RefError
+
+        # Record the canonical form for the title-click popover. We
+        # capture even refs that fail to resolve — the user still wants
+        # visibility into what the script was *trying* to fetch.
+        try:
+            canonical = canonicalise(ref)
+            if canonical not in self._resolved_refs:
+                self._resolved_refs.append(canonical)
+        except RefError:
+            pass
 
         return ensure_local(ref)
 
@@ -1298,6 +1348,10 @@ async def run_compute(name: str, code: str, args: Any = None, *, timeout_s: floa
     _update_run_meta(
         "compute", slug, ok=ok, run_id=run_id, elapsed_s=elapsed_s, error=error
     )
+    try:
+        _write_refs_sidecar("compute", slug, ctx._resolved_refs)
+    except Exception:
+        _logger.exception("write_refs_sidecar failed for compute/%s", slug)
 
     return {
         "ok": ok,
@@ -1519,6 +1573,16 @@ def report_script_layout(
         _update_run_meta(
             "reports", slug, ok=ok, run_id=run_id, elapsed_s=elapsed_s, error=error
         )
+        # Persist the set of canonical upstream-artefact refs the build
+        # resolved. Frontend report header reads this for the title-click
+        # popover. We write even on failure so the user can see which
+        # refs the script *tried* to fetch — half the value of the
+        # popover is "what was this report built from", which is useful
+        # whether or not the render succeeded.
+        try:
+            _write_refs_sidecar("reports", slug, ctx._resolved_refs)
+        except Exception:
+            _logger.exception("write_refs_sidecar failed for %s/%s", "reports", slug)
     return layout, ctx
 
 

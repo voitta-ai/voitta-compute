@@ -12,7 +12,6 @@ We test the bits that are unit-testable in isolation:
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -165,8 +164,12 @@ def test_cache_lookup_ignores_snapshots_without_origin_ref(cache_root):
     assert el._find_cached("vre://asset=cad_mesh&file_id=42") is None
 
 
-def test_resolver_registry_dispatches(cache_root, monkeypatch):
-    """When the cache misses, ensure_local routes to the scheme's resolver."""
+def test_resolver_registry_dispatches(cache_root):
+    """When the cache misses, ensure_local routes to the scheme's
+    resolver. The resolver runs on the private background loop
+    ensure_local manages on its own — the caller (this test thread)
+    blocks on the future and gets the result back synchronously.
+    """
     from app.services import ensure_local as el
     from app.services import refs
 
@@ -175,48 +178,21 @@ def test_resolver_registry_dispatches(cache_root, monkeypatch):
     async def fake_resolver(parsed: refs.Ref) -> Path:
         called["scheme"] = parsed.scheme
         called["canonical"] = parsed.canonical
-        # Materialise a snapshot the same way a real resolver would.
         path = cache_root / "snapshot_py_FAKE"
         path.mkdir()
         (path / "meta.json").write_text(json.dumps({
             "handle": "py_FAKE",
+            "stored_name": "out.txt",
             "origin": {"ref": parsed.canonical},
         }))
         (path / "out.txt").write_text("hello")
         return path / "out.txt"
 
     el.register("testscheme", fake_resolver)
-    # Bind a fresh loop for run_coroutine_threadsafe; we run the call
-    # in a worker thread so the synchronous resolver entry point can
-    # do the threadsafe dispatch.
-    loop = asyncio.new_event_loop()
-    el.bind_loop(loop)
-    try:
-        import threading
-
-        result_holder: dict = {}
-
-        def worker():
-            try:
-                result_holder["path"] = el.ensure_local("testscheme://key=val")
-            except Exception as exc:
-                result_holder["exc"] = exc
-
-        t = threading.Thread(target=worker)
-        t.start()
-        # Drive the loop until the worker finishes.
-        while t.is_alive():
-            loop.run_until_complete(asyncio.sleep(0.01))
-        t.join()
-    finally:
-        loop.close()
-        el._loop_holder._loop = None  # reset for other tests
-
-    assert "exc" not in result_holder, result_holder.get("exc")
+    out = el.ensure_local("testscheme://key=val")
     assert called["scheme"] == "testscheme"
     assert "key=val" in called["canonical"]
-    # Returned path is what the resolver returned (file inside snap).
-    assert result_holder["path"].endswith("out.txt")
+    assert out.endswith("out.txt")
 
 
 def test_resolver_missing_scheme_raises(cache_root):

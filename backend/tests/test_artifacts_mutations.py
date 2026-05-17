@@ -208,3 +208,44 @@ def test_run_404_when_code_missing(project_root, client):
     empty.mkdir(parents=True)
     r = client.post("/api/artifacts/python_storage/reports/empty/run")
     assert r.status_code == 404
+
+
+# ─── REFS ──────────────────────────────────────────────────────────────────
+
+def test_refs_returns_recorded_list(project_root, client):
+    """``GET .../refs`` reads the sidecar last_refs.json the script
+    runner writes after every run."""
+    sidecar = project_root / "python_storage" / "reports" / "myreport" / "last_refs.json"
+    sidecar.write_text(json.dumps({
+        "refs": [
+            "vre://asset=cad_mesh&file_id=42",
+            "drive://file_id=1ABCxyz",
+        ],
+        "at": "2026-05-16T22:00:00Z",
+    }))
+    r = client.get("/api/artifacts/python_storage/reports/myreport/refs")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["refs"] == [
+        "vre://asset=cad_mesh&file_id=42",
+        "drive://file_id=1ABCxyz",
+    ]
+    assert body["at"] == "2026-05-16T22:00:00Z"
+
+
+def test_refs_empty_when_no_sidecar(project_root, client):
+    """Slug exists but hasn't been run yet → empty list, no error."""
+    r = client.get("/api/artifacts/python_storage/reports/myreport/refs")
+    assert r.status_code == 200
+    assert r.json()["refs"] == []
+
+
+def test_refs_404_when_slug_missing(project_root, client):
+    r = client.get("/api/artifacts/python_storage/reports/nopey/refs")
+    assert r.status_code == 404
+
+
+def test_refs_rejects_non_script_unit(project_root, client):
+    # Snapshots don't have refs sidecars.
+    r = client.get("/api/artifacts/python_storage/cache/snapshot_pyAAA/refs")
+    assert r.status_code == 400

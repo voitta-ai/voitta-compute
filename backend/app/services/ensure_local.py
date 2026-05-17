@@ -132,17 +132,16 @@ def _resolve_sync(ref_str: str) -> Path:
             f"(ref={parsed.canonical!r})"
         )
 
-    # Dispatch the resolver coroutine onto the main event loop. The
-    # script's build(ctx) runs in a thread-pool executor, so we use
-    # threadsafe scheduling rather than `asyncio.run` (which would
-    # try to create a second loop in this thread).
-    try:
-        loop = _loop_holder.get()
-    except RuntimeError as exc:
-        raise EnsureLocalError(
-            f"ensure_local invoked outside the backend event loop: {exc}"
-        ) from exc
-
+    # Dispatch onto the dedicated resolver loop. We do NOT use the
+    # main FastAPI loop: report_script_layout (Panel session handler)
+    # runs synchronously on the main loop, then calls build(ctx) →
+    # ctx.ensure_local() → us. Scheduling back to the main loop with
+    # run_coroutine_threadsafe and blocking on .result() would
+    # deadlock the loop with itself. A private loop on its own
+    # thread side-steps the whole class of problem and works
+    # identically from the script-executor thread (compute scripts)
+    # and from the main loop (Panel report handlers).
+    loop = _resolver_loop()
     fut = asyncio.run_coroutine_threadsafe(resolver(parsed), loop)
     try:
         path = fut.result()
@@ -154,39 +153,50 @@ def _resolve_sync(ref_str: str) -> Path:
     return path
 
 
-class _LoopHolder:
-    """Holds a reference to the backend's main event loop.
+# ─── Dedicated resolver loop ───────────────────────────────────────────────
+#
+# One background thread, one private asyncio loop. Started lazily on
+# first use; lives for the process lifetime (no shutdown hook — the
+# OS reclaims it when uvicorn exits). The loop is dedicated to
+# ensure_local's resolver coroutines so the main FastAPI loop is
+# never blocked or recursed into.
 
-    The script executor thread doesn't know about its parent loop;
-    we plant a reference here at startup so resolvers can be
-    scheduled threadsafe."""
-    _loop: asyncio.AbstractEventLoop | None = None
+import threading
 
-    def set(self, loop: asyncio.AbstractEventLoop) -> None:
-        self._loop = loop
-
-    def get(self) -> asyncio.AbstractEventLoop:
-        if self._loop is None:
-            # Last-ditch: see if there's a running loop in this thread
-            # (only true when called from inside async code).
-            try:
-                return asyncio.get_running_loop()
-            except RuntimeError as exc:
-                raise RuntimeError(
-                    "ensure_local: main event loop not registered. "
-                    "FastAPI's startup hook should call "
-                    "`ensure_local.bind_loop(asyncio.get_running_loop())`."
-                ) from exc
-        return self._loop
+_resolver_loop_lock = threading.Lock()
+_resolver_loop_obj: asyncio.AbstractEventLoop | None = None
 
 
-_loop_holder = _LoopHolder()
+def _resolver_loop() -> asyncio.AbstractEventLoop:
+    global _resolver_loop_obj
+    if _resolver_loop_obj is not None:
+        return _resolver_loop_obj
+    with _resolver_loop_lock:
+        if _resolver_loop_obj is not None:
+            return _resolver_loop_obj
+        loop = asyncio.new_event_loop()
+        # Daemon=True so the process can exit cleanly without joining.
+        # Name shows up in py-spy / debuggers if someone goes looking.
+        t = threading.Thread(
+            target=loop.run_forever,
+            name="ensure_local-resolver",
+            daemon=True,
+        )
+        t.start()
+        _resolver_loop_obj = loop
+        _logger.info("ensure_local: resolver loop started on background thread")
+        return loop
 
 
-def bind_loop(loop: asyncio.AbstractEventLoop) -> None:
-    """Called from FastAPI startup so resolvers can be scheduled from
-    the sync script executor."""
-    _loop_holder.set(loop)
+def bind_loop(_loop: asyncio.AbstractEventLoop) -> None:
+    """Compatibility shim — kept so main.py's startup hook keeps
+    importing cleanly during the in-place refactor. The resolver loop
+    is now self-managing (lazy-started on first ensure_local call),
+    so the bound loop is just ignored. The shim stays as a tombstone
+    until the next API-sweep commit."""
+    _logger.debug(
+        "ensure_local.bind_loop called; resolver now uses its own private loop"
+    )
 
 
 def ensure_local(ref: str) -> str:

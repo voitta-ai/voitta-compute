@@ -1447,6 +1447,44 @@ async def patch_artifact(rel_path: str, body: dict) -> dict:
     raise HTTPException(status_code=400, detail=f"unit {kind!r} is not renameable")
 
 
+@app.get("/api/artifacts/{rel_path:path}/refs")
+async def artifact_refs(rel_path: str) -> dict:
+    """Return the canonical upstream-artefact refs the slug's last run
+    resolved through ``ctx.ensure_local``.
+
+    The report-pane title-click popover reads this to show the user
+    which data sources fed the report. The sidecar
+    (``last_refs.json``) is written by the script runner after every
+    run (success or failure) — see
+    ``services/scripts.py::_write_refs_sidecar``.
+
+    Returns ``{"refs": [...], "at": <iso>}`` on success. ``{"refs":
+    []}`` with no ``at`` when the slug exists but hasn't been run, or
+    the run didn't call ensure_local. 404 only when the slug itself
+    doesn't exist.
+    """
+    abs_path, kind = _resolve_artifact_path(rel_path)
+    if kind not in ("compute", "reports", "flows"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"unit {kind!r} doesn't have an associated refs sidecar",
+        )
+    sidecar = abs_path / "last_refs.json"
+    if not sidecar.exists():
+        return {"refs": [], "kind": kind, "path": rel_path}
+    try:
+        payload = json.loads(sidecar.read_text())
+    except Exception:
+        return {"refs": [], "kind": kind, "path": rel_path}
+    refs = payload.get("refs")
+    return {
+        "refs": refs if isinstance(refs, list) else [],
+        "at": payload.get("at"),
+        "kind": kind,
+        "path": rel_path,
+    }
+
+
 @app.post("/api/artifacts/{rel_path:path}/run")
 async def run_artifact(rel_path: str) -> dict:
     """Re-execute a report slug and return what the frontend needs to

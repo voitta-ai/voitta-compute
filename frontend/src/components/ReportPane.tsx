@@ -52,6 +52,68 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = 
   const [editing, setEditing] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Title-click "data sources" popover. Lists the canonical
+  // upstream-artefact refs the report's last run resolved through
+  // ctx.ensure_local — read-only, click to dismiss. Empty state shows
+  // a friendly placeholder rather than hiding the popover so the user
+  // can confirm "yes, this report has no upstream sources" vs "I
+  // haven't run it yet".
+  const [refsOpen, setRefsOpen] = useState(false);
+  const [refsList, setRefsList] = useState<string[] | null>(null);
+  const [refsError, setRefsError] = useState<string | null>(null);
+
+  // Lazy-fetch on first open. Re-fetch on every open after that so a
+  // re-render's new refs surface without a manual refresh — the
+  // endpoint is cheap (single JSON file read).
+  useEffect(() => {
+    if (!refsOpen) return;
+    const id = info.report_id;
+    if (!id) return;
+    const origin = getBackendOrigin();
+    if (!origin) return;
+    setRefsError(null);
+    fetch(`${origin}/api/artifacts/python_storage/reports/${encodeURIComponent(id)}/refs`, {
+      credentials: "include",
+    })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data: { refs?: string[] }) => {
+        setRefsList(Array.isArray(data.refs) ? data.refs : []);
+      })
+      .catch((e: any) => {
+        setRefsError(e?.message || String(e));
+        setRefsList([]);
+      });
+  }, [refsOpen, info.report_id]);
+
+  // Dismiss popover on outside click or Escape.
+  const refsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!refsOpen) return;
+    function onDown(e: MouseEvent) {
+      const path = typeof (e as any).composedPath === "function"
+        ? ((e as any).composedPath() as EventTarget[])
+        : [];
+      if (refsRef.current && !path.includes(refsRef.current)) setRefsOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setRefsOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [refsOpen]);
+
+  async function copyRef(ref: string) {
+    try { await navigator.clipboard.writeText(ref); }
+    catch { /* clipboard denied — ignore, the ref stays visible */ }
+  }
+
   // Forward an action to the iframe's postMessage listener (installed
   // server-side via Bokeh CustomJS in panel_app.py). The iframe origin is
   // the FastAPI backend, not the host page — we use '*' so the same code
@@ -138,10 +200,41 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = 
         : { right: `${drawerWidth}px` }}
     >
       <header class="report-header">
-        <span class="report-title" title={info.url}>
+        <span
+          class="report-title is-clickable"
+          title="Click to see upstream data sources"
+          role="button"
+          tabIndex={0}
+          onClick={() => setRefsOpen((v) => !v)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setRefsOpen((v) => !v); }}
+        >
           {title}
         </span>
         <span class="report-id">{info.report_id}</span>
+        {refsOpen && (
+          <div class="report-refs-popover" ref={refsRef} role="dialog" aria-label="Upstream data sources">
+            <div class="report-refs-header">Upstream data sources</div>
+            {refsError && <div class="report-refs-error">Error: {refsError}</div>}
+            {!refsError && refsList === null && <div class="report-refs-loading">Loading…</div>}
+            {!refsError && refsList !== null && refsList.length === 0 && (
+              <div class="report-refs-empty">
+                No upstream refs recorded for the last run.
+                <div class="report-refs-empty-sub">
+                  Reports using <code>ctx.ensure_local(…)</code> register their data sources here.
+                </div>
+              </div>
+            )}
+            {!refsError && refsList !== null && refsList.length > 0 && (
+              <ul class="report-refs-list">
+                {refsList.map((ref) => (
+                  <li key={ref} class="report-refs-item" onClick={() => copyRef(ref)} title="Click to copy">
+                    {ref}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         <span class="spacer" />
         {editing && (
           <>

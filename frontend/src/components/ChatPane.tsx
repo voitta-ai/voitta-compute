@@ -267,25 +267,11 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
     };
   }, []);
 
-  // Esc closes pane (only when no input has focus inside the shadow tree).
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      const path = e.composedPath?.() || [];
-      const fromTypable = path.some((el: any) => {
-        if (!el?.tagName) return false;
-        const t = (el.tagName as string).toUpperCase();
-        return t === "INPUT" || t === "TEXTAREA" || t === "SELECT" || el.isContentEditable;
-      });
-      if (fromTypable) return;
-      if (open) {
-        e.preventDefault();
-        setOpen(false);
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
+  // Esc used to collapse the chat drawer here. Removed — too easy to
+  // hit by accident while interacting with reports/artefacts/iframes,
+  // and the explicit close button + handle-click toggle cover the
+  // intentional path. Keep this comment as a tombstone so the binding
+  // doesn't get reintroduced.
 
   // Resize drag handler.
   const onResizeDown = useCallback(
