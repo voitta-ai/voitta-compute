@@ -567,12 +567,9 @@ class VoittaMenuBarApp(rumps.App):
         )
 
     def reinstall_packages(self, _sender) -> None:
-        """Wipe ``userbase/`` + ``install_state.json`` and re-exec.
-
-        Targets ONLY the pip-installed heavy packages. Preserves
-        python_storage/, scripts/, settings.json, certs, logs, and the
-        RAG index. The next launch finds an empty userbase, runs the
-        full first-run installer, and shows the progress window.
+        """Force a clean rebuild of libs + RAG by clearing the deploy
+        stamp and re-execing. python_storage/, scripts/, settings.json,
+        certs, and logs are NOT touched.
         """
         self._log.info("reinstall_packages: callback fired")
         try:
@@ -583,20 +580,19 @@ class VoittaMenuBarApp(rumps.App):
     def _reinstall_packages_impl(self) -> None:
         import os
 
-        # ``userbase/`` holds the pip-installed heavy packages and
-        # ``install_state.json``. Wiping it forces the first-launch
-        # installer to rerun. Everything else under the data dir
-        # (python_storage, scripts, settings, certs, RAG index) is left
-        # alone — this is the "just the libs" partial reset.
-        userbase = PROJECT_ROOT / "userbase"
+        # Clear the deploy stamp: the boot-time ``ensure_fresh_deploy``
+        # will then see a version mismatch and wipe userbase/ + rag/
+        # before the install window opens. Single code path; same as
+        # what happens automatically on every binary upgrade.
+        from app.installer import _deploy_stamp_path
+        stamp = _deploy_stamp_path()
         confirm = _alert(
             title="Reinstall Python packages?",
             message=(
-                f"This deletes:\n  {userbase}\n\n"
+                "This wipes the installed Python packages AND the\n"
+                "RAG index, then runs first-launch setup again.\n\n"
                 "Your scripts, snapshots, reports, and settings are\n"
-                "NOT touched. The first-launch installer window will\n"
-                "appear immediately to reinstall the heavy packages.\n\n"
-                "Allow ~5 minutes on a fast connection."
+                "NOT touched. Allow ~5 minutes on a fast connection."
             ),
             ok="Reinstall",
             cancel="Cancel",
@@ -605,9 +601,8 @@ class VoittaMenuBarApp(rumps.App):
             self._log.info("reinstall_packages: cancelled by user")
             return
 
-        self._log.info("reinstall_packages: wiping %s", userbase)
-        if userbase.is_dir():
-            shutil.rmtree(userbase, ignore_errors=True)
+        self._log.info("reinstall_packages: clearing %s and re-execing", stamp)
+        stamp.unlink(missing_ok=True)
 
         for h in self._log.handlers:
             h.flush()
@@ -774,8 +769,9 @@ def _kick_install_then_serve(log: logging.Logger) -> None:
         # here is non-fatal — uvicorn still starts; only rag_query is
         # affected. Tick offset by todo_count so the progress bar
         # continues smoothly into the second phase.
+        rag_ok = True
         if rag_needs_build:
-            rag_build.build(
+            rag_ok = rag_build.build(
                 lambda i, _total, label, line: window.set_progress(
                     todo_count + min(i, rag_budget - 1), label, line,
                 )
@@ -793,11 +789,18 @@ def _kick_install_then_serve(log: logging.Logger) -> None:
         except Exception:
             log.exception("certs: provision_if_missing failed during install flow")
 
+        # Stamp the deploy as complete only when both phases succeeded.
+        # A stale stamp means the next launch re-runs ensure_fresh_deploy
+        # and wipes-and-retries — exactly what we want if either piece
+        # didn't land cleanly.
+        if rag_ok:
+            installer.mark_deploy_complete()
+
         window.close()
         # Reaching here means heavy-package install succeeded
         # (``not ok`` returned early). RAG-build failures are
-        # non-fatal — surfaced as a log line in the install window
-        # and reflected in rag_query's "not built" envelope.
+        # non-fatal at runtime (rag_query surfaces "not built")
+        # but DO leave the deploy stamp stale so next launch retries.
         AppHelper.callAfter(_start_uvicorn, log)
 
     threading.Thread(target=_worker, name="voitta-installer", daemon=True).start()
@@ -881,6 +884,13 @@ def main() -> int:
     # loop — Cocoa won't render an NSPanel before that.
     from app import installer
 
+    # One-shot deployment check: if the binary version differs from the
+    # last successfully-installed one, wipe userbase/ + rag/ NOW so
+    # is_complete() / rag_build.is_built() correctly see them as
+    # missing and the install window runs. python_storage/, scripts/,
+    # settings, certs, logs are NOT touched.
+    installer.ensure_fresh_deploy(log)
+
     if installer.is_complete():
         # Provision certs if missing — covers the case where install
         # is already done but certs were wiped (e.g. by Reset).
@@ -891,6 +901,9 @@ def main() -> int:
                 log.info("certs: provisioned %s at startup", generated)
         except Exception:
             log.exception("certs: provision_if_missing failed at startup")
+        # Opportunistic stamp: covers the first upgrade that introduces
+        # the deploy stamp (libs + rag already valid, no install ran).
+        installer.mark_deploy_complete()
         _start_uvicorn(log)
     else:
         from PyObjCTools import AppHelper

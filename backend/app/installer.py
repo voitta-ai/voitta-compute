@@ -175,33 +175,34 @@ def _user_site() -> Path:
     )
 
 
+def _user_data_root() -> Path:
+    """``<user_data>`` — the directory that contains ``userbase/``,
+    ``rag/``, ``python_storage/``, ``scripts/``, etc.
+
+    Path math: ``_user_site()`` ends at
+    ``userbase/lib/pythonX.Y/site-packages``; four ``parent``s back is
+    the user data root.
+    """
+    return _user_site().parent.parent.parent.parent
+
+
 def _state_path() -> Path:
-    # Two parents up from site-packages is "userbase"; one more is the
-    # user data root. State sits in the data root (NOT inside userbase)
-    # so a userbase wipe doesn't blow away the version stamp — though on
-    # a forced reinstall we delete the state file too.
-    return _user_site().parent.parent.parent / "install_state.json"
+    # Sits at the data root (NOT inside userbase) so a userbase wipe
+    # doesn't lose partial-install resume state.
+    return _user_data_root() / "install_state.json"
 
 
-def _userbase_root() -> Path:
-    """``<user_data>/userbase`` — wiped on app-version-bump reinstalls.
+def _deploy_stamp_path() -> Path:
+    """``<user_data>/.deployed_version`` — last app version whose
+    install + RAG-build completed successfully. ``ensure_fresh_deploy``
+    compares it to the current version on every boot. Lives at the
+    data root so a manual ``rm -rf userbase/`` doesn't strand it."""
+    return _user_data_root() / ".deployed_version"
 
-    ``_user_site()`` ends at ``userbase/lib/pythonX.Y/site-packages``;
-    three parents back lands on ``userbase`` itself.
-    """
-    return _user_site().parent.parent.parent
 
-
-def _current_app_version() -> str:
-    """Best-effort current app version.
-
-    Bundle: ``importlib.metadata.version("voitta")`` returns the version
-    briefcase stamped into the egg-info at build time. Source checkout:
-    parse ``pyproject.toml`` at the repo root. Either way a string is
-    returned; ``"unknown"`` if both lookups fail (never matches itself,
-    so version-bump detection effectively short-circuits to "no upgrade
-    detected" — safer than spurious wipes).
-    """
+def current_app_version() -> str:
+    """Best-effort current app version. Bundle: importlib.metadata.
+    Source: pyproject.toml. ``"unknown"`` if both fail."""
     try:
         from importlib.metadata import version, PackageNotFoundError
         try:
@@ -228,38 +229,46 @@ def _current_app_version() -> str:
     return "unknown"
 
 
-def _read_state() -> dict:
-    """Raw state dict (may be empty or in legacy shape)."""
-    p = _state_path()
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text())
-        return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001
-        return {}
+def ensure_fresh_deploy(log) -> None:
+    """Single decision point: did the binary change since last successful
+    install? If yes, wipe ``userbase/`` and ``rag/`` so first-run install
+    + RAG-build rerun cleanly.
 
+    Called once at boot (``app.desktop.main``) BEFORE any
+    ``is_complete()`` / ``is_built()`` check. Stamp is written by
+    ``mark_deploy_complete()`` only after both phases succeed.
 
-def _version_bumped(state: dict) -> bool:
-    """True when the stored app_version exists and differs from current.
-
-    Note the asymmetry: a missing ``app_version`` (legacy state or
-    first-ever launch) is NOT a bump — we don't want to nuke userbase
-    on the first upgrade that introduces version tracking.
+    python_storage/, scripts/, settings.json, certs, and logs are NOT
+    touched here — only the two regenerable trees.
     """
-    stored = state.get("app_version")
-    return isinstance(stored, str) and bool(stored) and stored != _current_app_version()
+    user_root = _user_data_root()
+    stamp = _deploy_stamp_path()
+    current = current_app_version()
+    stored = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
+    if stored == current:
+        return
+    log.info("deploy: stamp=%r current=%r — wiping userbase/ + rag/", stored, current)
+    for sub in ("userbase", "rag"):
+        p = user_root / sub
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+    # Recreate the user site dir so PIP_PREFIX has a target.
+    _user_site().mkdir(parents=True, exist_ok=True)
+
+
+def mark_deploy_complete() -> None:
+    """Stamp the current version after install_all + rag_build.build
+    both succeed. Failing either phase leaves the stamp stale so the
+    next launch wipes-and-retries automatically."""
+    stamp = _deploy_stamp_path()
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(current_app_version(), encoding="utf-8")
 
 
 def is_complete() -> bool:
-    """All heavy packages importable AND the binary hasn't been
-    upgraded since the last successful install.
-
-    Returning False here is what causes ``desktop.main`` to show the
-    install window. Version-aware so dropping a new .app over an old
-    userbase/ always rebuilds the libs (and shows the progress UI)."""
-    if _version_bumped(_read_state()):
-        return False
+    """All heavy packages importable in the current sys.path?
+    Boot-time ``ensure_fresh_deploy()`` already wiped userbase/ on a
+    version bump, so this probe is sufficient."""
     for import_name, _ in HEAVY_PACKAGES:
         try:
             importlib.import_module(import_name)
@@ -269,34 +278,26 @@ def is_complete() -> bool:
 
 
 def installed_set() -> set[str]:
-    """Names recorded as installed AT THE CURRENT pip-spec AND under the
-    current app version. A spec bump or version bump invalidates the
-    entry — callers see the package as not-installed and the installer
-    re-pip's it.
-    """
-    state = _read_state()
-    if _version_bumped(state):
+    """Names recorded as installed in the on-disk state file. Used to
+    resume after partial installs (network drop mid-way)."""
+    p = _state_path()
+    if not p.exists():
         return set()
-    inst = state.get("installed")
-    if not isinstance(inst, dict):
-        # Legacy list shape (or missing) — treat as nothing-known so
-        # the version-aware loop in install_all has accurate state.
+    try:
+        data = json.loads(p.read_text())
+        inst = data.get("installed") if isinstance(data, dict) else None
+        if isinstance(inst, list):
+            return set(inst)
         return set()
-    current_specs = {name: spec for name, spec in HEAVY_PACKAGES}
-    return {name for name, stored_spec in inst.items()
-            if isinstance(stored_spec, str) and current_specs.get(name) == stored_spec}
+    except Exception:  # noqa: BLE001
+        return set()
 
 
-def _save_state(installed: dict[str, str]) -> None:
-    """Persist ``{app_version, installed: {name: spec}, ts}``."""
+def _save_state(installed: set[str]) -> None:
     p = _state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(
-        {
-            "app_version": _current_app_version(),
-            "installed": dict(sorted(installed.items())),
-            "ts": time.time(),
-        },
+        {"installed": sorted(installed), "ts": time.time()},
         indent=2,
     ))
 
@@ -332,44 +333,21 @@ def install_all(progress_cb: ProgressCb) -> bool:
 
     Returns True on full success, False on the first pip non-zero exit.
     """
-    state_raw = _read_state()
-    bumped = _version_bumped(state_raw)
-    legacy_shape = (
-        state_raw.get("app_version") is None
-        and not isinstance(state_raw.get("installed"), dict)
-        and bool(state_raw.get("installed"))
-    )
-    if bumped or legacy_shape:
-        # Binary upgrade (or pre-version-tracking install_state.json):
-        # wipe ``userbase/`` so pip reinstalls cleanly. python_storage/,
-        # scripts/, settings, and certs all sit OUTSIDE userbase and
-        # are untouched.
-        ub = _userbase_root()
-        if ub.exists():
-            shutil.rmtree(ub, ignore_errors=True)
-        _user_site().mkdir(parents=True, exist_ok=True)
-        state: dict[str, str] = {}
-    else:
-        inst = state_raw.get("installed")
-        state = ({k: v for k, v in inst.items() if isinstance(v, str)}
-                 if isinstance(inst, dict) else {})
-
-    current_specs = {name: spec for name, spec in HEAVY_PACKAGES}
+    # State file purpose: resume after partial-install (network drop).
+    # Whole-deployment wipes are handled at boot by
+    # ``ensure_fresh_deploy()``, so all we do here is skip packages
+    # already recorded as done.
+    state = installed_set()
     todo: list[tuple[str, str]] = []
     for import_name, spec in HEAVY_PACKAGES:
-        if state.get(import_name) == spec:
-            # Exact-spec already installed at this app version.
+        if import_name in state:
             continue
-        if not bumped and state.get(import_name) is None:
-            # First time we're seeing this name AND we're not in an
-            # upgrade — trust the import probe. (Bumped path skips this
-            # so a forced reinstall actually runs pip on each package.)
-            try:
-                importlib.import_module(import_name)
-                state[import_name] = spec
-                continue
-            except ImportError:
-                pass
+        try:
+            importlib.import_module(import_name)
+            state.add(import_name)
+            continue
+        except ImportError:
+            pass
         todo.append((import_name, spec))
 
     _save_state(state)
@@ -489,7 +467,7 @@ def install_all(progress_cb: ProgressCb) -> bool:
         # Success: log a short marker (one line, not the full transcript
         # — successful pip output is noisy and not useful in voitta.log).
         print(f"=== pip install {spec} OK ===", file=sys.stderr)
-        state[import_name] = spec
+        state.add(import_name)
         _save_state(state)
         importlib.invalidate_caches()
         progress_cb(i + 1, total, f"Installed {import_name}", None)
