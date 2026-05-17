@@ -2,77 +2,57 @@
 # Build the Voitta menu-bar .app via briefcase.
 #
 # Lives at the repo root because briefcase writes `build/` and `dist/`
-# next to its manifest (also at the repo root). Run it from anywhere:
+# next to its manifest (also at the repo root). Modelled on
+# ~/DEVEL/voitta-desktop/scripts/build_app.sh — same flow, no custom
+# DMG hand-rolling.
 #
-#   ./build_app.sh                # full standalone build (~5 min, ~240 MB)
-#   ./build_app.sh --clean        # nuke build/, dist/, wheels/ first
-#   ./build_app.sh --package      # also produce a .dmg in dist/ (ad-hoc)
+#   ./build_app.sh                       # local build, no DMG
+#   ./build_app.sh --clean               # nuke build/, dist/, wheels/ first
+#   ./build_app.sh --release             # bump patch + package + sign + notarize
+#   ./build_app.sh --package             # DMG only, ad-hoc signed
 #
-# Code-sign + notarise (one-command frictionless distribution):
-#
-#   ./build_app.sh --package \
-#       --sign "Developer ID Application: Roman <Name> (ABCDEF1234)" \
-#       --notarize
+# --release is the one-shot distribution flow. It runs everything an
+# end-user-shippable DMG needs: bumps pyproject.toml's patch version,
+# signs with the Developer ID identity, notarises, staples. Defaults
+# to ``Developer ID Application: roman semeine (KU3WTX9RXB)`` —
+# override with --sign "<identity>".
 #
 # Output:
 #   build/voitta/macos/app/Voitta Bookmarklet.app   # the bundle
-#   dist/Voitta Bookmarklet-0.1.0.dmg               # only with --package
-#
-# After build:
-#   open "build/voitta/macos/app/Voitta Bookmarklet.app"
-#   # or: backend/.venv/bin/briefcase run macOS app
-#
-# Distribution friction by mode:
-#
-#   --package                 — ad-hoc signed. Recipient sees Gatekeeper
-#                               warning, must right-click → Open the
-#                               first time. Free.
-#   --package --sign …        — Developer ID signed. Removes the
-#                               "unidentified developer" wording, but
-#                               on macOS 10.15+ Gatekeeper still wants
-#                               notarisation. Cert is $99/yr Apple
-#                               Developer membership.
-#   --package --sign … --notarize
-#                             — fully Gatekeeper-clean. Recipient
-#                               double-clicks, no warning, no friction.
-#                               Same $99/yr — notarisation itself is
-#                               free + unlimited.
+#   dist/Voitta Bookmarklet-<VERSION>.dmg           # with --package or --release
 #
 # Notarisation prerequisite (one-time):
-#
 #   xcrun notarytool store-credentials voitta-notary \
-#     --apple-id you@example.com --team-id ABCDEF1234
-#   # paste the app-specific password from
-#   # https://appleid.apple.com → Sign-In and Security
-#
-#   The keychain profile name "voitta-notary" is what --notarize looks
-#   up; override via $VOITTA_NOTARY_PROFILE env var.
-#
-# Caveats:
-#   • mkcert isn't bundled. The .app uses the cert pair currently in
-#     backend/certs/ at build time; if you regenerate certs in the
-#     repo, rebuild the .app or copy the new pair into
-#     ~/Library/Application Support/Voitta Bookmarklet/backend/certs/
-#     on the target machine.
+#     --apple-id you@example.com --team-id KU3WTX9RXB
+#   # The keychain profile name "voitta-notary" is what --notarize
+#   # looks up; override via $VOITTA_NOTARY_PROFILE env var.
 
 set -euo pipefail
 cd "$(dirname "$0")"   # repo root
 ROOT="$(pwd)"
 VENV="$ROOT/backend/.venv"
 
+# Default Developer ID — same identity used by voitta-desktop. Override
+# via --sign "<identity>" or by editing this constant.
+DEFAULT_SIGN_IDENTITY="Developer ID Application: roman semeine (KU3WTX9RXB)"
+
 CLEAN=0
 PACKAGE=0
 SIGN_IDENTITY=""
 NOTARIZE=0
+RELEASE=0
+BUMP=0
 NOTARY_PROFILE="${VOITTA_NOTARY_PROFILE:-voitta-notary}"
 
-# Manual arg loop because --sign takes a value with spaces (e.g.
-# "Developer ID Application: Roman <Name> (ABCDEF1234)") and we want
-# to validate combinations (e.g. --notarize without --sign is nonsense).
 while [ $# -gt 0 ]; do
   case "$1" in
     --clean)    CLEAN=1; shift ;;
     --package)  PACKAGE=1; shift ;;
+    --bump)     BUMP=1; shift ;;
+    --release)
+      # One-shot: bump + package + sign + notarize with defaults.
+      RELEASE=1; BUMP=1; PACKAGE=1; NOTARIZE=1
+      shift ;;
     --sign)
       if [ $# -lt 2 ] || [ -z "$2" ]; then
         echo "[build_app] --sign needs an identity string" >&2
@@ -81,20 +61,42 @@ while [ $# -gt 0 ]; do
       SIGN_IDENTITY="$2"; shift 2 ;;
     --notarize) NOTARIZE=1; shift ;;
     -h|--help)
-      sed -n '2,55p' "$0"; exit 0 ;;
+      sed -n '2,30p' "$0"; exit 0 ;;
     *)
       echo "[build_app] unknown arg: $1" >&2
       exit 2 ;;
   esac
 done
 
+# --release implies signing with the default Developer ID identity
+# unless --sign overrides it.
+if [ "$RELEASE" -eq 1 ] && [ -z "$SIGN_IDENTITY" ]; then
+  SIGN_IDENTITY="$DEFAULT_SIGN_IDENTITY"
+fi
+
 if [ "$NOTARIZE" -eq 1 ] && [ -z "$SIGN_IDENTITY" ]; then
-  echo "[build_app] --notarize requires --sign \"<Developer ID identity>\" — Apple won't notarise an ad-hoc bundle." >&2
+  echo "[build_app] --notarize requires --sign (or --release). Apple won't notarise an ad-hoc bundle." >&2
   exit 2
 fi
 if [ -n "$SIGN_IDENTITY" ] && [ "$PACKAGE" -eq 0 ]; then
-  echo "[build_app] --sign without --package has no effect (briefcase only signs at package time). Add --package." >&2
+  echo "[build_app] --sign without --package has no effect. Add --package or use --release." >&2
   exit 2
+fi
+
+# Version bump: increment the patch number in pyproject.toml so each
+# build produces a uniquely-versioned DMG (and so the new in-app
+# deploy-stamp check actually triggers on every shipped binary).
+# Leaves the change as an uncommitted diff — user commits when ready.
+if [ "$BUMP" -eq 1 ]; then
+  OLD_VER=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$ROOT/pyproject.toml")
+  if [ -z "$OLD_VER" ]; then
+    echo "[build_app] couldn't read current version from pyproject.toml" >&2
+    exit 1
+  fi
+  IFS='.' read -r VMAJ VMIN VPATCH <<< "$OLD_VER"
+  NEW_VER="${VMAJ}.${VMIN}.$((VPATCH + 1))"
+  /usr/bin/sed -i '' -E "s/^version = \"[^\"]+\"/version = \"${NEW_VER}\"/" "$ROOT/pyproject.toml"
+  echo "[build_app] version bumped: ${OLD_VER} → ${NEW_VER}"
 fi
 
 if [ ! -d "$VENV" ]; then
@@ -253,89 +255,22 @@ if [ ! -d "$APP" ]; then
 fi
 
 if [ "$PACKAGE" -eq 1 ]; then
-  # Briefcase signs the .app correctly but its DMG packager runs
-  # ``ditto`` to copy the .app into a mounted volume, which fails with
-  # ``Operation not permitted`` whenever TCC denies the parent process
-  # (Terminal.app / iTerm / Claude Code's harness) the right to write
-  # into a freshly-mounted DMG volume. Briefcase swallows the ditto
-  # error and writes an empty 80K DMG that still passes signature +
-  # notarisation checks (Apple's notary doesn't verify the DMG has a
-  # payload). End users get a DMG that opens to a window containing
-  # only Applications symlink and .DS_Store — no .app.
-  #
-  # The workaround: bypass briefcase's DMG step entirely. We sign the
-  # .app with briefcase (which works fine — that uses codesign, not
-  # ditto-into-DMG), then build the DMG by hand with hdiutil + cp -a.
-  # cp -a doesn't preserve the ACLs that confuse macOS's TCC layer, so
-  # it copies cleanly where ditto fails.
-  #
-  # Caveat: the volume name MUST NOT contain spaces during the cp -a
-  # phase or cp also fails with EPERM. We rename the volume after the
-  # copy, before detach, so the final DMG presents the friendly name.
-
   if [ -z "$SIGN_IDENTITY" ]; then
-    # Ad-hoc — fastest, free, but recipients see Gatekeeper warning.
-    # We still need a real DMG, so go through the manual path even
-    # without an identity. Sign with --adhoc-sign for the .app only.
-    echo "[build_app] briefcase package (.app, ad-hoc sign — no DMG yet)..."
-    "$VENV/bin/briefcase" package macOS app --packaging-format zip --adhoc-sign --no-input
+    echo "[build_app] briefcase package (DMG, ad-hoc sign)..."
+    "$VENV/bin/briefcase" package macOS app --adhoc-sign --no-input
   else
-    echo "[build_app] briefcase package (.app only, signing as: $SIGN_IDENTITY)..."
-    # ``--packaging-format zip`` tells briefcase to skip the broken DMG
-    # packager and produce a zip alongside the signed .app. We don't
-    # use the zip output but the flag is the documented escape hatch
-    # for "sign the .app, skip DMG".
+    echo "[build_app] briefcase package — signing as: $SIGN_IDENTITY"
     "$VENV/bin/briefcase" package macOS app \
-      --packaging-format zip \
       --identity "$SIGN_IDENTITY" \
       --no-input
-  fi
-
-  # ---- Build the real DMG with hdiutil + cp -a -----------------------------
-  APP_BUNDLE="$ROOT/build/voitta/macos/app/Voitta Bookmarklet.app"
-  if [ ! -d "$APP_BUNDLE" ]; then
-    echo "[build_app] post-package .app missing at $APP_BUNDLE" >&2
-    exit 1
-  fi
-  # BSD awk (macOS default) doesn't support \s — use [[:space:]] or
-  # bare spaces. Without this, VERSION expands empty and the DMG ends
-  # up named "Voitta Bookmarklet-.dmg".
-  VERSION=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$ROOT/pyproject.toml")
-  if [ -z "$VERSION" ]; then
-    echo "[build_app] failed to extract version from pyproject.toml" >&2
-    exit 1
-  fi
-  DMG="$ROOT/dist/Voitta Bookmarklet-${VERSION}.dmg"
-  STAGE_DMG="/tmp/voitta-stage-$$.dmg"
-  STAGE_VOL="VoittaBookmarkletStage"   # no spaces — see caveat above
-  FINAL_VOL="Voitta Bookmarklet ${VERSION}"
-
-  echo "[build_app] hdiutil create staging DMG..."
-  rm -f "$DMG" "$STAGE_DMG"
-  mkdir -p "$ROOT/dist"
-  hdiutil create -size 400m -fs HFS+ -volname "$STAGE_VOL" -o "$STAGE_DMG" >/dev/null
-
-  echo "[build_app] hdiutil attach + cp -a (bypassing ditto)..."
-  hdiutil attach "$STAGE_DMG" -nobrowse >/dev/null
-  trap 'hdiutil detach "/Volumes/$STAGE_VOL" 2>/dev/null || hdiutil detach "/Volumes/$FINAL_VOL" 2>/dev/null || true; rm -f "$STAGE_DMG"' EXIT
-  cp -a "$APP_BUNDLE" "/Volumes/$STAGE_VOL/"
-  ln -s /Applications "/Volumes/$STAGE_VOL/Applications"
-  diskutil rename "/Volumes/$STAGE_VOL" "$FINAL_VOL" >/dev/null
-  hdiutil detach "/Volumes/$FINAL_VOL" >/dev/null
-  trap - EXIT
-
-  echo "[build_app] hdiutil convert to UDZO..."
-  hdiutil convert "$STAGE_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
-  rm -f "$STAGE_DMG"
-
-  if [ -n "$SIGN_IDENTITY" ]; then
-    echo "[build_app] codesigning the DMG..."
-    codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
 
     if [ "$NOTARIZE" -eq 1 ]; then
+      DMG=$(ls -1 "$ROOT/dist/"*.dmg 2>/dev/null | head -1)
+      if [ -z "$DMG" ]; then
+        echo "[build_app] expected a .dmg under dist/ but none found." >&2
+        exit 1
+      fi
       echo "[build_app] notarising $DMG (profile: $NOTARY_PROFILE)..."
-      # ``--wait`` blocks until Apple's notary service returns Accepted
-      # or Invalid. Typical turnaround: 2-15 min.
       if ! xcrun notarytool submit "$DMG" \
            --keychain-profile "$NOTARY_PROFILE" \
            --wait; then
@@ -343,13 +278,8 @@ if [ "$PACKAGE" -eq 1 ]; then
         echo "[build_app]   (run: xcrun notarytool log <submission-id> --keychain-profile $NOTARY_PROFILE)" >&2
         exit 1
       fi
-      # Stapling embeds the notary ticket so the DMG passes Gatekeeper
-      # offline (without it the recipient's first launch must reach
-      # Apple's notary servers; with it, no internet round-trip needed).
       echo "[build_app] stapling notarisation ticket..."
       xcrun stapler staple "$DMG"
-      # Verify the staple worked. ``spctl`` is the same tool Gatekeeper
-      # uses internally; if it accepts the DMG, end-users will too.
       echo "[build_app] verifying with spctl..."
       spctl -a -vv --type install "$DMG" || true
     fi
