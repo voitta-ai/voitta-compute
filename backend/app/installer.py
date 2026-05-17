@@ -8,6 +8,16 @@ if False it shows :class:`app.install_window.InstallWindow` and runs
 State persists via ``install_state.json`` next to the user
 site-packages dir, so a partial install (network drop mid-way) resumes
 on the next launch instead of redoing everything.
+
+The state file records ``app_version`` and ``installed: {name: spec}``.
+On launch:
+  • app_version mismatch (binary upgraded since last successful
+    install) → ``is_complete()`` returns False and ``install_all``
+    wipes ``userbase/`` for a clean reinstall. python_storage/ /
+    scripts/ / settings are NOT touched.
+  • Pip-spec change for an individual package (e.g. ``scipy>=1.11`` →
+    ``scipy>=1.13``) → only that package is reinstalled.
+  • Otherwise → fast path; import probe alone decides.
 """
 
 from __future__ import annotations
@@ -17,6 +27,7 @@ import importlib
 import io
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -166,13 +177,89 @@ def _user_site() -> Path:
 
 def _state_path() -> Path:
     # Two parents up from site-packages is "userbase"; one more is the
-    # user data root. State sits in the data root so a future "purge
-    # installed packages but keep settings" UX is straightforward.
+    # user data root. State sits in the data root (NOT inside userbase)
+    # so a userbase wipe doesn't blow away the version stamp — though on
+    # a forced reinstall we delete the state file too.
     return _user_site().parent.parent.parent / "install_state.json"
 
 
+def _userbase_root() -> Path:
+    """``<user_data>/userbase`` — wiped on app-version-bump reinstalls.
+
+    ``_user_site()`` ends at ``userbase/lib/pythonX.Y/site-packages``;
+    three parents back lands on ``userbase`` itself.
+    """
+    return _user_site().parent.parent.parent
+
+
+def _current_app_version() -> str:
+    """Best-effort current app version.
+
+    Bundle: ``importlib.metadata.version("voitta")`` returns the version
+    briefcase stamped into the egg-info at build time. Source checkout:
+    parse ``pyproject.toml`` at the repo root. Either way a string is
+    returned; ``"unknown"`` if both lookups fail (never matches itself,
+    so version-bump detection effectively short-circuits to "no upgrade
+    detected" — safer than spurious wipes).
+    """
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+        try:
+            return version("voitta")
+        except PackageNotFoundError:
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+    here = Path(__file__).resolve()
+    for parent in (here, *here.parents):
+        pp = parent / "pyproject.toml"
+        if not pp.is_file():
+            continue
+        try:
+            import tomllib
+            with open(pp, "rb") as f:
+                data = tomllib.load(f)
+            v = data.get("project", {}).get("version")
+            if isinstance(v, str) and v:
+                return v
+        except Exception:  # noqa: BLE001
+            pass
+        break
+    return "unknown"
+
+
+def _read_state() -> dict:
+    """Raw state dict (may be empty or in legacy shape)."""
+    p = _state_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _version_bumped(state: dict) -> bool:
+    """True when the stored app_version exists and differs from current.
+
+    Note the asymmetry: a missing ``app_version`` (legacy state or
+    first-ever launch) is NOT a bump — we don't want to nuke userbase
+    on the first upgrade that introduces version tracking.
+    """
+    stored = state.get("app_version")
+    return isinstance(stored, str) and bool(stored) and stored != _current_app_version()
+
+
 def is_complete() -> bool:
-    """All heavy packages importable in the current sys.path?"""
+    """All heavy packages importable AND the binary hasn't been
+    upgraded since the last successful install.
+
+    Returning False here is what causes ``desktop.main`` to show the
+    install window. Version-aware so dropping a new .app over an old
+    userbase/ always rebuilds the libs (and shows the progress UI)."""
+    if _version_bumped(_read_state()):
+        return False
     for import_name, _ in HEAVY_PACKAGES:
         try:
             importlib.import_module(import_name)
@@ -182,26 +269,36 @@ def is_complete() -> bool:
 
 
 def installed_set() -> set[str]:
-    """Names recorded as already installed in the on-disk state file.
-
-    Used to resume after partial installs (network drop). We persist
-    by name only, not version — the current pip-spec wins on resume.
+    """Names recorded as installed AT THE CURRENT pip-spec AND under the
+    current app version. A spec bump or version bump invalidates the
+    entry — callers see the package as not-installed and the installer
+    re-pip's it.
     """
-    p = _state_path()
-    if not p.exists():
+    state = _read_state()
+    if _version_bumped(state):
         return set()
-    try:
-        return set(json.loads(p.read_text()).get("installed", []))
-    except Exception:  # noqa: BLE001
+    inst = state.get("installed")
+    if not isinstance(inst, dict):
+        # Legacy list shape (or missing) — treat as nothing-known so
+        # the version-aware loop in install_all has accurate state.
         return set()
+    current_specs = {name: spec for name, spec in HEAVY_PACKAGES}
+    return {name for name, stored_spec in inst.items()
+            if isinstance(stored_spec, str) and current_specs.get(name) == stored_spec}
 
 
-def _save_state(installed: set[str]) -> None:
+def _save_state(installed: dict[str, str]) -> None:
+    """Persist ``{app_version, installed: {name: spec}, ts}``."""
     p = _state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        json.dumps({"installed": sorted(installed), "ts": time.time()}, indent=2)
-    )
+    p.write_text(json.dumps(
+        {
+            "app_version": _current_app_version(),
+            "installed": dict(sorted(installed.items())),
+            "ts": time.time(),
+        },
+        indent=2,
+    ))
 
 
 def status_summary() -> dict:
@@ -235,17 +332,44 @@ def install_all(progress_cb: ProgressCb) -> bool:
 
     Returns True on full success, False on the first pip non-zero exit.
     """
-    state = installed_set()
+    state_raw = _read_state()
+    bumped = _version_bumped(state_raw)
+    legacy_shape = (
+        state_raw.get("app_version") is None
+        and not isinstance(state_raw.get("installed"), dict)
+        and bool(state_raw.get("installed"))
+    )
+    if bumped or legacy_shape:
+        # Binary upgrade (or pre-version-tracking install_state.json):
+        # wipe ``userbase/`` so pip reinstalls cleanly. python_storage/,
+        # scripts/, settings, and certs all sit OUTSIDE userbase and
+        # are untouched.
+        ub = _userbase_root()
+        if ub.exists():
+            shutil.rmtree(ub, ignore_errors=True)
+        _user_site().mkdir(parents=True, exist_ok=True)
+        state: dict[str, str] = {}
+    else:
+        inst = state_raw.get("installed")
+        state = ({k: v for k, v in inst.items() if isinstance(v, str)}
+                 if isinstance(inst, dict) else {})
+
+    current_specs = {name: spec for name, spec in HEAVY_PACKAGES}
     todo: list[tuple[str, str]] = []
     for import_name, spec in HEAVY_PACKAGES:
-        if import_name in state:
+        if state.get(import_name) == spec:
+            # Exact-spec already installed at this app version.
             continue
-        try:
-            importlib.import_module(import_name)
-            state.add(import_name)  # importable but not in state — record it
-            continue
-        except ImportError:
-            pass
+        if not bumped and state.get(import_name) is None:
+            # First time we're seeing this name AND we're not in an
+            # upgrade — trust the import probe. (Bumped path skips this
+            # so a forced reinstall actually runs pip on each package.)
+            try:
+                importlib.import_module(import_name)
+                state[import_name] = spec
+                continue
+            except ImportError:
+                pass
         todo.append((import_name, spec))
 
     _save_state(state)
@@ -365,7 +489,7 @@ def install_all(progress_cb: ProgressCb) -> bool:
         # Success: log a short marker (one line, not the full transcript
         # — successful pip output is noisy and not useful in voitta.log).
         print(f"=== pip install {spec} OK ===", file=sys.stderr)
-        state.add(import_name)
+        state[import_name] = spec
         _save_state(state)
         importlib.invalidate_caches()
         progress_cb(i + 1, total, f"Installed {import_name}", None)

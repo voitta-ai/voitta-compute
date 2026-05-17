@@ -259,6 +259,7 @@ class VoittaMenuBarApp(rumps.App):
             None,
             rumps.MenuItem("Show data folder", callback=self.show_data_folder),
             rumps.MenuItem("(Re)create TLS certificates…", callback=self.recreate_certs),
+            rumps.MenuItem("Reinstall Python packages…", callback=self.reinstall_packages),
             rumps.MenuItem("Reset…", callback=self.reset),
             None,
             rumps.MenuItem(f"Quit {APP_NAME}", callback=self.quit_app),
@@ -564,6 +565,54 @@ class VoittaMenuBarApp(rumps.App):
             ),
             ok="OK",
         )
+
+    def reinstall_packages(self, _sender) -> None:
+        """Wipe ``userbase/`` + ``install_state.json`` and re-exec.
+
+        Targets ONLY the pip-installed heavy packages. Preserves
+        python_storage/, scripts/, settings.json, certs, logs, and the
+        RAG index. The next launch finds an empty userbase, runs the
+        full first-run installer, and shows the progress window.
+        """
+        self._log.info("reinstall_packages: callback fired")
+        try:
+            self._reinstall_packages_impl()
+        except BaseException:
+            self._log.exception("reinstall_packages: callback raised")
+
+    def _reinstall_packages_impl(self) -> None:
+        import os
+
+        # ``userbase/`` holds the pip-installed heavy packages and
+        # ``install_state.json``. Wiping it forces the first-launch
+        # installer to rerun. Everything else under the data dir
+        # (python_storage, scripts, settings, certs, RAG index) is left
+        # alone — this is the "just the libs" partial reset.
+        userbase = PROJECT_ROOT / "userbase"
+        confirm = _alert(
+            title="Reinstall Python packages?",
+            message=(
+                f"This deletes:\n  {userbase}\n\n"
+                "Your scripts, snapshots, reports, and settings are\n"
+                "NOT touched. The first-launch installer window will\n"
+                "appear immediately to reinstall the heavy packages.\n\n"
+                "Allow ~5 minutes on a fast connection."
+            ),
+            ok="Reinstall",
+            cancel="Cancel",
+        )
+        if not confirm:
+            self._log.info("reinstall_packages: cancelled by user")
+            return
+
+        self._log.info("reinstall_packages: wiping %s", userbase)
+        if userbase.is_dir():
+            shutil.rmtree(userbase, ignore_errors=True)
+
+        for h in self._log.handlers:
+            h.flush()
+        logging.shutdown()
+        os.execv(sys.executable, [sys.executable, "-m", "app.desktop_launcher"])
 
     def reset(self, _sender) -> None:
         """Wipe all user-writable data and restart with the install window.
