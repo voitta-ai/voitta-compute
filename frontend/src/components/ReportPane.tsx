@@ -71,9 +71,20 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = 
     if (!id) return;
     const origin = getBackendOrigin();
     if (!origin) return;
+
+    // Reset to Loading state on every open so the user sees fresh
+    // feedback (stale "no refs" or error from a previous open would
+    // otherwise show until the new fetch resolves).
     setRefsError(null);
+    setRefsList(null);
+
+    // AbortController lets us cancel a slow request if the user
+    // closes + reopens the popover quickly — without this, the older
+    // fetch could resolve last and overwrite the newer one's result.
+    const ac = new AbortController();
     fetch(`${origin}/api/artifacts/python_storage/reports/${encodeURIComponent(id)}/refs`, {
       credentials: "include",
+      signal: ac.signal,
     })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -83,9 +94,11 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = 
         setRefsList(Array.isArray(data.refs) ? data.refs : []);
       })
       .catch((e: any) => {
+        if (e?.name === "AbortError") return;
         setRefsError(e?.message || String(e));
         setRefsList([]);
       });
+    return () => ac.abort();
   }, [refsOpen, info.report_id]);
 
   // Dismiss popover on outside click or Escape.

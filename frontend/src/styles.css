@@ -1217,11 +1217,13 @@ header .provider-chip:hover {
 /* ─── composer ───────────────────────────────────────────────────────────── */
 .composer {
   display: flex;
+  flex-direction: column;
   gap: 6px;
   padding: 8px;
   border-top: 1px solid var(--voitta-border);
   background: var(--voitta-surface);
   flex-shrink: 0;
+  position: relative;
 }
 .composer-input {
   flex: 1;
@@ -1240,6 +1242,127 @@ header .provider-chip:hover {
   outline: none;
   border-color: var(--voitta-accent);
   box-shadow: 0 0 0 2px var(--voitta-accent-tint);
+}
+
+/* Toolbar row beneath the textarea: [+attach] [thumbnails…] [send].
+   ctb = "composer toolbar". The Composer component renders these
+   classes regardless of CSS presence — without this block, the +
+   button looks bare-default and attached-image <img>s render at
+   their intrinsic (huge) size. */
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.ctb-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--voitta-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctb-icon:hover:not(:disabled) {
+  background: var(--voitta-art-row-hover);
+  color: var(--voitta-text);
+}
+.ctb-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ctb-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.ctb-send {
+  margin-left: auto;       /* push to the right edge */
+  background: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+}
+.ctb-send:hover:not(:disabled) {
+  background: var(--voitta-accent-hover);
+  color: var(--voitta-accent-fg);
+}
+.ctb-send.is-stop {
+  background: var(--voitta-stop-bg);
+}
+.ctb-send.is-stop:hover {
+  background: var(--voitta-stop-bg-hover);
+}
+
+/* Attached-image thumbnail strip. Without these rules the <img>s
+   render at native resolution — full-screen photos in the chat input. */
+.ctb-attachments {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.ctb-chip {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--voitta-border);
+  background: var(--voitta-bg);
+  flex-shrink: 0;
+}
+.ctb-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.ctb-chip-x {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid var(--voitta-border);
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  font-size: 12px;
+  line-height: 14px;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ctb-chip-x:hover {
+  background: var(--voitta-stop-bg);
+  color: var(--voitta-accent-fg);
+  border-color: var(--voitta-stop-bg);
+}
+
+/* Drag-to-attach overlay (drop target hint). */
+.composer.is-dragover {
+  outline: 2px dashed var(--voitta-accent);
+  outline-offset: -4px;
+}
+.composer-drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--voitta-surface) 80%, transparent);
+  color: var(--voitta-text);
+  font-weight: 600;
+  font-size: 13px;
+  pointer-events: none;
+  border-radius: 4px;
 }
 .send-btn {
   background: var(--voitta-accent);
