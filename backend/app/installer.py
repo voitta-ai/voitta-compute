@@ -262,6 +262,10 @@ def ensure_fresh_deploy(log) -> None:
     certs_dir = user_root / "backend" / "certs"
     if certs_dir.is_dir():
         shutil.rmtree(certs_dir, ignore_errors=True)
+    # Drop ``install_state.json`` — it's the bookkeeping that pairs
+    # with userbase/. Leaving it stranded makes ``install_all`` think
+    # every package is already installed and skip pip entirely.
+    _state_path().unlink(missing_ok=True)
     # Recreate the user site dir so PIP_PREFIX has a target.
     _user_site().mkdir(parents=True, exist_ok=True)
 
