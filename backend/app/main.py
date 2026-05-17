@@ -194,13 +194,13 @@ async def _bootstrap_plugins_and_mcp() -> None:
     # Bind the main event loop into ensure_local so that script-side
     # ``ctx.ensure_local(ref)`` calls — which run in a thread-pool
     # executor — can dispatch async resolvers back to this loop via
-    # ``run_coroutine_threadsafe``. Also import the resolvers package
-    # so its modules register themselves with the ensure_local
-    # registry (side-effect imports).
+    # ``run_coroutine_threadsafe``. Scheme resolvers register
+    # themselves as plugin-import side-effects (see e.g.
+    # ``plugins/google/backend/voitta_google/resolver.py``); no
+    # core-side resolver import is needed here.
     try:
         import asyncio
         from app.services import ensure_local as _ensure_local
-        from app.services import resolvers as _resolvers  # noqa: F401
 
         _ensure_local.bind_loop(asyncio.get_running_loop())
     except Exception:

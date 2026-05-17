@@ -79,15 +79,15 @@ async def test_cancellation_mid_text_calls_provider_aexit(monkeypatch):
 
     task = asyncio.create_task(consumer())
 
-    # Wait until we observe at least the `start` event (then text is mid-stream).
-    # The text BlockDelta is buffered server-side; we won't see the SSE
-    # `delta` until BlockStop fires — which is gated. So the visible state
-    # at the time of cancel is `start` only.
+    # Wait until we observe the streamed text delta — text is now flushed
+    # per BlockDelta (see streaming-migration.md §10 / per-token rendering).
+    # The mid-stream state therefore includes `start` + `delta`, with
+    # BlockStop still gated so `done` cannot have been emitted.
     for _ in range(50):
         await asyncio.sleep(0)
-        if any(e["event"] == "start" for e in received):
+        if any(e["event"] == "delta" for e in received):
             break
-    assert any(e["event"] == "start" for e in received)
+    assert any(e["event"] == "delta" for e in received)
 
     # Cancel the consumer.
     task.cancel()
@@ -97,9 +97,8 @@ async def test_cancellation_mid_text_calls_provider_aexit(monkeypatch):
     # Provider __aexit__ must have fired (clean upstream close).
     assert fake.aexit_count == 1
 
-    # No `delta` was emitted (text block was never closed).
+    # `done` must NOT have been emitted — block never closed.
     names = [e["event"] for e in received]
-    assert "delta" not in names
     assert "done" not in names
 
 

@@ -27,6 +27,10 @@ export type TurnItem =
       error_message?: string | null;
       input?: unknown;
       result_preview?: string | null;
+      // Cumulative char count of tool-args fragments received so far,
+      // updated on every `tool_args_delta` SSE event. Cleared once the
+      // tool finishes (status leaves "running").
+      args_chars?: number;
     }
   | { kind: "rich"; output: RichOutput };
 
@@ -53,6 +57,12 @@ export interface ToolUseStart {
   name: string;
 }
 
+export interface ToolArgsDelta {
+  id: string;
+  block_index: number;
+  chars: number;
+}
+
 export interface ToolUseEnd {
   id: string;
   name?: string;
@@ -67,6 +77,7 @@ export interface StreamCallbacks {
   onStart?: (info: { model: string; provider?: string; tools?: string[] }) => void;
   onDelta: (text: string) => void;
   onToolUseStart?: (info: ToolUseStart) => void;
+  onToolArgsDelta?: (info: ToolArgsDelta) => void;
   onToolUseEnd?: (info: ToolUseEnd) => void;
   /** Server-side rich output emitted by tools that produce inline blocks
    * (e.g. `run_compute`'s `ctx.text` / `ctx.image`). Frontend appends to
@@ -214,6 +225,9 @@ function handleBlock(block: string, cb: StreamCallbacks): void {
       break;
     case "tool_use_start":
       cb.onToolUseStart?.(parsed);
+      break;
+    case "tool_args_delta":
+      cb.onToolArgsDelta?.(parsed);
       break;
     case "tool_use_end":
       cb.onToolUseEnd?.(parsed);

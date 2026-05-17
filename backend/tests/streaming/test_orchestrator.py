@@ -135,13 +135,26 @@ async def test_tool_use_start_fires_before_dispatch(monkeypatch):
 
         events = await _drain(_make_request())
         names = [e["event"] for e in events]
-        # Expected: start, tool_use_start, tool_use_end, delta, done
-        assert names == ["start", "tool_use_start", "tool_use_end", "delta", "done"]
+        # Expected: start, tool_use_start, tool_args_delta, tool_use_end, delta, done
+        assert names == [
+            "start",
+            "tool_use_start",
+            "tool_args_delta",
+            "tool_use_end",
+            "delta",
+            "done",
+        ]
 
         # tool_use_start strictly precedes tool_use_end
         idx_start = names.index("tool_use_start")
         idx_end = names.index("tool_use_end")
         assert idx_start < idx_end
+
+        # tool_args_delta carries cumulative char count
+        targs = events[names.index("tool_args_delta")]["data"]
+        assert targs["chars"] == len("{}")
+        assert targs["id"] == "t1"
+        assert targs["block_index"] == 0
 
         # Usage is accumulated across both iterations
         done = events[-1]["data"]

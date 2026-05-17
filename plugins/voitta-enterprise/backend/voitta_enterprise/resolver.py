@@ -1,4 +1,4 @@
-"""``vre://`` resolver.
+"""``vre://`` resolver — owned by the voitta-enterprise plugin.
 
 Refs reach this resolver as already-parsed :class:`refs.Ref` objects.
 The canonical key set:

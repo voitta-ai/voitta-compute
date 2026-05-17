@@ -52,7 +52,9 @@ function ToolBlock({ item }: { item: Extract<TurnItem, { kind: "tool" }> }) {
       ? ` · ${item.latency_ms} ms`
       : item.status === "error"
         ? ` · ${item.error_message || "failed"}`
-        : "";
+        : item.status === "running" && item.args_chars
+          ? ` · ${item.args_chars.toLocaleString()} chars`
+          : "";
   const inputText =
     item.input !== undefined
       ? typeof item.input === "string"

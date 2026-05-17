@@ -41,6 +41,15 @@ class ProviderNotConfigured(RuntimeError):
 # duplicate, and (2) tool_use.input and tool_result.content are open-shape
 # JSON, which Pydantic would force into ad-hoc schemas. Plain dicts let us
 # move blocks between providers without serialisation friction.
+#
+# Sentinel-key convention: keys starting with ``_`` (e.g. ``_name``,
+# ``_image``) are cross-provider internal sentinels — the orchestrator
+# and adapters may read them, but they must NOT reach the wire. The
+# Anthropic adapter strips them in ``_strip_internal_keys`` before send;
+# OpenAI and Gemini access blocks by named key (``block.get("type")``,
+# ``block.get("input")``) so unknown keys are naturally invisible. If
+# you add an adapter that iterates ``block.items()``, replicate the
+# strip — or the model will see them.
 
 
 TextBlock = dict[str, Any]      # {"type": "text", "text": str}

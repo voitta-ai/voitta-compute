@@ -275,6 +275,21 @@ def _register_mcp_servers(
         )
 
 
+def _warn_if_missing_frontend_bundle(plugin_dir: Path, manifest: dict) -> None:
+    """Log when a manifest declares ``frontend_bundle`` but the path is
+    absent. The plugin's frontend tools then silently won't load — same
+    failure-mode rationale as ``_load_system_prompt``."""
+    rel = manifest.get("frontend_bundle")
+    if not isinstance(rel, str) or not rel:
+        return
+    if not (plugin_dir / rel).is_file():
+        _logger.warning(
+            "plugin %s: manifest.frontend_bundle=%r not found at %s — "
+            "browser primitives from this plugin will not load",
+            plugin_dir.name, rel, plugin_dir / rel,
+        )
+
+
 def _discover() -> list[dict]:
     loaded: list[dict] = []
     for plugins_root in _candidate_plugins_dirs():
@@ -287,6 +302,7 @@ def _discover() -> list[dict]:
             if manifest is None:
                 continue
             _import_plugin(child, manifest)
+            _warn_if_missing_frontend_bundle(child, manifest)
             loaded.append({
                 "name": child.name,
                 "manifest": manifest,

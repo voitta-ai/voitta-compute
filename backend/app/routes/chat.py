@@ -15,6 +15,7 @@ SSE events (additive fields beyond the original shape: ``seq``,
 * ``start          { model, provider, tools, seq, iteration }``
 * ``delta          { seq, iteration, block_index, text }``
 * ``tool_use_start { seq, iteration, block_index, id, name }``
+* ``tool_args_delta{ seq, iteration, block_index, id, chars }``
 * ``rich           { seq, iteration, parent_block_index, sub_seq, … }``
 * ``tool_use_end   { seq, iteration, block_index, id, name, ok,
                      latency_ms, error?, input, result_preview }``
@@ -294,30 +295,48 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                     elif isinstance(ev, BlockDelta):
                         if ev.kind == "text":
                             text_buf.setdefault(ev.block_index, []).append(ev.text)
-                        else:
-                            args_buf.setdefault(ev.block_index, []).append(ev.text)
-                    elif isinstance(ev, BlockStop):
-                        block = blocks_by_index.get(ev.block_index)
-                        if block is None:
-                            continue
-                        if block["type"] == "text":
-                            # Buffering policy: flush text as a single
-                            # `delta` SSE event per block. Future
-                            # per-token rendering flips this to emit on
-                            # each BlockDelta(kind="text") instead. See
-                            # streaming-migration.md §10.
-                            joined = "".join(text_buf.get(ev.block_index, []))
-                            block["text"] = joined
-                            if joined:
+                            if ev.text:
                                 yield _sse(
                                     "delta",
                                     {
                                         "seq": seq.next(),
                                         "iteration": iteration,
                                         "block_index": ev.block_index,
-                                        "text": joined,
+                                        "text": ev.text,
                                     },
                                 )
+                        else:
+                            args_buf.setdefault(ev.block_index, []).append(ev.text)
+                            tu_block = blocks_by_index.get(ev.block_index)
+                            if tu_block is not None and tu_block.get("type") == "tool_use":
+                                chars = sum(len(s) for s in args_buf[ev.block_index])
+                                logger.info(
+                                    "tool_args_delta name=%s block=%d frag_len=%d chars=%d",
+                                    tu_block.get("name") or "?",
+                                    ev.block_index,
+                                    len(ev.text),
+                                    chars,
+                                )
+                                yield _sse(
+                                    "tool_args_delta",
+                                    {
+                                        "seq": seq.next(),
+                                        "iteration": iteration,
+                                        "block_index": ev.block_index,
+                                        "id": tu_block.get("id") or "",
+                                        "chars": chars,
+                                    },
+                                )
+                    elif isinstance(ev, BlockStop):
+                        block = blocks_by_index.get(ev.block_index)
+                        if block is None:
+                            continue
+                        if block["type"] == "text":
+                            # Text is streamed as individual `delta` SSE
+                            # events on each BlockDelta above; here we
+                            # just finalise the buffered assistant block
+                            # for the next iteration's history.
+                            block["text"] = "".join(text_buf.get(ev.block_index, []))
                         else:
                             joined = "".join(args_buf.get(ev.block_index, []))
                             if joined:

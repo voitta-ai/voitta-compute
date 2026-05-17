@@ -18,4 +18,5 @@ from voitta_google import (  # noqa: F401
     context,
     page_scrape,
     tools,
+    resolver,  # registers the drive:// scheme via ensure_local.register
 )

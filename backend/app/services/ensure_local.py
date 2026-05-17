@@ -54,9 +54,26 @@ _RESOLVERS: dict[str, ResolverFn] = {}
 
 
 def register(scheme: str, fn: ResolverFn) -> None:
-    """Register a resolver for ``scheme``. Idempotent on re-register —
-    the latest binding wins, which is useful in test fixtures."""
-    _RESOLVERS[scheme.lower()] = fn
+    """Register a resolver for ``scheme``. Last-write-wins — useful in
+    test fixtures. Re-registering a scheme already bound to a different
+    function logs a WARNING so production plugin conflicts aren't silent."""
+    key = scheme.lower()
+    prior = _RESOLVERS.get(key)
+    if prior is not None and prior is not fn:
+        _logger.warning(
+            "ensure_local: scheme %r resolver overwritten "
+            "(was %s.%s, now %s.%s) — last plugin to load wins",
+            key,
+            prior.__module__, getattr(prior, "__qualname__", prior),
+            fn.__module__, getattr(fn, "__qualname__", fn),
+        )
+    _RESOLVERS[key] = fn
+
+
+def available_schemes() -> set[str]:
+    """Return the set of registered ref schemes. Useful for UIs that
+    want to disable features when their plugin isn't loaded."""
+    return set(_RESOLVERS)
 
 
 def _find_cached(canonical: str) -> Path | None:

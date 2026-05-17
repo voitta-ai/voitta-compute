@@ -97,7 +97,15 @@ function appendText(items: TurnItem[], text: string): TurnItem[] {
 }
 
 function appendToolStart(items: TurnItem[], id: string, name: string): TurnItem[] {
-  return [...items, { kind: "tool", id, name, status: "running" }];
+  return [...items, { kind: "tool", id, name, status: "running", args_chars: 0 }];
+}
+
+function updateToolArgs(items: TurnItem[], id: string, chars: number): TurnItem[] {
+  return items.map((it) =>
+    it.kind === "tool" && it.id === id && it.status === "running"
+      ? { ...it, args_chars: chars }
+      : it,
+  );
 }
 
 function appendRich(items: TurnItem[], output: RichOutput): TurnItem[] {
@@ -355,6 +363,9 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
           },
           onToolUseStart: (info) => {
             setItems(appendToolStart(itemsRef.current, info.id, info.name));
+          },
+          onToolArgsDelta: (info) => {
+            setItems(updateToolArgs(itemsRef.current, info.id, info.chars));
           },
           onToolUseEnd: (info) => {
             setItems(updateToolEnd(itemsRef.current, info));

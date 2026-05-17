@@ -93,11 +93,20 @@ class AnthropicProvider(BaseProvider):
             messages=messages,
         )
         if req.tools:
+            # `eager_input_streaming: true` opts each tool into Anthropic's
+            # fine-grained tool streaming. Without this flag the server
+            # buffers tool args for schema validation and ships them as
+            # a single late burst (observed ~30s gap mid-block for large
+            # JSON inputs); with it, partial_json fragments stream as the
+            # model generates them. Trade-off: mid-stream JSON may be
+            # invalid — we already only parse on BlockStop, and fall back
+            # to {"_raw": joined} if json.loads fails (chat.py).
             kwargs["tools"] = [
                 {
                     "name": t.name,
                     "description": t.description,
                     "input_schema": t.input_schema,
+                    "eager_input_streaming": True,
                 }
                 for t in req.tools
             ]

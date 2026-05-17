@@ -399,13 +399,62 @@ The following surfaces are part of voitta core's stable plugin contract:
 
 | Surface | What |
 |---|---|
-| `app.tools.registry` | `ToolSpec`, `ToolCtx`, `registry.register()`, `registry.dispatch()` |
+| `app.tools.registry` | `ToolSpec`, `ToolCtx` (incl. `ToolCtx.extras: dict`), `registry.register()`, `registry.dispatch()` |
 | `app.tools.browser` | `call_browser(name, args, ctx)`, `BrowserToolError` |
 | `app.services.python_storage` | `put`, `put_file`, `get`, `list_all`, `delete`, `make_origin`, `STORAGE_ROOT` |
+| `app.services.ensure_local` | `register(scheme, fn)`, `ensure_local(ref)`, `available_schemes()`, `EnsureLocalError` |
+| `app.services.refs` | `parse(ref) → Ref`, `canonicalise(ref)`, `RefError` |
 | `app.config.PROJECT_ROOT` | The user-writable data directory; safe to write into. |
 | `frontend/src/lib/bridge.ts` | `registerPrimitive(name, fn)`, `PrimitiveError`, `getBackendOrigin()` |
 
 Anything else is internal. If you find yourself reaching into `app.services.scripts._persist` or the like, write a wrapper inside your plugin and contribute the wrapper upstream as a stable API.
+
+### Sentinel-key convention on content blocks
+
+Cross-provider sentinels on `tool_result` / `tool_use` blocks use a leading underscore (`_name`, `_image`, `_raw`). The orchestrator and adapters may read them; they MUST NOT reach the wire. Today the Anthropic adapter strips them in `_strip_internal_keys`; OpenAI and Gemini access blocks by named key and are naturally immune. If you ship a plugin that hangs structured metadata off a `tool_result`, prefix the key with `_` so future adapters don't accidentally serialise it.
+
+### Ref schemes and resolvers
+
+A *ref* is a URI-shaped string (`scheme://k=v&k=v`) that names a durable upstream artefact. Reports and compute scripts store refs; `ctx.ensure_local(ref)` materialises a local snapshot on demand. The grammar lives in `app.services.refs`; schemes are open and plugin-owned.
+
+To define a scheme in your plugin:
+
+```python
+# plugins/acme/backend/voitta_acme/resolver.py
+from pathlib import Path
+from app.services import ensure_local as _ensure_local, refs
+
+async def resolve(ref: refs.Ref) -> Path:
+    # fetch the upstream artefact, write a snapshot, stamp
+    # meta.json::origin.ref = ref.canonical, return the path
+    ...
+
+_ensure_local.register("acme", resolve)
+```
+
+Then import it from your plugin's package `__init__.py` so the registration runs:
+
+```python
+from voitta_acme import (
+    tools,
+    resolver,  # registers the acme:// scheme via ensure_local.register
+)
+```
+
+Canonical examples: [`plugins/google/backend/voitta_google/resolver.py`](plugins/google/backend/voitta_google/resolver.py) (`drive://`) and [`plugins/voitta-enterprise/backend/voitta_enterprise/resolver.py`](plugins/voitta-enterprise/backend/voitta_enterprise/resolver.py) (`vre://`).
+
+### Shared keyspaces and conflict semantics
+
+A plugin shares exactly four writable namespaces with core and other plugins. Knowing the collision behaviour saves debugging the day a second plugin shows up:
+
+| Keyspace | Owner of `register` | On duplicate key |
+|---|---|---|
+| Tool names (`registry._tools[name]`) | `app.tools.registry.register` | WARN, keep prior, skip new. Plugin import continues. |
+| Ref schemes (`ensure_local._RESOLVERS[scheme]`) | `app.services.ensure_local.register` | WARN, last-write-wins. Plugin load order is alphabetic by directory. |
+| MCP connector ids | `app.services.mcp.register_connector` | See `app/services/mcp/registry.py` |
+| Settings tree (`plugins.<name>.<field>`) | Frontend `SettingsView` | Namespaced by plugin directory name — no collision possible unless two plugin dirs share a name (filesystem prevents it). |
+
+Plugin Python modules (`voitta_acme.*`) are namespaced by Python's import system; module-level state from one plugin is not visible to another.
 
 ---
 
@@ -469,6 +518,7 @@ When users install your plugin's .app for the first time, the launcher:
 - [ ] Optional: `"agent_name"` in `manifest.json` to brand the widget header.
 - [ ] Optional: `plugins/<name>/theme.css` to override CSS tokens (accent colour, header background, etc.).
 - [ ] Optional: `plugins/<name>/scripts/compute/<slug>/` for canonical analyses your tools should chain into.
+- [ ] Optional: `plugins/<name>/backend/<python_module>/resolver.py` + an import in `__init__.py` if your plugin owns a ref scheme (`acme://…`).
 - [ ] Optional: `plugins/<name>/README.md` for human maintainers.
 - [ ] Verify: `git ls-files | xargs grep -l <your-plugin-name>` returns empty (the OSS upstream has no record of your plugin).
 - [ ] Verify: launching the .app shows your tools in `registry.all()` and your docs in RAG hits.
@@ -483,6 +533,7 @@ When users install your plugin's .app for the first time, the launcher:
 * **Returning bulk arrays through the chat context.** Use `python_storage` and return a handle.
 * **Per-tool `host_pattern` repetition.** Set `host_patterns` once in the manifest; the loader applies it to every ToolSpec that doesn't override.
 * **Importing from `app.tools.providers.<other_plugin>`.** Plugins are independent; if you need something another plugin offers, the owner of that plugin should expose it as a stable Python API or the capability belongs in core.
+* **Claiming a ref scheme already owned by another plugin.** `ensure_local.register` is last-write-wins (logged at WARNING). If a scheme you want is taken, namespace yours (`acme-projects://`) instead of overriding.
 
 ---
 

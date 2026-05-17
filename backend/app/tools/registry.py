@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
 
@@ -29,9 +29,15 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ToolCtx:
-    """Request-scoped state passed to tool handlers."""
+    """Request-scoped state passed to tool handlers.
+
+    ``extras`` is a free-form per-request payload plugins can read /
+    write without core needing to add a field. Keys are
+    plugin-namespaced by convention (e.g. ``"voitta_google.tenant"``).
+    """
 
     session_id: str | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -71,8 +77,22 @@ class ToolRegistry:
         self._tools: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> None:
-        if spec.name in self._tools:
-            raise ValueError(f"tool {spec.name!r} already registered")
+        # Collision policy: log + skip rather than raise. Raising aborts
+        # the entire plugin's import, so one duplicate tool name would
+        # drop every sibling tool the plugin also wanted to contribute.
+        # Skip-and-keep preserves the rest of the plugin's surface.
+        prior = self._tools.get(spec.name)
+        if prior is not None:
+            logger.warning(
+                "tool %r already registered by %s.%s — keeping prior, "
+                "skipping new spec from %s.%s",
+                spec.name,
+                getattr(prior.handler, "__module__", "?"),
+                getattr(prior.handler, "__qualname__", "?"),
+                getattr(spec.handler, "__module__", "?"),
+                getattr(spec.handler, "__qualname__", "?"),
+            )
+            return
         self._tools[spec.name] = spec
 
     def all(self) -> list[ToolSpec]:

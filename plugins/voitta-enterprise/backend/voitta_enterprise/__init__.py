@@ -7,4 +7,5 @@ automatically from manifest.json (``enterprise.voitta.ai``).
 
 from voitta_enterprise import (  # noqa: F401  — registration side-effects
     tools,
+    resolver,  # registers the vre:// scheme via ensure_local.register
 )
