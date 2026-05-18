@@ -50,7 +50,38 @@ export interface ChatMessage {
   // Optional so back-loaded transcripts without items still render as plain
   // text.
   items?: TurnItem[];
+  // Per-iteration wire blocks captured from the backend's `turn_persist`
+  // SSE events. An agent loop with N iterations produces N entries; the
+  // LAST entry may have an empty toolResultBlocks (final text-only
+  // assistant message that ended the loop).
+  //
+  // Anthropic requires every tool_use block to be IMMEDIATELY followed
+  // by its tool_result in the next message. So we must preserve the
+  // iteration boundaries: each TurnPair becomes one (assistant, user)
+  // pair on the wire. Flattening across iterations is wrong — it
+  // produces messages with tool_use blocks that have no matching
+  // tool_result, which Anthropic 400s. See messagesToWire below.
+  //
+  // Without this, the model loses memory of its tool use after one
+  // turn and starts "pretending" to make edits — that's the bug this
+  // whole capture/replay system fixes.
+  turnPairs?: TurnPair[];
 }
+
+// One iteration of the backend agent loop. The assistant blocks are
+// what the model emitted (text + tool_use entries); the tool result
+// blocks are what the orchestrator appended after dispatch (one
+// tool_result per tool_use, possibly prefixed by a system-reminder
+// text block from RenderDrain).
+export interface TurnPair {
+  assistantBlocks: WireBlock[];
+  toolResultBlocks: WireBlock[];
+}
+
+// Loose pass-through type — Anthropic blocks of various shapes. We
+// don't validate; the backend is the source of truth and the FE just
+// stores and replays.
+export type WireBlock = Record<string, unknown>;
 
 export interface ToolUseStart {
   id: string;
@@ -73,12 +104,26 @@ export interface ToolUseEnd {
   result_preview?: string | null;
 }
 
+export interface TurnPersist {
+  iteration: number;
+  /** Anthropic-style blocks (text + tool_use) the model produced this iteration. */
+  assistant_blocks: WireBlock[];
+  /** Anthropic-style blocks for the synthetic `{role:"user"}` follow-up
+   *  message the backend appended (tool_result entries, plus an optional
+   *  leading text block carrying a system-reminder from RenderDrain). */
+  tool_result_blocks: WireBlock[];
+}
+
 export interface StreamCallbacks {
   onStart?: (info: { model: string; provider?: string; tools?: string[] }) => void;
   onDelta: (text: string) => void;
   onToolUseStart?: (info: ToolUseStart) => void;
   onToolArgsDelta?: (info: ToolArgsDelta) => void;
   onToolUseEnd?: (info: ToolUseEnd) => void;
+  /** Per-iteration replayable wire blocks. Store these on the in-progress
+   * assistant ChatMessage so subsequent POSTs include the full tool-use
+   * history. Fires AFTER tool_use_end for the same iteration. */
+  onTurnPersist?: (info: TurnPersist) => void;
   /** Server-side rich output emitted by tools that produce inline blocks
    * (e.g. `run_compute`'s `ctx.text` / `ctx.image`). Frontend appends to
    * the streaming TurnItems. Same renderer as browser-side rich items
@@ -119,20 +164,61 @@ function prefixCurrentUrl(messages: ChatMessage[]): ChatMessage[] {
   return [...messages.slice(0, -1), tagged];
 }
 
-// Combine a message's text + attachments into the wire shape. Text-only
-// turns stay as plain strings (back-compat); turns with one or more
-// attachments become an Anthropic-style content-block list. Images come
-// FIRST so the model sees them before the prose that references them.
-function toWireMessage(m: ChatMessage): { role: Role; content: unknown } {
-  if (!m.attachments || m.attachments.length === 0) {
-    return { role: m.role, content: m.content };
+// Flatten a list of ChatMessage into the wire shape.
+//
+// Most turns are 1:1 with a wire entry. The exception is an assistant
+// turn that drove an agent loop: it carries `turnPairs`, an ordered
+// list of (assistantBlocks, toolResultBlocks) iterations. Each pair
+// becomes a separate (assistant, user) wire entry — Anthropic
+// requires every `tool_use` block to be immediately followed by its
+// matching `tool_result` in the next message, so we cannot flatten
+// multiple iterations into a single assistant block list. The last
+// pair may have an empty `toolResultBlocks` (final text-only
+// completion that ended the loop); that pair becomes a single
+// assistant entry, no follow-up user entry.
+//
+// Plain text-only turns and image-bearing user turns keep the
+// historical behaviour (string content, or text+image blocks).
+function messagesToWire(
+  msgs: ChatMessage[],
+): Array<{ role: Role; content: unknown }> {
+  const out: Array<{ role: Role; content: unknown }> = [];
+  for (const m of msgs) {
+    if (m.role === "assistant" && m.turnPairs && m.turnPairs.length > 0) {
+      for (const pair of m.turnPairs) {
+        // Defensive: drop orphan tool_use blocks from a pair whose
+        // toolResultBlocks is empty. Without this, an old/replayed
+        // pair carrying a partial tool_use (max_tokens cutoff, etc.)
+        // sends an assistant turn with tool_use that has no following
+        // tool_result, which Anthropic 400s on. Belt-and-braces with
+        // the BE-side strip in routes/chat.py.
+        const safeAssistant =
+          pair.toolResultBlocks.length === 0
+            ? pair.assistantBlocks.filter(
+                (b) => (b as { type?: string }).type !== "tool_use",
+              )
+            : pair.assistantBlocks;
+        if (safeAssistant.length > 0) {
+          out.push({ role: "assistant", content: safeAssistant });
+        }
+        if (pair.toolResultBlocks.length > 0) {
+          out.push({ role: "user", content: pair.toolResultBlocks });
+        }
+      }
+      continue;
+    }
+    if (!m.attachments || m.attachments.length === 0) {
+      out.push({ role: m.role, content: m.content });
+      continue;
+    }
+    const blocks: unknown[] = m.attachments.map((a) => ({
+      type: "image",
+      source: { type: "base64", media_type: a.mime, data: a.data },
+    }));
+    blocks.push({ type: "text", text: m.content });
+    out.push({ role: m.role, content: blocks });
   }
-  const blocks: unknown[] = m.attachments.map((a) => ({
-    type: "image",
-    source: { type: "base64", media_type: a.mime, data: a.data },
-  }));
-  blocks.push({ type: "text", text: m.content });
-  return { role: m.role, content: blocks };
+  return out;
 }
 
 export async function streamChat(
@@ -146,7 +232,7 @@ export async function streamChat(
   // Strip the frontend-only `items` field; backend only looks at
   // {role, content}. Inject the URL prefix on the latest user turn,
   // then combine text + attachments into the wire shape.
-  const wirePayload = prefixCurrentUrl(messages).map(toWireMessage);
+  const wirePayload = messagesToWire(prefixCurrentUrl(messages));
 
   const body: Record<string, unknown> = {
     messages: wirePayload,
@@ -231,6 +317,9 @@ function handleBlock(block: string, cb: StreamCallbacks): void {
       break;
     case "tool_use_end":
       cb.onToolUseEnd?.(parsed);
+      break;
+    case "turn_persist":
+      cb.onTurnPersist?.(parsed);
       break;
     case "rich":
       cb.onRich?.(parsed);

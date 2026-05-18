@@ -8,11 +8,29 @@ URLs match `voitta-bookmarklet`), and serves the built widget bundle from
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+
+
+# Configure logging for raw `uvicorn app.main:app` runs (i.e. `./run.sh`).
+# When the .app launches us through ``app.desktop``, a richer queue-based
+# config is installed there and this block is a no-op (we detect an
+# existing handler on the root logger and bail). Without this, INFO-level
+# lines from ``app.*`` modules — including the prompt-cache monitor —
+# get silently dropped on dev runs because uvicorn's default LOGGING_CONFIG
+# only attaches handlers to ``uvicorn.*`` loggers.
+_root_logger = logging.getLogger()
+if not _root_logger.handlers:
+    _root_logger.setLevel(logging.INFO)
+    _stderr = logging.StreamHandler()
+    _stderr.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    )
+    _root_logger.addHandler(_stderr)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -505,6 +523,33 @@ async def panel_shim_js():
     }
     if (e.source !== window.parent) return;
     var a = e.data && e.data.voittaAction;
+    if (a === 'measure') {
+      // Cheap probe: parent has just resized us; settle briefly so
+      // Panel/Bokeh's resize callbacks fire, then report scrollHeight.
+      // Used by the parent's screenshot path to discriminate natural
+      // vs stretch-fill layouts before deciding capture height.
+      var mrid = e.data.requestId;
+      var mSettleMs = +e.data.settle_ms || 400;
+      setTimeout(function(){
+        requestAnimationFrame(function(){
+          requestAnimationFrame(function(){
+            var docElM = document.documentElement;
+            try {
+              window.parent.postMessage({
+                type: 'voitta_report_event',
+                kind: 'measure_response',
+                requestId: mrid,
+                scrollH: docElM.scrollHeight,
+                clientH: docElM.clientHeight,
+                bodyScrollH: (document.body && document.body.scrollHeight) || 0,
+                innerH: window.innerHeight,
+              }, '*');
+            } catch (_) { /* parent gone */ }
+          });
+        });
+      }, mSettleMs);
+      return;
+    }
     if (a === 'screenshot') {
       // html2canvas is loaded as a sibling js_files entry; if it's not
       // ready yet we fail fast so the LLM gets a real error instead of
@@ -546,6 +591,22 @@ async def panel_shim_js():
       var docEl = document.documentElement;
       var fullW = Math.max(docEl.scrollWidth, docEl.clientWidth);
       var fullH = Math.max(docEl.scrollHeight, docEl.clientHeight);
+      // Debug telemetry: dimensions used for html2canvas vs. what the
+      // viewport actually shows. If the captured screenshot is
+      // visible-only, fullW/H ≈ innerW/H (or some inner scrollable
+      // container is masking content); if it's full-doc, fullH should
+      // be ≥ innerH and equal to scrollH. Echoed back to the parent
+      // primitive in the response payload so the backend logs it too
+      // — search voitta.log for "screenshot_dims".
+      var bodyScrollH = (document.body && document.body.scrollHeight) || 0;
+      var dims = {
+        scrollW: docEl.scrollWidth, scrollH: docEl.scrollHeight,
+        clientW: docEl.clientWidth, clientH: docEl.clientHeight,
+        innerW: window.innerWidth, innerH: window.innerHeight,
+        bodyScrollH: bodyScrollH,
+        chosenW: fullW, chosenH: fullH,
+      };
+      try { console.log('[voitta-screenshot] doc_dims', dims); } catch (_) {}
 
       // Stage 4.3 — collect pixel data from any nested three_scene
       // iframes via postMessage (their canvas is cross-origin to us,
@@ -658,19 +719,69 @@ async def panel_shim_js():
             // await chain. Keep it simple: bounded retry.
           }
 
+          // Trim trailing whitespace at the bottom of the canvas.
+          // Saves a lot of pixels when responsive Panel layouts get
+          // their iframe force-expanded but don't actually fill it
+          // (fixed-size scenes leave the background color showing
+          // below the last component). Scan rows from the bottom up,
+          // sampling every 8th column to keep it cheap, looking for
+          // the first row containing a non-background pixel.
+          // Threshold: any channel < 250 counts as "content"
+          // (matches the #ffffff backgroundColor we passed to
+          // html2canvas).
+          function trimBottomWhitespace(c){
+            var tw = c.width, th = c.height;
+            if (th < 200) return c;  // too short to be worth trimming
+            var ctxT = c.getContext('2d');
+            var data;
+            try {
+              data = ctxT.getImageData(0, 0, tw, th).data;
+            } catch (_) {
+              return c;  // canvas tainted or OOM — skip the trim
+            }
+            var step = 8;  // sample every 8 columns
+            var lastContent = -1;
+            for (var y = th - 1; y >= 0; y--) {
+              var hit = false;
+              for (var x = 0; x < tw; x += step) {
+                var idx = (y * tw + x) * 4;
+                if (
+                  data[idx]     < 250 ||
+                  data[idx + 1] < 250 ||
+                  data[idx + 2] < 250
+                ) { hit = true; break; }
+              }
+              if (hit) { lastContent = y; break; }
+            }
+            // Keep a 40px padding below the last content pixel for
+            // visual breathing room.
+            var newH = (lastContent >= 0 ? lastContent + 40 : th);
+            if (newH >= th) return c;
+            var trimmed = document.createElement('canvas');
+            trimmed.width = tw;
+            trimmed.height = newH;
+            trimmed.getContext('2d').drawImage(c, 0, 0);
+            return trimmed;
+          }
+
           function emit(){
+            var finalCanvas = canvas;
+            try { finalCanvas = trimBottomWhitespace(canvas); }
+            catch (_) { finalCanvas = canvas; }
             var dataUrl;
-            try { dataUrl = canvas.toDataURL(format, quality); }
+            try { dataUrl = finalCanvas.toDataURL(format, quality); }
             catch (err) {
               reply({ok: false, message: 'canvas_tainted: ' + (err && err.message)});
               return;
             }
             reply({
               ok: true, dataUrl: dataUrl,
-              width: canvas.width, height: canvas.height,
+              width: finalCanvas.width, height: finalCanvas.height,
               full_width: fullW, full_height: fullH,
               scale: scale, format: format,
               nested_scenes_captured: sceneSnaps.length,
+              doc_dims: dims,
+              trimmed_from_h: canvas.height,
             });
           }
 
@@ -1408,6 +1519,27 @@ async def auth_status(request: Request) -> dict:
         "localhost_mode": _cfg.LOCALHOST_MODE,
         "authenticated": (cookie is not None and cookie == _cfg.API_KEY),
     }
+
+
+_screenshot_dims_log = logging.getLogger("app.screenshot_dims")
+
+
+@app.post("/api/log/screenshot_dims")
+async def log_screenshot_dims(payload: dict) -> dict:
+    """Sink for the FE screenshot primitive's doc-dim telemetry.
+
+    The iframe shim measures ``document.documentElement.scroll{W,H}`` /
+    ``client{W,H}`` / ``window.inner{W,H}`` and pipes them through the
+    screenshot response. The FE then POSTs them here so they land in
+    voitta.log next to chat-stream / cache_monitor lines for
+    diagnosing "screenshot is visible-only" reports. No auth — same
+    posture as the rest of the loopback-bound backend.
+    """
+    _screenshot_dims_log.info(
+        "screenshot.doc_dims %s",
+        json.dumps(payload, default=str)[:1024],
+    )
+    return {"ok": True}
 
 
 @app.post("/api/auth/login")

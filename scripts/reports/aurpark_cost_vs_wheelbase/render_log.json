@@ -1,0 +1,50 @@
+[
+  {
+    "render_id": "7d416b14c51f",
+    "report_id": "aurpark_cost_vs_wheelbase",
+    "kind": "ready",
+    "ts": 1779076134.666177,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "0a0da5d973be",
+    "report_id": "aurpark_cost_vs_wheelbase",
+    "kind": "ready",
+    "ts": 1779076189.810612,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "613660689c6b",
+    "report_id": "aurpark_cost_vs_wheelbase",
+    "kind": "ready",
+    "ts": 1779076213.2036328,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "70e53731513f",
+    "report_id": "aurpark_cost_vs_wheelbase",
+    "kind": "ready",
+    "ts": 1779076374.879472,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  }
+]

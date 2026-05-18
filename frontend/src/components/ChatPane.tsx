@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
-import { streamChat, type ChatMessage, type ImageAttachment, type TurnItem } from "../lib/api";
+import { streamChat, type ChatMessage, type ImageAttachment, type TurnItem, type TurnPair } from "../lib/api";
 import { fetchAuthStatus, loginWithApiKey } from "../lib/auth";
 import { getSessionId } from "../lib/bridge";
 import { log } from "../lib/logger";
@@ -206,6 +206,11 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
   const itemsRef = useRef<TurnItem[]>([]);
   // Mirror of settings for the same reason.
   const settingsRef = useRef<Settings>(settings);
+  // Per-iteration capture of `turn_persist` SSE events during the
+  // current stream. Each event = one TurnPair (assistant blocks + the
+  // synthetic user turn's tool_result blocks). Stored as a ref (not a
+  // closure local) so stop() can also flush a partial run.
+  const turnPairsAccRef = useRef<TurnPair[]>([]);
 
   function setItems(next: TurnItem[]): void {
     itemsRef.current = next;
@@ -357,6 +362,9 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // Reset per-turn accumulator. See the ref declared above.
+    turnPairsAccRef.current = [];
+
     try {
       await streamChat(
         backendOrigin,
@@ -378,12 +386,22 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
           onRich: (output) => {
             setItems(appendRich(itemsRef.current, output));
           },
+          onTurnPersist: (info) => {
+            turnPairsAccRef.current.push({
+              assistantBlocks: info.assistant_blocks,
+              toolResultBlocks: info.tool_result_blocks,
+            });
+          },
           onDone: () => {
             const finalItems = itemsRef.current;
             const content = itemsToContent(finalItems);
+            const persisted: Partial<ChatMessage> =
+              turnPairsAccRef.current.length > 0
+                ? { turnPairs: turnPairsAccRef.current }
+                : {};
             setMessages((m) => [
               ...m,
-              { role: "assistant", content, items: finalItems },
+              { role: "assistant", content, items: finalItems, ...persisted },
             ]);
             setStreaming(false);
             setItems([]);
@@ -408,9 +426,13 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
             );
             if (partialItems.length) {
               const content = itemsToContent(partialItems);
+              const persisted: Partial<ChatMessage> =
+                turnPairsAccRef.current.length > 0
+                  ? { turnPairs: turnPairsAccRef.current }
+                  : {};
               setMessages((m) => [
                 ...m,
-                { role: "assistant", content, items: partialItems },
+                { role: "assistant", content, items: partialItems, ...persisted },
               ]);
             }
             setStreaming(false);
@@ -517,9 +539,13 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
       );
       const content = itemsToContent(partialItems);
       if (partialItems.length) {
+        const persisted: Partial<ChatMessage> =
+          turnPairsAccRef.current.length > 0
+            ? { turnPairs: turnPairsAccRef.current }
+            : {};
         setMessages((m) => [
           ...m,
-          { role: "assistant", content, items: partialItems },
+          { role: "assistant", content, items: partialItems, ...persisted },
         ]);
       }
       setStreaming(false);

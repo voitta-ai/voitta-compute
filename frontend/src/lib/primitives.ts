@@ -3,6 +3,7 @@
 // provider in `app.tools.providers`.
 
 import { getBackendOrigin, PrimitiveError, registerPrimitive } from "./bridge";
+import { log } from "./logger";
 import { getActiveReportIframe, getActiveReportInfo } from "./report-iframe";
 
 const DOM_CAP = 200_000;
@@ -116,6 +117,16 @@ interface ScreenshotArgs {
   quality?: number;
   format?: "webp" | "png";
   timeout_ms?: number;
+  // Force the iframe to a tall layout before capture so responsive
+  // Panel reports (sizing_mode=stretch_both, etc.) expand to natural
+  // content height instead of being squashed into the visible
+  // viewport. Default: enabled at 6000px. Set ``expand_height: 0`` to
+  // disable (capture at the iframe's current size).
+  expand_height?: number;
+  // How long to wait for Panel/Bokeh to relayout after resizing the
+  // iframe. Bokeh debounces resize events ~250ms; we give it some
+  // headroom for downstream callbacks. Default: 700ms.
+  expand_settle_ms?: number;
 }
 
 interface ScreenshotResponse {
@@ -132,6 +143,22 @@ interface ScreenshotResponse {
   scale?: number;
   format?: string;
   nested_scenes_captured?: number;
+  // Debug telemetry from the iframe shim (see backend/app/main.py
+  // ``_afterSettle`` block). When the screenshot looks visible-only,
+  // these numbers reveal whether the iframe's documentElement was
+  // already the full document height or whether an inner scrollable
+  // container was masking content.
+  doc_dims?: {
+    scrollW: number;
+    scrollH: number;
+    clientW: number;
+    clientH: number;
+    innerW: number;
+    innerH: number;
+    bodyScrollH: number;
+    chosenW: number;
+    chosenH: number;
+  };
 }
 
 let screenshotCounter = 0;
@@ -162,10 +189,136 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
   const quality = typeof args.quality === "number" ? args.quality : 0.85;
   const format = args.format === "png" ? "png" : "webp";
   const timeout = typeof args.timeout_ms === "number" ? args.timeout_ms : 60_000;
+  // Two-phase auto-sizing:
+  //
+  //   1. Set iframe to a "small probe" height and ask the shim for
+  //      its scrollHeight. Call it H1.
+  //   2. Set iframe to a "large probe" height and ask again. Call it H2.
+  //   3. If H2 ≈ H1 → content has a NATURAL maximum height; use H1.
+  //   4. If H2 >> H1 → content is sizing_mode=stretch_both / stretch_height;
+  //      it'll fill any iframe size. Fall back to a sensible default
+  //      (the user's current viewport height, padded).
+  //   5. Resize the iframe to the chosen target, then screenshot.
+  //
+  // ``expand_height`` (if explicitly passed by the LLM/CLI) overrides
+  // the whole auto-size dance — useful when the caller knows exactly
+  // how tall the report needs to be.
+  const PROBE_SMALL_H = 2000;
+  const PROBE_LARGE_H = 6000;
+  const STRETCH_RATIO_THRESHOLD = 1.4;  // H2 > H1 * 1.4 → stretch-fill
+  const explicitExpand =
+    typeof args.expand_height === "number" ? args.expand_height : null;
+  const expandSettleMs =
+    typeof args.expand_settle_ms === "number" ? args.expand_settle_ms : 500;
+
+  // Capture original iframe height styles so we always restore them.
+  const restoreStyle = {
+    height: iframe.style.height,
+    minHeight: iframe.style.minHeight,
+    maxHeight: iframe.style.maxHeight,
+  };
+  function setIframeHeight(px: number): void {
+    iframe!.style.height = `${px}px`;
+    iframe!.style.minHeight = `${px}px`;
+    iframe!.style.maxHeight = `${px}px`;
+  }
+  function restoreIframe(): void {
+    iframe!.style.height = restoreStyle.height;
+    iframe!.style.minHeight = restoreStyle.minHeight;
+    iframe!.style.maxHeight = restoreStyle.maxHeight;
+  }
+  // Inline measurement helper. Resizes iframe, posts a "measure"
+  // request to the shim, awaits ``measure_response`` with scrollHeight.
+  // Rejects on timeout — caller catches and falls back to a default.
+  function measureAt(probeH: number, timeoutMs = 5000): Promise<number> {
+    return new Promise((resolveM, rejectM) => {
+      const mrid = `mm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      setIframeHeight(probeH);
+      const t = setTimeout(() => {
+        window.removeEventListener("message", onMsg);
+        rejectM(new Error(`measure timeout at probeH=${probeH}`));
+      }, timeoutMs);
+      function onMsg(e: MessageEvent) {
+        const d = e.data as
+          | {
+              type?: string;
+              kind?: string;
+              requestId?: string;
+              scrollH?: number;
+            }
+          | null;
+        if (
+          !d ||
+          d.type !== "voitta_report_event" ||
+          d.kind !== "measure_response" ||
+          d.requestId !== mrid
+        )
+          return;
+        if (e.source !== iframe!.contentWindow) return;
+        clearTimeout(t);
+        window.removeEventListener("message", onMsg);
+        resolveM(d.scrollH ?? probeH);
+      }
+      window.addEventListener("message", onMsg);
+      iframe!.contentWindow!.postMessage(
+        { voittaAction: "measure", requestId: mrid, settle_ms: expandSettleMs },
+        "*",
+      );
+    });
+  }
+
+  // Decide the target capture height. Either explicit (LLM passed
+  // ``expand_height``) or auto-discovered via the two-probe dance.
+  const fallbackH = Math.max(
+    iframe.getBoundingClientRect().height || 0,
+    900,
+  );
+  let chosenHeight: number;
+  let stretchDetected = false;
+  if (explicitExpand !== null && explicitExpand > 0) {
+    chosenHeight = explicitExpand;
+  } else {
+    let h1: number | null = null;
+    let h2: number | null = null;
+    try {
+      h1 = await measureAt(PROBE_SMALL_H);
+      h2 = await measureAt(PROBE_LARGE_H);
+    } catch {
+      /* fall through with whatever we got */
+    }
+    if (h1 !== null && h2 !== null) {
+      if (h2 > h1 * STRETCH_RATIO_THRESHOLD) {
+        // Stretch-fill content. No natural max → use the original
+        // viewport height (padded). Otherwise the LLM gets a 6000px
+        // image of stretched scenes that looks nothing like the user
+        // sees.
+        stretchDetected = true;
+        chosenHeight = Math.round(fallbackH * 1.3);
+      } else {
+        // Natural max. h1 ≈ h2 ≈ true content height.
+        chosenHeight = Math.max(h1, h2);
+      }
+    } else {
+      // Measure failed entirely — punt to the old behaviour.
+      chosenHeight = 2000;
+    }
+  }
+  log.info("screenshot", "auto_size", {
+    explicit: explicitExpand,
+    chosen: chosenHeight,
+    stretch_detected: stretchDetected,
+    fallback_h: fallbackH,
+    report_id: info?.report_id,
+  });
+  setIframeHeight(chosenHeight);
+  // One more settle for the iframe to relayout at the FINAL chosen
+  // height (the last probe was likely a different value).
+  await new Promise((r) => setTimeout(r, expandSettleMs));
 
   return await new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       window.removeEventListener("message", onMessage);
+      restoreIframe();
       reject(
         new PrimitiveError(
           "timeout",
@@ -189,6 +342,7 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
       if (e.source !== iframe!.contentWindow) return;
       clearTimeout(timer);
       window.removeEventListener("message", onMessage);
+      restoreIframe();
       if (!data.ok) {
         reject(
           new PrimitiveError(
@@ -198,6 +352,36 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
         );
         return;
       }
+      // Surface the iframe's document-dimension telemetry into the
+      // bridge log. Logger entries forward to the backend via
+      // /api/log/event (see logger.ts), so this lands in voitta.log
+      // alongside cache[…] / chat-stream lines for diagnosing
+      // "screenshot is visible-only" reports.
+      if (data.doc_dims) {
+        const payload = {
+          ...data.doc_dims,
+          captured_w: data.width,
+          captured_h: data.height,
+          report_id: info?.report_id,
+          url: info?.url,
+        };
+        log.info("screenshot", "doc_dims", payload);
+        // Forward to the backend so the numbers land in voitta.log
+        // alongside chat-stream / cache_monitor lines. log.info is
+        // browser-local only (in-memory ring buffer), so without this
+        // explicit POST the doc_dims values are stranded in DevTools.
+        try {
+          void fetch(`${getBackendOrigin()}/api/log/screenshot_dims`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+            credentials: "include",
+            keepalive: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
       resolve({
         ok: true,
         data_url: data.dataUrl,
@@ -205,6 +389,7 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
         height: data.height,
         full_width: data.full_width,
         full_height: data.full_height,
+        doc_dims: data.doc_dims,
         nested_scenes_captured: data.nested_scenes_captured,
         scale: data.scale,
         format: data.format,

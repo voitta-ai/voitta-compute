@@ -154,6 +154,16 @@ export function ReportPane({ info, onCollapse, collapsed, drawerWidth, layout = 
       }
       // Only accept events from our own iframe.
       if (e.source !== iframeRef.current?.contentWindow) return;
+      // The "voitta_report_event" envelope is shared by render-lifecycle
+      // events AND by RPC responses the parent itself solicited
+      // (measure_response, screenshot_response, three_capture_response).
+      // Only the lifecycle kinds belong on the /api/report-render-events
+      // endpoint; the RPC responses are handled by their own promise
+      // listeners in primitives.ts and would 400 here.
+      const kind = (data as { kind?: string }).kind;
+      if (kind !== "ready" && kind !== "error" && kind !== "inventory") {
+        return;
+      }
       const origin = getBackendOrigin();
       if (!origin) return;
       const url = origin.replace(/\/$/, "") + "/api/report-render-events";

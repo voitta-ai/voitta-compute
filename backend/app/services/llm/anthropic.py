@@ -34,6 +34,7 @@ from app.services.llm.stream import (
     BlockStart,
     BlockStop,
     MessageStop,
+    StreamError,
     StreamEvent,
 )
 
@@ -71,14 +72,37 @@ class AnthropicProvider(BaseProvider):
     def _build_kwargs(self, req: NormalisedRequest) -> dict[str, Any]:
         messages = [_message_to_dict(m) for m in req.messages]
 
-        # Cache breakpoints — Claude Code-style sliding window. See the
-        # pre-streaming version of this adapter for the full rationale: the
-        # Messages API allows 4 `cache_control` markers; we put one on the
-        # system tail and three on the three most recently appended messages.
-        for offset in range(1, min(4, len(messages) + 1)):
-            blocks = messages[-offset].get("content")
-            if blocks and isinstance(blocks[-1], dict):
-                blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        # Prompt-cache breakpoints — Claude Code strategy.
+        #
+        # The Messages API renders the request as:  tools → system → messages.
+        # A single ``cache_control: ephemeral`` marker on a content block
+        # tells the server to cache the entire prefix UP TO that point.
+        # Two markers is enough:
+        #
+        #   1) The LAST system block — caches tools + system together.
+        #      Tools are static across turns; system text is static
+        #      (plugin addenda only change when the bookmarklet host
+        #      changes, which is a new conversation anyway). One marker
+        #      here recovers most of the cache benefit.
+        #
+        #   2) The LAST message's last block — caches the entire
+        #      conversation up to and including the most recent turn.
+        #      Rebuilt fresh each turn at the new tail position;
+        #      stability comes from PREFIX INVARIANCE (we never mutate
+        #      prior messages), so the previous turn's marker is still a
+        #      cache entry on the server and the new (longer) marker
+        #      extends it.
+        #
+        # We DELIBERATELY do not place markers on the second/third-to-last
+        # messages. Anthropic's KV-page manager evicts cached positions
+        # that aren't on a stable boundary; redundant markers fragment
+        # the prefix without recovering more tokens than the single tail
+        # marker already does. See voitta-rag indexed Claude Code source
+        # (claude.ts::addCacheBreakpoints) for the upstream pattern.
+        if messages:
+            last_blocks = messages[-1].get("content")
+            if last_blocks and isinstance(last_blocks[-1], dict):
+                last_blocks[-1]["cache_control"] = {"type": "ephemeral"}
 
         kwargs: dict[str, Any] = dict(
             model=req.model,
@@ -117,25 +141,43 @@ class AnthropicProvider(BaseProvider):
 
 
 class _AnthropicStreamCM:
-    """Async context manager wrapping `client.messages.stream()`.
+    """Async context manager wrapping ``client.messages.create(stream=True)``.
 
-    Maps Anthropic SSE events to our normalised `StreamEvent`s.
+    Maps Anthropic SSE events to our normalised ``StreamEvent``s.
+
+    We deliberately use the raw streaming API (``.create(stream=True)``)
+    rather than the higher-level ``.stream()`` helper. The helper
+    accumulates each tool_use's partial JSON buffer on every delta and
+    calls ``jiter.from_json(buf, partial_mode=True)`` — which raises
+    ``ValueError: expected value at line 1 column N`` whenever the
+    model's tool args briefly contain non-JSON characters
+    (e.g. ``{"folder": x`` before the value start lands). That blows
+    up the entire async-for iteration mid-message even though we don't
+    need the SDK's accumulation in the first place — chat.py already
+    accumulates ``args_buf`` itself and parses on ``content_block_stop``.
+    Going through the raw iterator sidesteps the failure mode entirely.
     """
 
     def __init__(self, client: AsyncAnthropic, kwargs: dict[str, Any]) -> None:
         self._client = client
         self._kwargs = kwargs
-        self._cm = None
         self._stream_obj = None
 
     async def __aenter__(self) -> AsyncIterator[StreamEvent]:
-        self._cm = self._client.messages.stream(**self._kwargs)
-        self._stream_obj = await self._cm.__aenter__()
+        # ``stream=True`` makes ``create`` return an ``AsyncStream`` of raw
+        # ``RawMessageStreamEvent``s, no auto-accumulate, no partial-json
+        # parse. We close the stream explicitly in __aexit__.
+        self._stream_obj = await self._client.messages.create(
+            stream=True, **self._kwargs
+        )
         return self._iter_events(self._stream_obj)
 
     async def __aexit__(self, exc_type, exc, tb):
-        if self._cm is not None:
-            return await self._cm.__aexit__(exc_type, exc, tb)
+        if self._stream_obj is not None:
+            try:
+                await self._stream_obj.close()
+            except Exception:
+                pass
         return False
 
     @staticmethod
@@ -143,7 +185,37 @@ class _AnthropicStreamCM:
         usage = Usage()
         stop_reason: str = "end_turn"
 
-        async for event in stream_obj:
+        # The Anthropic SDK's stream helper accumulates each tool_use's
+        # ``partial_json`` buffer and calls ``pydantic_core.from_json(...,
+        # partial_mode=True)`` on every delta. When the model
+        # occasionally emits a tool_use whose first bytes aren't valid
+        # JSON (rare but observed — usually a hallucinated leading
+        # character before the ``{``), ``from_json`` raises
+        # ``ValueError`` and the entire stream iteration explodes
+        # mid-message. We drive the iterator manually so we can catch
+        # that ValueError per-event, surface a StreamError, and stop
+        # cleanly — the chat route already terminates the SSE
+        # gracefully on this signal.
+        iterator = stream_obj.__aiter__()
+        while True:
+            try:
+                event = await iterator.__anext__()
+            except StopAsyncIteration:
+                break
+            except ValueError as exc:
+                logger.warning(
+                    "anthropic stream accumulation failed: %s", exc
+                )
+                yield StreamError(
+                    type="malformed_tool_args",
+                    message=(
+                        "Anthropic SDK could not parse tool input JSON "
+                        f"mid-stream: {exc}. Retry the request."
+                    ),
+                    partial=True,
+                )
+                yield MessageStop(stop_reason="end_turn", usage=usage)  # type: ignore[arg-type]
+                return
             etype = getattr(event, "type", None)
             if etype == "content_block_start":
                 idx = getattr(event, "index", 0)

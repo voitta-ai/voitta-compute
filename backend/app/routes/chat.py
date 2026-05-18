@@ -90,11 +90,18 @@ ContentBlock = TextBlock | ImageBlock
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    # Either a plain string (text-only, the historical shape) or a list
-    # of typed content blocks. Frontend emits blocks only when an
-    # attachment is present — text-only turns stay strings for
-    # backward compatibility with any older client.
-    content: str | list[ContentBlock]
+    # Three accepted shapes:
+    #  1. plain string (text-only, the historical shape)
+    #  2. list of typed content blocks (TextBlock | ImageBlock) — when
+    #     the FE attaches an image to a user turn
+    #  3. list of opaque block dicts — used when the FE replays a prior
+    #     assistant turn whose blocks include ``tool_use`` / ``tool_result``
+    #     entries. We keep these untyped because their shape is
+    #     provider-specific (Anthropic) and we just pass them through to
+    #     the provider. Validation would either duplicate Anthropic's
+    #     schema or reject legitimate replays, so we accept any dict
+    #     here and let the provider be the source of truth.
+    content: str | list[ContentBlock] | list[dict[str, Any]]
 
 
 class ChatRequest(BaseModel):
@@ -218,16 +225,38 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
 
     from app.services import python_storage_context as _ps_ctx
     ambient = _ps_ctx.get_context_block()
-    if ambient:
-        system = (system or "").rstrip() + "\n\n" + ambient
+    # NOTE: ambient is NOT appended to ``system`` because its body
+    # includes relative timestamps ("2m ago") that drift every turn,
+    # which would invalidate the system+tools cache prefix on every
+    # request. Instead we append it as a text block at the START of
+    # the most-recent user message below, where the new turn's cache
+    # write happens anyway and the volatility costs nothing extra.
 
     messages: list[LlmMessage] = []
     for m in req.messages:
         if isinstance(m.content, str):
             blocks: list[dict[str, Any]] = [{"type": "text", "text": m.content}]
         else:
-            blocks = [b.model_dump() for b in m.content]
+            # Mix of typed pydantic blocks (TextBlock/ImageBlock) and
+            # opaque dicts (tool_use / tool_result replayed by the FE).
+            blocks = [
+                b.model_dump() if hasattr(b, "model_dump") else dict(b)
+                for b in m.content
+            ]
         messages.append(LlmMessage(role=m.role, content=blocks))
+
+    # Inject the volatile python_storage ambient block at the start of
+    # the most recent user-turn (if any). Putting it on the new tail
+    # rather than in the system prompt preserves prefix invariance for
+    # the cached tools+system block; the user-tail is where the cache
+    # write happens anyway, so the drift cost stays where it's free.
+    if ambient and messages:
+        for m in reversed(messages):
+            if m.role == "user":
+                m.content = [
+                    {"type": "text", "text": ambient}
+                ] + list(m.content)
+                break
 
     yield _sse(
         "start",
@@ -356,6 +385,31 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                         total_usage["output_tokens"] += ev.usage.output_tokens
                         total_usage["cache_read_input_tokens"] += ev.usage.cache_read_input_tokens
                         total_usage["cache_creation_input_tokens"] += ev.usage.cache_creation_input_tokens
+                        # Per-iteration cache log. Each agent-loop
+                        # iteration is its OWN Anthropic API call with
+                        # its own cache_read / cache_creation counters,
+                        # so aggregating across iterations hides which
+                        # one is burning. Logged unaggregated here.
+                        if provider_id == "anthropic":
+                            from app.services.cache_monitor import (
+                                record_iteration as _cm_record_iter,
+                            )
+                            try:
+                                _cm_record_iter(
+                                    conv_id=req.session_id,
+                                    model=model,
+                                    iteration=iteration,
+                                    usage={
+                                        "input_tokens": ev.usage.input_tokens,
+                                        "output_tokens": ev.usage.output_tokens,
+                                        "cache_read_input_tokens": ev.usage.cache_read_input_tokens,
+                                        "cache_creation_input_tokens": ev.usage.cache_creation_input_tokens,
+                                    },
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "cache_monitor.record_iteration raised"
+                                )
                     elif isinstance(ev, StreamError):
                         yield _sse(
                             "error",
@@ -380,6 +434,33 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                 assistant_content.append(b)
 
             if iter_stop_reason != "tool_use":
+                # Final assistant turn (no follow-up dispatch). Strip
+                # ANY tool_use blocks from the persisted snapshot:
+                # they never got dispatched (we exit the loop here),
+                # so replaying them on the next turn would send an
+                # orphan tool_use with no matching tool_result and
+                # Anthropic would 400 with "tool_use ids without
+                # tool_result blocks immediately after".
+                #
+                # This case fires when the model is mid-tool_use and
+                # hits ``max_tokens`` / ``stop_sequence`` — the partial
+                # tool_use accumulates in ``blocks_by_index`` but the
+                # stop_reason isn't "tool_use". The user-facing fix is
+                # to raise ``max_tokens`` (the partial tool_use never
+                # produced anything useful anyway), so dropping the
+                # block here is the safe choice.
+                persistable = [
+                    b for b in assistant_content if b.get("type") != "tool_use"
+                ]
+                yield _sse(
+                    "turn_persist",
+                    {
+                        "seq": seq.next(),
+                        "iteration": iteration,
+                        "assistant_blocks": persistable,
+                        "tool_result_blocks": [],
+                    },
+                )
                 yield _sse(
                     "done",
                     {
@@ -547,6 +628,30 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
 
             messages.append(LlmMessage(role="user", content=tool_result_blocks))
 
+            # Tell the frontend exactly what we just stuffed into
+            # ``messages`` for this iteration, so it can store the
+            # blocks verbatim on its ChatMessage and replay them on
+            # the next POST. Without this, the FE only sees the
+            # assistant text and the model loses every memory of its
+            # own tool calls after one turn — symptom: model
+            # "pretends" to make edits in subsequent turns.
+            #
+            # Strip provider-internal keys (``_name`` etc.) before
+            # sending; the FE doesn't need them and they're not part
+            # of Anthropic's tool_result schema.
+            yield _sse(
+                "turn_persist",
+                {
+                    "seq": seq.next(),
+                    "iteration": iteration,
+                    "assistant_blocks": assistant_content,
+                    "tool_result_blocks": [
+                        {k: v for k, v in b.items() if not k.startswith("_")}
+                        for b in tool_result_blocks
+                    ],
+                },
+            )
+
         yield _sse(
             "error",
             {
@@ -582,6 +687,23 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                 "during_block_index": current_block_index,
             },
         )
+    finally:
+        # Record this turn's usage into the cache monitor. Fires on
+        # every exit (done, iteration-limit error, provider error,
+        # client cancel) so a misbehaving turn that returns garbage
+        # still surfaces in the cache log. Provider-only — the
+        # monitor itself decides whether to escalate to WARNING.
+        if provider_id == "anthropic":
+            from app.services.cache_monitor import record as _cm_record
+            try:
+                _cm_record(
+                    conv_id=req.session_id,
+                    model=model,
+                    usage=total_usage,
+                    iterations=iteration + 1,
+                )
+            except Exception:
+                logger.exception("cache_monitor.record raised")
 
 
 class _SeqCounter:
