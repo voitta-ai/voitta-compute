@@ -270,6 +270,13 @@ async def _screenshot_report(args: dict[str, Any], ctx: ToolCtx) -> Any:
         },
         "rendered_at_scale": scale,
         "crop_applied": crop,
+        # Stage 4.3 telemetry — how many nested three_scene iframes the
+        # shim was able to capture via postMessage + canvas.toDataURL.
+        # Zero means either (a) the report has no three_scene panes, or
+        # (b) WebGL capture failed (timing race, sandbox refused, scene
+        # not yet loaded). Compare against the number of three_scene
+        # panes the report actually contains to know which.
+        "nested_scenes_captured": primitive_result.get("nested_scenes_captured"),
         "handle": snap["handle"],
         "path": snap["path"],
         "url": img_url,
@@ -336,19 +343,36 @@ registry.register(
             "into the LLM's context). Switch to Anthropic in Settings "
             "if visual analysis matters.\n"
             "\n"
-            "Known limit: Bokeh WebGL canvases (rare — most plots are "
-            "2D) come out blank because the bitmap is cleared after "
-            "compositing. If a plot looks blank in the screenshot, "
-            "that's why; the data is still correct in the report.\n"
+            "**Screenshots are LOSSY — known blindnesses:**\n"
+            "  • Cross-origin iframes (non-three_scene) appear as blank "
+            "    rectangles — html2canvas cannot pierce the sandbox.\n"
+            "  • CSS loaded just-in-time may not be applied yet at "
+            "    capture time — Tabulator / SlickGrid styles can be "
+            "    missing if you screenshot immediately after `ready`.\n"
+            "  • Custom webfonts that haven't finished loading fall "
+            "    back to system fonts in the capture, even when they "
+            "    render correctly live.\n"
+            "  • The screenshot is 1–2 animation frames behind on-"
+            "    screen state (irrelevant for static content).\n"
+            "  • Bokeh WebGL canvases (rare — most plots are 2D) "
+            "    come out blank: the buffer is cleared after compositing.\n"
             "\n"
-            "DO NOT use this tool to verify a Three.js / WebGL / "
-            "`ctx.three_scene` report. The scene runs inside a sandboxed "
-            "<iframe srcdoc> that html2canvas (in the parent document) "
-            "cannot reach into — you will always get a blank canvas, "
-            "regardless of whether the scene is rendering correctly. "
-            "A blank screenshot of a Three.js report means NOTHING "
-            "about whether the scene works. Ask the user what they see "
-            "instead. See docs/09-panel-threejs-reports.md for details."
+            "Use it for approximate layout verification, NOT pixel-exact "
+            "rendering. When you need ground truth, ask the user. For "
+            "structural questions ('did I get 3 plots or 2?') prefer "
+            "`verify_report` — cheaper and more reliable.\n"
+            "\n"
+            "**`ctx.three_scene` (WebGL) IS captured.** The shim walks "
+            "shadow roots to find each three_scene iframe, asks it for "
+            "its canvas pixels via postMessage, and composites the "
+            "result. The renderer uses `preserveDrawingBuffer: true` "
+            "so the bitmap is readable. Verified end-to-end with both "
+            "cold CDN load and re-show. The response includes "
+            "`nested_scenes_captured` — non-zero means scenes were "
+            "captured. If you see 0 with three_scene panes present, "
+            "the scene area in the screenshot will be blank: typically "
+            "a timing issue (scene still mid-load); retry in a moment, "
+            "or ask the user."
         ),
         input_schema={
             "type": "object",

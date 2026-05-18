@@ -102,6 +102,100 @@ def _alert(*args, **kwargs):
                 pass
 
 
+def _settings_alert_with_switch(
+    title: str,
+    message: str,
+    ok: str,
+    cancel: str | None,
+    switch_label: str,
+    switch_on: bool,
+) -> tuple[int, bool]:
+    """Show an NSAlert with an NSSwitch accessory view.
+
+    rumps.alert wraps NSAlert but exposes only buttons. Cocoa's NSAlert
+    accepts any NSView as an accessory, so we drop an NSSwitch + label
+    in and read its state after ``runModal`` returns. Avoids the
+    "click button, modal closes, modal reopens with new state" dance.
+
+    Returns ``(response_code, switch_state)`` where ``response_code``
+    is rumps-style (1 = ok, 0 = cancel) and ``switch_state`` is the
+    final value of the toggle when the modal was dismissed.
+    """
+    from AppKit import (
+        NSAlert,
+        NSApplication,
+        NSApplicationActivationPolicyAccessory,
+        NSApplicationActivationPolicyRegular,
+        NSControlStateValueOff,
+        NSControlStateValueOn,
+        NSFloatingWindowLevel,
+        NSMakeRect,
+        NSModalPanelWindowLevel,
+        NSSwitch,
+        NSTextField,
+        NSView,
+    )
+
+    alert = NSAlert.alloc().init()
+    alert.setMessageText_(title)
+    alert.setInformativeText_(message)
+    alert.addButtonWithTitle_(ok)
+    if cancel:
+        alert.addButtonWithTitle_(cancel)
+
+    # Accessory: a small NSView containing "[label]  [switch]". The
+    # NSSwitch is the macOS 10.15+ toggle control; falls back to
+    # NSButton checkbox on the off chance it's missing.
+    container = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 300, 28))
+    label = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 4, 220, 20))
+    label.setStringValue_(switch_label)
+    label.setBezeled_(False)
+    label.setDrawsBackground_(False)
+    label.setEditable_(False)
+    label.setSelectable_(False)
+    container.addSubview_(label)
+
+    switch = NSSwitch.alloc().initWithFrame_(NSMakeRect(240, 0, 50, 28))
+    switch.setState_(NSControlStateValueOn if switch_on else NSControlStateValueOff)
+    container.addSubview_(switch)
+    alert.setAccessoryView_(container)
+
+    nsapp = NSApplication.sharedApplication()
+    try:
+        nsapp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
+        nsapp.activateIgnoringOtherApps_(True)
+    except Exception:
+        pass
+    # Pin the alert above ordinary windows so it can't get buried under
+    # another app's window — keeps the modal reachable when the user
+    # alt-tabs away mid-dialog. NSModalPanelWindowLevel sits above
+    # normal windows but below screensavers / system alerts.
+    try:
+        win = alert.window()
+        win.setLevel_(NSModalPanelWindowLevel)
+        win.makeKeyAndOrderFront_(None)
+    except Exception:
+        pass
+    try:
+        raw = alert.runModal()
+    finally:
+        try:
+            nsapp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        except Exception:
+            pass
+
+    # NSAlert returns 1000 + button-index. Map to rumps codes for caller
+    # consistency: first = 1 (ok), second = 0 (cancel).
+    if raw == 1000:
+        response = 1
+    elif raw == 1001:
+        response = 0
+    else:
+        response = int(raw)
+    new_state = bool(switch.state() == NSControlStateValueOn)
+    return response, new_state
+
+
 def _server_url() -> str:
     scheme = "https" if TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists() else "http"
     return f"{scheme}://{HOST}:{PORT}"
@@ -398,6 +492,7 @@ class VoittaMenuBarApp(rumps.App):
 
     def _show_settings_impl(self) -> None:
         from app import activity, installer, rag_build, scripts_seed
+        from app.services import user_settings as _us
         self._log.info("show_settings: imports done")
 
         tls_on = TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists()
@@ -460,12 +555,20 @@ class VoittaMenuBarApp(rumps.App):
         else:
             activity_line = "Activity ·  idle"
 
+        mcp_on = _us.mcp_cli_enabled()
+        mcp_url = f"{_server_url()}/mcp/"
+        mcp_line = (
+            f"MCP/CLI  ·  URL: {mcp_url}\n"
+            f"           Transport: streamable-http"
+        )
+
         body = (
             f"Server  ·  {_server_url()}  ·  {'TLS' if tls_on else 'HTTP only'}\n\n"
             f"{install_line}\n"
             f"{seed_line}\n"
             f"{rag_line}\n"
-            f"{activity_line}\n\n"
+            f"{activity_line}\n"
+            f"{mcp_line}\n\n"
             f"Data folder\n  {_human_path(PROJECT_ROOT)}\n\n"
             "Chat settings — API keys, model, theme — live in the\n"
             "bookmarklet sidebar. Click the gear icon there."
@@ -491,22 +594,22 @@ class VoittaMenuBarApp(rumps.App):
             log_label = "Open install error log"
 
         self._log.info("show_settings: about to display alert (log_path=%s)", log_path)
-        if log_path is not None and log_label is not None and log_path.exists():
-            response = _alert(
-                title=APP_NAME,
-                message=body,
-                ok="Close",
-                cancel=log_label,
-            )
-            self._log.info("show_settings: alert dismissed response=%s", response)
-            # rumps.alert returns 1 for OK (Close), 0 for the cancel
-            # slot (which we've repurposed as "Open log"). When the
-            # user picks the log button, surface the file in TextEdit.
-            if response == 0:
-                subprocess.run(["open", "-e", str(log_path)], check=False)
-        else:
-            response = _alert(title=APP_NAME, message=body, ok="Close")
-            self._log.info("show_settings: alert dismissed response=%s", response)
+        response, new_mcp = _settings_alert_with_switch(
+            title=APP_NAME,
+            message=body,
+            ok="Close",
+            cancel=log_label if (log_path is not None and log_label is not None and log_path.exists()) else None,
+            switch_label="Enable MCP/CLI debugging",
+            switch_on=mcp_on,
+        )
+        self._log.info(
+            "show_settings: alert dismissed response=%s mcp_on=%s→%s",
+            response, mcp_on, new_mcp,
+        )
+        if new_mcp != mcp_on:
+            _us.set_mcp_cli_enabled(new_mcp)
+        if response == 0 and log_path is not None:
+            subprocess.run(["open", "-e", str(log_path)], check=False)
 
     def show_data_folder(self, _sender) -> None:
         # Open ``python_storage/`` — the canonical artefact store where

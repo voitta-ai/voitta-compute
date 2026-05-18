@@ -209,6 +209,38 @@ async def _bootstrap_plugins_and_mcp() -> None:
 # scripts). NOT exposed to the in-pane chat LLM. See app/routes/cli.py.
 app.include_router(cli_router)
 
+# Embedded MCP server — same kill switch and loopback guard as /cli.
+# Mounted as an ASGI sub-app so the streamable-HTTP transport's own
+# routes don't fight FastAPI's router. See app/routes/mcp.py.
+from app.routes.mcp import build_mcp_asgi  # noqa: E402
+
+_mcp_app = build_mcp_asgi()
+app.mount("/mcp", _mcp_app)
+# FastMCP's StreamableHTTPSessionManager runs inside an anyio task
+# group that lives for the duration of the sub-app's lifespan context.
+# The parent FastAPI app uses the legacy @on_event API, so we cannot
+# just pass ``lifespan=_mcp_app.lifespan`` to the FastAPI constructor.
+# Instead, we drive the sub-app's lifespan as an async-context-manager
+# from the parent's startup/shutdown — equivalent effect.
+from contextlib import AsyncExitStack as _AsyncExitStack  # noqa: E402
+
+_mcp_lifespan_stack = _AsyncExitStack()
+
+
+@app.on_event("startup")
+async def _mcp_startup() -> None:
+    # _mcp_app.router.lifespan_context is already an @asynccontextmanager
+    # (FastMCP wraps it). Calling it with the app returns a context
+    # manager we can enter via the exit stack.
+    await _mcp_lifespan_stack.enter_async_context(
+        _mcp_app.router.lifespan_context(_mcp_app)
+    )
+
+
+@app.on_event("shutdown")
+async def _mcp_shutdown() -> None:
+    await _mcp_lifespan_stack.aclose()
+
 
 @app.get("/health")
 async def health() -> dict:
@@ -346,6 +378,113 @@ async def panel_shim_js():
     from fastapi.responses import Response
 
     js = """(function(){
+  // ============================================================
+  // TEMPORARY: ResizeObserver loop-break diagnostic
+  // ============================================================
+  // Goal: when the browser dispatches a "ResizeObserver loop completed
+  // with undelivered notifications" synthetic error event (stack=null,
+  // because the browser generated it, not a JS throw), figure out
+  // WHICH ResizeObserver — Panel's? Bokeh's? Tabulator's? Ours? — was
+  // active so we can tell benign-recurring from pathological-runaway
+  // without filtering blindly.
+  //
+  // How: monkey-patch ResizeObserver before Panel/Bokeh load (js_files
+  // inject into <head>, this shim runs first). Wrap construction to
+  // capture creator stack; wrap .observe(target) to record target
+  // info; wrap the callback to count fires + timestamp. Expose state
+  // on window.__voittaRO so the window.error hook below can attach a
+  // diagnostic payload to the next "loop completed" event we emit.
+  //
+  // **TEMPORARY** — remove this whole block once we've collected
+  // enough real-world traces to either:
+  //   (a) confirm benign + filter by stable signature, or
+  //   (b) identify pathological cases worth fixing upstream.
+  //
+  // Removal checklist:
+  //   - Delete this <TEMPORARY> block
+  //   - Delete the _attachResizeDiagnostic helper below
+  //   - Stop reading window.__voittaRO inside _emitError
+  // ============================================================
+  (function instrumentResizeObserver(){
+    if (!window.ResizeObserver) return;
+    var orig = window.ResizeObserver;
+    var observers = []; var nextId = 0;
+    function Wrapped(cb){
+      var id = ++nextId;
+      var ctorStack = ''; try { ctorStack = (new Error()).stack || ''; } catch(_){}
+      var rec = {
+        id: id, ctor_stack: ctorStack.slice(0, 1600),
+        targets: [], fire_count: 0, last_fire_ts: 0,
+        recent_fires: [],   // ring buffer of last 32 fire timestamps
+      };
+      observers.push(rec);
+      var wrappedCb = function(entries, observer){
+        rec.fire_count++;
+        var now = (performance && performance.now) ? performance.now() : Date.now();
+        rec.last_fire_ts = now;
+        rec.recent_fires.push(now);
+        if (rec.recent_fires.length > 32) rec.recent_fires.shift();
+        return cb.call(this, entries, observer);
+      };
+      var inst = new orig(wrappedCb);
+      // Wrap .observe to capture targets. Keep a hard cap so a
+      // long-running session doesn't grow rec.targets without bound.
+      var origObs = inst.observe.bind(inst);
+      inst.observe = function(target, options){
+        try {
+          if (rec.targets.length < 16) {
+            var r = (target && target.getBoundingClientRect) ? target.getBoundingClientRect() : {};
+            rec.targets.push({
+              tag: (target && target.tagName) || '?',
+              id:  (target && target.id) || '',
+              cls: ((target && target.className) || '').toString().slice(0, 120),
+              w: Math.round(r.width || 0), h: Math.round(r.height || 0),
+            });
+          }
+        } catch(_){}
+        return origObs(target, options);
+      };
+      return inst;
+    }
+    Wrapped.prototype = orig.prototype;
+    try { window.ResizeObserver = Wrapped; } catch(_){}
+    window.__voittaRO = {observers: observers, started_at: Date.now()};
+  })();
+
+  // Build a compact diagnostic snapshot for the next "ResizeObserver
+  // loop" error. Picks observers whose `last_fire_ts` is within
+  // ``windowMs`` of "now"; that's the set the browser was busy
+  // notifying when it gave up. **TEMPORARY** — see top of shim.
+  function _attachResizeDiagnostic(windowMs) {
+    try {
+      var state = window.__voittaRO; if (!state) return null;
+      var now = (performance && performance.now) ? performance.now() : Date.now();
+      var cutoff = now - (windowMs || 200);
+      var hot = state.observers
+        .filter(function(o){ return o.last_fire_ts >= cutoff; })
+        .map(function(o){
+          // Count fires within the last 200ms (loop-break signal: many fires fast).
+          var fast = 0;
+          for (var i = 0; i < o.recent_fires.length; i++) {
+            if (o.recent_fires[i] >= cutoff) fast++;
+          }
+          return {
+            id: o.id, fire_count: o.fire_count,
+            fires_in_last_200ms: fast,
+            last_fire_age_ms: Math.round(now - o.last_fire_ts),
+            targets: o.targets,
+            // Keep the ctor stack short; one frame is usually enough.
+            ctor_stack_head: o.ctor_stack.split('\\n').slice(0, 6).join('\\n'),
+          };
+        });
+      return {
+        total_observers: state.observers.length,
+        hot_observers: hot,
+        elapsed_since_load_ms: Date.now() - state.started_at,
+      };
+    } catch (e) { return {error: String((e && e.message) || e)}; }
+  }
+
   // ---- 1. parent → iframe action bridge (undo/reset/screenshot) -----------
   window.addEventListener('message', function(e){
     // Errors forwarded from a NESTED srcdoc iframe (e.g. ctx.three_scene's
@@ -376,6 +515,13 @@ async def panel_shim_js():
       var scale = +e.data.scale || 1;
       var quality = +e.data.quality || 0.85;
       var format = e.data.format === 'png' ? 'image/png' : 'image/webp';
+      // Async-paint settle delay. _emitReady fires once Bokeh has
+      // documents[0].roots().length > 0, but matplotlib PNG panes
+      // (Blob → <img>), Tabulator (dynamic JS+CSS), and Card content
+      // expansion all complete AFTER that. Without this wait, the
+      // screenshot captures empty Card headers. 600ms is enough for
+      // every report we've seen; allow override via msg.settle_ms.
+      var settleMs = (e.data && +e.data.settle_ms) || 600;
       function reply(payload) {
         try { window.parent.postMessage(Object.assign(
           {type: 'voitta_report_event', kind: 'screenshot_response', requestId: rid},
@@ -386,40 +532,173 @@ async def panel_shim_js():
         reply({ok: false, message: 'html2canvas not loaded'});
         return;
       }
+      // Wait for the settle window, then for two animation frames to
+      // ensure the browser has actually painted after any layout
+      // changes induced by async widget hydration.
+      function _afterSettle(cb) {
+        setTimeout(function(){
+          requestAnimationFrame(function(){
+            requestAnimationFrame(cb);
+          });
+        }, settleMs);
+      }
+      _afterSettle(function(){
       var docEl = document.documentElement;
       var fullW = Math.max(docEl.scrollWidth, docEl.clientWidth);
       var fullH = Math.max(docEl.scrollHeight, docEl.clientHeight);
-      try {
-        html2canvas(docEl, {
-          allowTaint: true, useCORS: true, foreignObjectRendering: false,
-          scale: scale, width: fullW, height: fullH,
-          windowWidth: fullW, windowHeight: fullH,
-          backgroundColor: '#ffffff',
-          // Bokeh paints into 2D canvases by default — html2canvas can
-          // pull those via toDataURL. WebGL canvases (rare) without
-          // preserveDrawingBuffer come out blank; that's a known
-          // upstream limit, not something we can paper over.
-          logging: false,
-        }).then(function(canvas){
-          var dataUrl;
-          try { dataUrl = canvas.toDataURL(format, quality); }
-          catch (err) {
-            // canvas tainted by a cross-origin image without CORS
-            reply({ok: false, message: 'canvas_tainted: ' + (err && err.message)});
-            return;
+
+      // Stage 4.3 — collect pixel data from any nested three_scene
+      // iframes via postMessage (their canvas is cross-origin to us,
+      // so html2canvas alone sees a blank rectangle). Each iframe
+      // responds with a PNG dataUrl from canvas.toDataURL(). We
+      // composite them into the html2canvas output AFTER rasterisation.
+      // Find iframes anywhere in the report's DOM tree, including
+      // those mounted inside Bokeh's per-component shadow roots
+      // (pn.pane.HTML wraps content in a MarkupView shadow root, and
+      // ctx.three_scene's iframe lives inside it). A shallow
+      // document.querySelectorAll('iframe') misses them entirely,
+      // which is why nested_scenes_captured kept reporting 0.
+      function _deepFindIframes(root, acc){
+        if (!root) return;
+        try {
+          var nodeIframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
+          for (var i = 0; i < nodeIframes.length; i++) acc.push(nodeIframes[i]);
+          var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+          for (var j = 0; j < all.length; j++) {
+            var el = all[j];
+            if (el.shadowRoot) _deepFindIframes(el.shadowRoot, acc);
           }
-          reply({
-            ok: true, dataUrl: dataUrl,
-            width: canvas.width, height: canvas.height,
-            full_width: fullW, full_height: fullH,
-            scale: scale, format: format,
+        } catch (_) {}
+      }
+      function captureNestedScenes(){
+        var iframes = [];
+        _deepFindIframes(document, iframes);
+        if (!iframes.length) return Promise.resolve([]);
+        var pending = iframes.map(function(iframe, idx){
+          var requestId = 'three_cap_' + Date.now() + '_' + idx;
+          return new Promise(function(resolve){
+            var done = false;
+            function onMsg(ev){
+              if (!ev || !ev.data) return;
+              if (ev.data.type !== 'voitta_three_capture_response') return;
+              if (ev.data.requestId !== requestId) return;
+              if (done) return;
+              done = true;
+              window.removeEventListener('message', onMsg);
+              if (ev.data.ok && ev.data.dataUrl) {
+                var rect = iframe.getBoundingClientRect();
+                resolve({
+                  dataUrl: ev.data.dataUrl,
+                  x: rect.x + (window.scrollX || 0),
+                  y: rect.y + (window.scrollY || 0),
+                  w: rect.width, h: rect.height
+                });
+              } else {
+                resolve(null);
+              }
+            }
+            window.addEventListener('message', onMsg);
+            try {
+              iframe.contentWindow.postMessage(
+                {type: 'voitta_three_capture', requestId: requestId}, '*'
+              );
+            } catch (_) {}
+            // Bounded wait — non-three iframes don't respond, so we
+            // can't block on them.
+            setTimeout(function(){
+              if (done) return;
+              done = true;
+              window.removeEventListener('message', onMsg);
+              resolve(null);
+            }, 600);
           });
+        });
+        return Promise.all(pending).then(function(results){
+          return results.filter(function(r){ return r !== null; });
+        });
+      }
+
+      try {
+        Promise.all([
+          html2canvas(docEl, {
+            allowTaint: true, useCORS: true, foreignObjectRendering: false,
+            scale: scale, width: fullW, height: fullH,
+            windowWidth: fullW, windowHeight: fullH,
+            backgroundColor: '#ffffff',
+            logging: false,
+          }),
+          captureNestedScenes()
+        ]).then(function(arr){
+          var canvas = arr[0];
+          var sceneSnaps = arr[1];
+
+          // Composite each three_scene snapshot over the html2canvas
+          // output (which has a blank rectangle where the iframe was).
+          if (sceneSnaps.length) {
+            var ctx2d = canvas.getContext('2d');
+            sceneSnaps.forEach(function(snap){
+              var img = new Image();
+              // Synchronous load via createImageBitmap would be cleaner
+              // but isn't universally supported; chain awaits below.
+              return new Promise(function(res){
+                img.onload = function(){
+                  try {
+                    ctx2d.drawImage(img,
+                      snap.x * scale, snap.y * scale,
+                      snap.w * scale, snap.h * scale);
+                  } catch (_) {}
+                  res();
+                };
+                img.onerror = function(){ res(); };
+                img.src = snap.dataUrl;
+              });
+            });
+            // Wait one tick for image loads — for synchronously-decoded
+            // data URLs, this is enough; for larger PNGs we'd need a real
+            // await chain. Keep it simple: bounded retry.
+          }
+
+          function emit(){
+            var dataUrl;
+            try { dataUrl = canvas.toDataURL(format, quality); }
+            catch (err) {
+              reply({ok: false, message: 'canvas_tainted: ' + (err && err.message)});
+              return;
+            }
+            reply({
+              ok: true, dataUrl: dataUrl,
+              width: canvas.width, height: canvas.height,
+              full_width: fullW, full_height: fullH,
+              scale: scale, format: format,
+              nested_scenes_captured: sceneSnaps.length,
+            });
+          }
+
+          if (!sceneSnaps.length) { emit(); return; }
+          // Composite-then-emit: chain image loads as a proper promise.
+          var pending = sceneSnaps.map(function(snap){
+            return new Promise(function(res){
+              var img = new Image();
+              img.onload = function(){
+                try {
+                  canvas.getContext('2d').drawImage(img,
+                    snap.x * scale, snap.y * scale,
+                    snap.w * scale, snap.h * scale);
+                } catch (_) {}
+                res();
+              };
+              img.onerror = function(){ res(); };
+              img.src = snap.dataUrl;
+            });
+          });
+          Promise.all(pending).then(emit);
         }).catch(function(err){
           reply({ok: false, message: String((err && err.message) || err)});
         });
       } catch (err) {
         reply({ok: false, message: String((err && err.message) || err)});
       }
+      });  // end _afterSettle
       return;
     }
     if (a === 'getEdits') {
@@ -547,21 +826,100 @@ async def panel_shim_js():
   }
   function _emitError(payload){
     if (!voittaRenderId && !voittaReportId) return;
+    var msg = String(payload.message || '').slice(0, 4000);
+    var stack = payload.stack ? String(payload.stack).slice(0, 6000) : null;
+    // ResizeObserver loop-break filter. The browser dispatches this
+    // advisory ErrorEvent (stack=null, synthetic) when a single tick of
+    // ResizeObserver callbacks doesn't converge within one frame — see
+    // https://www.w3.org/TR/resize-observer/#the-loop-break-event. The
+    // spec defines it as non-fatal: the browser redelivers on the next
+    // frame and rendering proceeds. We trust the event only when the
+    // diagnostic snapshot confirms (a) no observer is firing rapidly
+    // (would indicate a real runaway loop) AND (b) every firing
+    // observer was constructed by Bokeh/Panel internals (no user code
+    // involved). Anything else still surfaces.
+    if (/^ResizeObserver loop/i.test(msg)) {
+      var diag = null;
+      try { diag = _attachResizeDiagnostic(200); } catch(_){}
+      // Per-observer verdict + summary; lets us see what made the
+      // filter fail even when the full diagnostic gets truncated.
+      //
+      // Benign-rate threshold:
+      //   - Real W3C "loop break event": dozens of fires in tens of ms
+      //     from a single runaway observer.
+      //   - This app's initial layout cascade: typically 1–5 fires per
+      //     observer, spread across many observers. Empirically seen:
+      //     Bokeh layout (4), Tabulator (3), Panel root (2), unknowns
+      //     (1–2). All within one animation frame.
+      //
+      // So: declare benign when EVERY hot observer fires <= 10 times
+      // in 200ms. Anything firing more than 10× is genuinely worth
+      // looking at. Source/ctor-stack is no longer part of the check —
+      // it was too fragile (Tabulator's stack lacks bokeh/panel names
+      // even though it's framework code).
+      var verdicts = [];
+      var benign = false;
+      var BENIGN_FIRE_MAX = 10;
+      if (diag && Array.isArray(diag.hot_observers) && diag.hot_observers.length > 0) {
+        verdicts = diag.hot_observers.map(function(o){
+          var stack_head = String(o.ctor_stack_head || '');
+          return {
+            id: o.id, fires: o.fires_in_last_200ms,
+            slow: (o.fires_in_last_200ms <= BENIGN_FIRE_MAX),
+            bokeh: stack_head.indexOf('bokeh.min.js') !== -1,
+            panel: stack_head.indexOf('panel.min.js') !== -1,
+            target_tag: (o.targets && o.targets[0] && o.targets[0].tag) || null,
+            target_cls: (o.targets && o.targets[0] && o.targets[0].cls) || '',
+          };
+        });
+        benign = verdicts.every(function(v){ return v.slow; });
+      }
+      if (benign) {
+        // Drop the event entirely. Don't count against VOITTA_MAX_ERRORS.
+        // **TEMPORARY** — when the diagnostic block at the top of the
+        // shim is removed, replace this with a plain substring filter.
+        return;
+      }
+      // Non-benign: attach a compact verdict summary (fits in 4KB even
+      // with many observers) plus the full diag.
+      try {
+        var summary = '\\n\\n[voitta-RO-verdicts] ' + JSON.stringify({
+          benign: benign,
+          total_hot: verdicts.length,
+          verdicts: verdicts,
+        });
+        var full = diag ? ('\\n[voitta-RO-diagnostic] ' + JSON.stringify(diag)) : '';
+        msg = (msg + summary + full).slice(0, 4000);
+      } catch(_){}
+    }
     if (++voittaErrorCount > VOITTA_MAX_ERRORS) return;
     _post({
       kind: 'error',
       render_id: voittaRenderId,
       report_id: voittaReportId,
-      message: String(payload.message || '').slice(0, 4000),
-      stack: payload.stack ? String(payload.stack).slice(0, 6000) : null,
+      message: msg,
+      stack: stack,
       source: payload.source || 'unknown',
       url: payload.url || null,
       line: payload.line || null,
       col: payload.col || null
     });
   }
+  var _readyGateTries = 0;
   function _emitReady(){
     if (voittaSentReady) return;
+    // Stage 4.2: gate ready on html2canvas being available. With html2canvas
+    // now inlined into this shim (Stage 4.1) it should always be defined by
+    // the time we reach this branch — but check anyway so the screenshot
+    // contract holds: "status: ready" guarantees screenshotability.
+    if (typeof html2canvas !== 'function' && _readyGateTries < 20) {
+      // Give the inlined bundle one more tick to evaluate. 20 * 50ms = 1s
+      // cap — if html2canvas STILL isn't there after that, something
+      // upstream is broken; surface the report anyway rather than time out.
+      _readyGateTries++;
+      setTimeout(_emitReady, 50);
+      return;
+    }
     voittaSentReady = true;
     if (!voittaRenderId && !voittaReportId) return;
     _post({
@@ -570,6 +928,47 @@ async def panel_shim_js():
       report_id: voittaReportId,
       source: 'ready'
     });
+    // Right after ready, post a one-shot structural inventory so the
+    // LLM's verify_report tool can check "did I get the panes I asked
+    // for?" without screenshotting. Best-effort — failures here must
+    // not block ready signalling.
+    try {
+      var bk = window.Bokeh;
+      if (bk && bk.documents && bk.documents.length > 0) {
+        var doc = bk.documents[0];
+        var roots = (doc.roots && doc.roots()) || [];
+        var inv = [];
+        for (var i = 0; i < roots.length; i++) {
+          var root = roots[i];
+          var type = (root && root.type) || (root && root.constructor && root.constructor.name) || '?';
+          var bbox = null;
+          try {
+            // Find the rendered view's element by Bokeh's view registry.
+            var view = doc.get_model_by_id && root.id ? null : null;
+            // Fallback: scan DOM for any rendered Bokeh root container.
+            var el = document.querySelector('[data-root-id="' + (root.id || '') + '"]') ||
+                     document.querySelector('.bk-root');
+            if (el && el.getBoundingClientRect) {
+              var r = el.getBoundingClientRect();
+              bbox = {x: Math.round(r.x), y: Math.round(r.y),
+                      w: Math.round(r.width), h: Math.round(r.height)};
+            }
+          } catch (bbe) { /* bbox is optional */ }
+          inv.push({root_index: i, type: String(type), bbox: bbox});
+        }
+        _post({
+          kind: 'inventory',
+          render_id: voittaRenderId,
+          report_id: voittaReportId,
+          source: 'inventory',
+          inventory: inv,
+          viewport: {
+            w: Math.round(window.innerWidth || 0),
+            h: Math.round(window.innerHeight || 0)
+          }
+        });
+      }
+    } catch (e) { /* inventory is best-effort */ }
   }
 
   window.addEventListener('error', function(e){
@@ -768,8 +1167,23 @@ async def panel_shim_js():
     });
   }
 })();"""
+    # Inline html2canvas directly into the shim response so screenshot
+    # support is available from the same async load tick — no separate
+    # js_files entry, no race where _emitReady() fires before
+    # html2canvas finishes loading (Stage 4.1).
+    h2c_path = (
+        PROJECT_ROOT
+        / "frontend" / "node_modules" / "html2canvas" / "dist" / "html2canvas.min.js"
+    )
+    h2c_src = ""
+    if h2c_path.exists():
+        try:
+            h2c_src = h2c_path.read_text(encoding="utf-8")
+        except OSError:
+            h2c_src = ""
+    combined = h2c_src + "\n;" + js if h2c_src else js
     return Response(
-        content=js,
+        content=combined,
         media_type="application/javascript",
         headers={"Cache-Control": "no-store"},
     )
@@ -1098,11 +1512,32 @@ async def report_render_events(request: Request) -> dict:
     render_id = str(body.get("render_id") or "").strip()
     report_id = str(body.get("report_id") or "").strip()
     kind = str(body.get("kind") or "").strip()
-    if not render_id or not report_id or kind not in ("ready", "error"):
+    if not render_id or not report_id or kind not in ("ready", "error", "inventory"):
         raise HTTPException(
             status_code=400,
-            detail="render_id, report_id, and kind in {ready, error} required",
+            detail="render_id, report_id, and kind in {ready, error, inventory} required",
         )
+
+    # Inventory events: structural snapshot of rendered Bokeh roots.
+    # Latest-wins per report — overwrites inventory.json. Not part of
+    # the render_events ready/error stream; read by the verify_report
+    # tool.
+    if kind == "inventory":
+        from app.services import render_events as _re
+        inv = body.get("inventory")
+        viewport = body.get("viewport")
+        if not isinstance(inv, list):
+            inv = []
+        log_dir = _re.SCRIPTS_REPORTS / report_id
+        if log_dir.parent.exists():
+            log_dir.mkdir(parents=True, exist_ok=True)
+            (log_dir / "inventory.json").write_text(json.dumps({
+                "ts": time.time(),
+                "render_id": render_id,
+                "viewport": viewport if isinstance(viewport, dict) else None,
+                "roots": inv,
+            }))
+        return {"ok": True}
 
     def _maybe_int(v: object) -> int | None:
         try:

@@ -1,0 +1,26 @@
+[
+  {
+    "render_id": "63c8fd9eb13a",
+    "report_id": "disk_log_test",
+    "kind": "error",
+    "ts": 1779062079.204778,
+    "message": "voitta three_scene user code threw: ReferenceError: doesNotExist is not defined",
+    "stack": "ReferenceError: doesNotExist is not defined\n    at about:srcdoc:206:13\n    at about:srcdoc:209:7",
+    "source": "nested:console.error",
+    "url": "about:srcdoc",
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "63c8fd9eb13a",
+    "report_id": "disk_log_test",
+    "kind": "ready",
+    "ts": 1779062079.356728,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  }
+]

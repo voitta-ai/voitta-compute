@@ -273,9 +273,18 @@ def _log_path(report_id: str) -> Path:
 def _append_log(report_id: str, ev: RenderEvent) -> None:
     path = _log_path(report_id)
     if not path.parent.exists():
-        # Don't auto-create the script dir — if the report doesn't exist
-        # we just drop the log entry rather than make a ghost folder.
-        return
+        # Auto-create the subdir if the parent (scripts/reports/) is
+        # there. Previously we dropped log entries silently when the
+        # script dir didn't exist yet — but the directory is owned by
+        # this subsystem, not the report-script writer, so we should
+        # just make it. Render events that fire BEFORE inventory.json
+        # got there now persist correctly.
+        if not path.parent.parent.exists():
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
     try:
         existing: list = []
         if path.exists():

@@ -157,13 +157,11 @@ async def _show_holoviz_report(args: dict[str, Any], ctx: ToolCtx) -> Any:
             out.setdefault(k, v)
     if saw_error:
         out["hint"] = (
-            "The iframe surfaced render-time errors AFTER the smoke test "
-            "passed. Common causes: pn.widgets.DataFrame inside an "
-            "EditableTemplate (SlickGrid stylesheet race — switch to "
-            "pn.widgets.Tabulator), deferred matplotlib panes (see "
-            "docs/07-report-scripts.md), or layout-zero-height containers. "
-            "Edit the report and re-show; if more errors surface later, "
-            "use get_report_render_errors(report_id)."
+            "Render-time error surfaced after the smoke test passed. "
+            "Read errors[*].message and search the RAG (rag_query, "
+            "corpus='docs') for the error text or 'panel <feature>' "
+            "patterns. If more errors surface later, use "
+            "get_report_render_errors(report_id)."
         )
     elif status == "timeout":
         out["hint"] = (
@@ -194,12 +192,9 @@ registry.register(
             "8 s) waiting for the iframe to signal either 'document ready' "
             "or a render-time JS error. The result includes "
             "`status` ('ready' | 'errored' | 'timeout') and an `errors` "
-            "array. If status is 'errored', look at errors[*].message — "
-            "common patterns: SlickGrid stylesheet race (pn.widgets.DataFrame "
-            "inside EditableTemplate; switch to pn.widgets.Tabulator), "
-            "deferred matplotlib panes (see docs/07-report-scripts.md), "
-            "or zero-height containers. Fix the report and re-call this "
-            "tool to verify.\n"
+            "array. If status is 'errored', read errors[*].message and "
+            "search the RAG for the error text or 'panel <feature>' "
+            "patterns. Fix the report and re-call this tool to verify.\n"
             "\n"
             "Errors that surface AFTER this tool returns (during user "
             "interaction) are persisted; pull them with "
@@ -242,6 +237,80 @@ registry.register(
         },
         handler=_show_holoviz_report,
         side="hybrid",
+    )
+)
+
+
+# ---- verify_report --------------------------------------------------------
+
+
+async def _verify_report(args: dict[str, Any], ctx: ToolCtx) -> Any:
+    report_id = str(args.get("report_id") or "").strip()
+    if not report_id:
+        return {"ok": False, "error": "report_id required"}
+    inv_path = (
+        render_events.SCRIPTS_REPORTS / report_id / "inventory.json"
+    )
+    if not inv_path.exists():
+        return {
+            "ok": False,
+            "error": "no inventory recorded for this report — call "
+                     "show_holoviz_report first; the iframe shim emits an "
+                     "inventory snapshot right after `ready`.",
+            "report_id": report_id,
+        }
+    try:
+        import json as _json
+        data = _json.loads(inv_path.read_text())
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"failed to read inventory: {exc}",
+            "report_id": report_id,
+        }
+    roots = data.get("roots") if isinstance(data, dict) else None
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "ts": data.get("ts"),
+        "render_id": data.get("render_id"),
+        "viewport": data.get("viewport"),
+        "roots": roots if isinstance(roots, list) else [],
+        "root_count": len(roots) if isinstance(roots, list) else 0,
+    }
+
+
+registry.register(
+    ToolSpec(
+        name="verify_report",
+        description=(
+            "Return a structural inventory of the most recently rendered "
+            "report iframe: one entry per Bokeh root, with its model type "
+            "and bounding box (x, y, width, height in pixels). The shim "
+            "emits this snapshot once, right after `ready` — use it to "
+            "verify 'I asked for 3 plots and got 3' without taking a "
+            "screenshot.\n"
+            "\n"
+            "Cheaper and more reliable than screenshot_report for "
+            "structural questions. Cross-origin iframes (ctx.three_scene) "
+            "still show as a single root with their bounding box but the "
+            "inventory cannot inspect inside them.\n"
+            "\n"
+            "Returns {ok, report_id, ts, render_id, viewport, roots, "
+            "root_count} where roots is [{root_index, type, bbox}]. "
+            "Returns ok=false when no inventory has been recorded yet "
+            "(report never opened, or opened before this feature shipped)."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "report_id": {"type": "string"},
+            },
+            "required": ["report_id"],
+            "additionalProperties": False,
+        },
+        handler=_verify_report,
+        side="server",
     )
 )
 
@@ -304,7 +373,7 @@ registry.register(
             "iframes — those are isolated from the parent's error "
             "listener by design. For inner-iframe errors, ask the user "
             "to open DevTools and select the iframe in the console's "
-            "context picker. See docs/09-panel-threejs-reports.md."
+            "context picker. See docs/panel-three-scene.md."
         ),
         input_schema={
             "type": "object",

@@ -89,8 +89,40 @@ first to discover what a specific file exposes.
 | `asset_type`      | Applies to                    | Response shape                          | Notes                                                                                                      |
 |-------------------|-------------------------------|-----------------------------------------|------------------------------------------------------------------------------------------------------------|
 | `original`        | every indexed file            | `urls["file"]`                          | Source bytes of the indexed file. No `slug`, no `params`.                                                  |
+| `md`              | every indexed file with a parser-produced `text.md` (PDF / DOCX / XLSX / PPTX / ipynb / text / Google Workspace files synced into the index) | `urls["md"]`                            | Parser's normalised markdown extract, served as `text/markdown`. Same content `vre_get_file` returns — but as a fetchable URL, so the LLM can pipe it into `fetch_to_python_storage` → `run_compute` instead of pulling it through tool-result context. No `slug`, no `params`. Use `original` instead when you need the source format. |
 | `cad_projection`  | `.step` / `.stp` / `.FCStd`   | `urls` keyed by `front`/`top`/`side`/`iso` | Four PNG views. Requires `slug` naming the component (use `vre_list_assets` for slugs). Optional `params={"size": 320}`. |
 | `cad_mesh`        | `.step` / `.stp` / `.iges` / `.igs` / `.FCStd` | `urls["mesh"]`                          | Binary glTF (`.glb`, `model/gltf-binary`). Without `slug`: whole assembly. With a `cad_projection` slug: just that component. Optional `params={"linear_deflection": 0.5}` controls tessellation tolerance in mm (range 0.001–5.0; smaller = more triangles, larger file). The GLB scene contains one named node per component, so a viewer can list / hide / colour parts by `node.name`. |
+
+### Bulk-text flow — `md`
+
+When the user wants the LLM to do regex / pandas / NLP work over a
+long DOCX, XLSX, or PPTX, fetch the parser's markdown extract
+directly into `python_storage` instead of reading it inline:
+
+```python
+asset = vre_request_asset(file_id=N, asset_type="md")
+snap  = fetch_to_python_storage(
+            url=asset["urls"]["md"],
+            name="<filename>.md",
+        )
+run_compute(code=f"""
+    rec = ctx.snapshot({snap['handle']!r})
+    text = (pathlib.Path(rec['path']) / rec['meta']['stored_name']).read_text()
+    # ... regex / dataframe / NLP over `text` ...
+""")
+```
+
+`md` is the right choice when:
+- The extract is large enough that piping it through `vre_get_file`
+  would burn a lot of tool-result context.
+- You want to run code (split-on-headings, count tokens, build a
+  dataframe from fenced tables) rather than read.
+
+Use `original` instead when:
+- You need the source format (custom OCP, openpyxl on the raw
+  workbook, layout-preserving PDF parser).
+- The parser's markdown lost something you care about (precise
+  table positions, embedded objects, page numbering).
 
 ### CAD 3D-viewer flow — `cad_mesh`
 
@@ -122,7 +154,7 @@ handle = snap["handle"]
 #    not a path — load the GLB via dynamic-import GLTFLoader, base64-
 #    inline so the sandboxed iframe (null origin) can read it.
 #    Full recipe + the wrong patterns that fail noisily:
-#    docs/09-panel-threejs-reports.md "Loading a CAD model (GLB / GLTF)
+#    docs/panel-three-scene.md "Loading a CAD GLB into the scene"
 #    into ctx.three_scene".
 ```
 
@@ -163,7 +195,7 @@ gives the LLM the vocabulary for both view types.
 > ```
 >
 > Then compute the bounding box, centre, and scale. See
-> [docs/09-panel-threejs-reports.md § Up-axis](../../../docs/09-panel-threejs-reports.md#up-axis-cad-is-z-up-threejs-is-y-up)
+> [docs/panel-three-scene.md](../../../docs/panel-three-scene.md)
 > for the full ordering and a cheat sheet covering Rhino / Revit /
 > Blender.
 
@@ -216,7 +248,7 @@ Renderable via:
 **"Show me the upper deck of this lift."**
 1. `vre_search("upper deck", folder_ids=[42])` → top hit's chunk contains slug `4-post-lift/upper-deck-assembly`.
 2. `vre_request_asset(file_id, "cad_mesh", slug="4-post-lift/upper-deck-assembly")` → GLB URL.
-3. `fetch_to_python_storage` → `ctx.three_scene` (see the recipe above and [docs/09-panel-threejs-reports.md](../../../docs/09-panel-threejs-reports.md) for the full pattern).
+3. `fetch_to_python_storage` → `ctx.three_scene` (see the recipe above and [docs/panel-three-scene.md](../../../docs/panel-three-scene.md) for the full pattern).
 
 **"Render all four scissor arms side by side."**
 1. `vre_search("scissor arm")` → chunks for the four feature slugs.

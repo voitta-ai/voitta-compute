@@ -11,6 +11,10 @@
 #   ./build_app.sh --release             # bump patch + package + sign + notarize
 #   ./build_app.sh --package             # DMG only, ad-hoc signed
 #
+# dist/ is wiped on every run (regardless of --clean). Each build
+# produces a uniquely-versioned DMG; keeping the old ones around just
+# accumulates confusion. build/ is preserved for incremental rebuilds.
+#
 # --release is the one-shot distribution flow. It runs everything an
 # end-user-shippable DMG needs: bumps pyproject.toml's patch version,
 # signs with the Developer ID identity, notarises, staples. Defaults
@@ -121,6 +125,15 @@ fi
 if [ "$CLEAN" -eq 1 ]; then
   echo "[build_app] cleaning build/, dist/, wheels/..."
   rm -rf "$ROOT/build" "$ROOT/dist" "$ROOT/wheels"
+fi
+
+# Always wipe dist/ — every build produces a uniquely-versioned DMG,
+# so stale ones from previous patches just accumulate confusing
+# artefacts. Keep build/ alone (briefcase needs it for incremental
+# rebuilds; --clean handles the full nuke).
+if [ -d "$ROOT/dist" ]; then
+  echo "[build_app] wiping dist/ before build..."
+  rm -rf "$ROOT/dist"
 fi
 
 # Generate the .app icon if it isn't already there. Tiny script; cheap

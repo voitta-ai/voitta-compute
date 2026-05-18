@@ -45,7 +45,7 @@ HDF5_MAGIC = b"\x89HDF\r\n\x1a\n"
 FEMZIP_MAGIC = b"\x19\x4d\x95\x04"
 
 # Output budget — two iframe limits compete here (see
-# docs/09-panel-threejs-reports.md):
+# docs/panel-three-scene.md):
 #   • Static JSON: ~25 MB hard wall. Each edge ≈ 70 B → ~350K edges.
 #   • Animated base64 binary: ~10–15 MB encoded. With ~31 timesteps the
 #     limit is ~M·12·T ≤ ~10 MB raw, i.e. ~25 K active vertices per frame.

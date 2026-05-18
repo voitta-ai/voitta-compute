@@ -1,0 +1,184 @@
+/* Voitta theme tokens.
+ *
+ * Single source of truth for the in-pane visual identity. To rebrand
+ * the widget — change the values here and nothing else. Every other
+ * stylesheet should reference these via `var(--voitta-…)`; literal
+ * hex codes outside this file are bugs.
+ *
+ * Palette inspired by https://voitta.ai/ (sober monochrome with a
+ * deep-slate header for presence; near-black accent on white surfaces).
+ *
+ * Typography: 'Open Sans' for UI; 'Cormorant Garamond' for the brand
+ * wordmark in the header. Both are loaded from Google Fonts in
+ * `widget.tsx` so the widget doesn't depend on the host page's fonts.
+ */
+
+:host {
+  /* ── Surfaces ─────────────────────────────────────────────────── */
+  --voitta-bg:        #ffffff;   /* drawer body                 */
+  --voitta-surface:   #fafafa;   /* slightly elevated card / row */
+  --voitta-border:    #e8e8e8;
+  --voitta-divider:   #e8e8e8;
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --voitta-text:      #1a1a1a;
+  --voitta-text-muted:#666666;
+  --voitta-text-faint:#9ca3af;
+
+  /* ── Accent (CTAs, pills, focused borders) ───────────────────── */
+  --voitta-accent:        #1a1a1a;
+  --voitta-accent-hover:  #333333;
+  --voitta-accent-fg:     #ffffff;
+  --voitta-accent-tint:   rgba(26, 26, 26, 0.12);
+
+  /* ── Header strip (gives the drawer presence vs. the host) ───── */
+  --voitta-header-bg:          #0f172a;
+  --voitta-header-fg:          #f1f5f9;
+  --voitta-header-rule:        #1e293b;
+  --voitta-header-icon:        #f1f5f9;
+  --voitta-header-muted:       rgba(241, 245, 249, 0.55);  /* de-emphasised header text, e.g. report-id chip */
+  --voitta-header-btn-bg:      rgba(241, 245, 249, 0.08);
+  --voitta-header-btn-bg-hover:rgba(241, 245, 249, 0.16);
+
+  /* ── Flow-chart reports (ReactFlow + engineering-schematic look) ──
+     Tone palette: default / info / success / warning / critical.
+     Each tone defines `bg` (title-bar fill), `fg` (title-bar text),
+     `border` (node + title-bar bottom rule), and `edge` (stroke for
+     outgoing edges tagged with that tone).
+
+     Defaults: muted slate / cyan / green / amber / red, sober enough
+     to read as engineering (not corporate-deck Material). Plugins
+     override these freely in their theme.css. */
+  --voitta-flow-grid: #d4d4d8;
+
+  --voitta-flow-tone-default-bg:     #1e293b;   /* slate-800 */
+  --voitta-flow-tone-default-fg:     #f1f5f9;
+  --voitta-flow-tone-default-border: #cbd5e1;
+  --voitta-flow-edge-default:        #475569;
+
+  --voitta-flow-tone-info-bg:        #0c4a6e;   /* sky-900 */
+  --voitta-flow-tone-info-fg:        #e0f2fe;
+  --voitta-flow-tone-info-border:    #7dd3fc;
+  --voitta-flow-edge-info:           #0284c7;
+
+  --voitta-flow-tone-success-bg:     #064e3b;   /* emerald-900 */
+  --voitta-flow-tone-success-fg:     #d1fae5;
+  --voitta-flow-tone-success-border: #6ee7b7;
+  --voitta-flow-edge-success:        #059669;
+
+  --voitta-flow-tone-warning-bg:     #78350f;   /* amber-900 */
+  --voitta-flow-tone-warning-fg:     #fef3c7;
+  --voitta-flow-tone-warning-border: #fcd34d;
+  --voitta-flow-edge-warning:        #d97706;
+
+  --voitta-flow-tone-critical-bg:    #7f1d1d;   /* red-900 */
+  --voitta-flow-tone-critical-fg:    #fee2e2;
+  --voitta-flow-tone-critical-border:#fca5a5;
+  --voitta-flow-edge-critical:       #dc2626;
+
+  /* Node body — bare defaults (light card). Diagram-level
+     `p.palette("dark")` overrides these via inline style on the
+     ReactFlow wrapper; per-node `style={...}` overrides BOTH via
+     normal CSS cascade. Plugin theme.css can re-bind these at
+     :host level for host-wide palette changes. */
+  --voitta-flow-node-bg:          #f8fafc;
+  --voitta-flow-node-fg:          #0f172a;
+  --voitta-flow-node-fg-muted:    #475569;
+  --voitta-flow-node-fg-faint:    #64748b;
+  --voitta-flow-node-border:      #cbd5e1;
+
+  /* ── Tool-call chips ─────────────────────────────────────────── */
+  --voitta-tool-bg:     #f4f4f4;
+  --voitta-tool-border: #e0e0e0;
+
+  /* ── Conversation bubbles ────────────────────────────────────── */
+  --voitta-user-bubble:   #f1f5f9;
+  --voitta-user-bubble-fg:#1a1a1a;
+
+  /* ── Stop button (red while a turn is streaming) ─────────────── */
+  --voitta-stop-bg:       #5b2d5b;
+  --voitta-stop-bg-hover: #4a234a;
+
+  /* ── Scrollbars (chat pane + report iframe) ───────────────────
+     Both surfaces reference these via fallbacks so untokenised
+     templates / themes still get a neutral thin scrollbar. Override
+     in a plugin theme.css to colour-match a darker palette. */
+  --voitta-scrollbar-thumb:        rgba(0, 0, 0, 0.22);
+  --voitta-scrollbar-thumb-hover:  rgba(0, 0, 0, 0.42);
+  --voitta-scrollbar-track:        transparent;
+
+  /* ── Inline code + code blocks (markdown) ────────────────────── */
+  --voitta-code-bg:        rgba(0, 0, 0, 0.06);  /* inline `code` */
+  --voitta-code-block-bg:  #1e1e1e;               /* fenced ```code``` */
+  --voitta-code-block-fg:  #eeeeee;
+  --voitta-link-fg:        #1766c4;
+
+  /* ── Image / rich blocks (run_compute outputs) ───────────────── */
+  --voitta-rich-text-bg:   #f8f8f8;
+  --voitta-heatmap-bg:     #fafafa;
+
+  /* ── Logs view (intentionally dark by default for readability) ─ */
+  --voitta-log-bg:           #1e1e1e;
+  --voitta-log-fg:           #dddddd;
+  --voitta-log-toolbar-bg:   #2a2a2a;
+  --voitta-log-toolbar-rule: #000000;
+  --voitta-log-title-fg:     #cfd8dc;
+  --voitta-log-btn-bg:       #3a3a3a;
+  --voitta-log-btn-bg-hover: #4a4a4a;
+  --voitta-log-btn-border:   #555555;
+  --voitta-log-line-rule:    #2a2a2a;
+  --voitta-log-body-bg:      #15191e;
+  --voitta-log-body-rule:    #444444;
+  --voitta-log-error-fg:     #ff8080;
+  --voitta-log-error-rule:   #ff5050;
+  --voitta-log-warn-fg:      #ffcc66;
+  --voitta-log-warn-rule:    #d49b3a;
+  --voitta-log-info-fg:      #dddddd;
+
+  /* ── Artifacts panel (Finder-style window) ───────────────────── */
+  --voitta-art-titlebar-bg-from: #f3f3f3;
+  --voitta-art-titlebar-bg-to:   #e6e6e6;
+  --voitta-art-titlebar-rule:    #d4d4d8;
+  --voitta-art-window-border:    #d4d4d8;
+  --voitta-art-btn-bg-hover:     #f1f1f1;
+  --voitta-art-btn-border-hover: #9c9c9c;
+  --voitta-art-row-rule:         #f4f4f5;
+  --voitta-art-row-stripe:       #fafafa;
+  --voitta-art-row-hover:        #e8f0fe;
+  --voitta-art-row-selected-bg:  #0a84ff;
+  --voitta-art-row-selected-fg:  #ffffff;
+  --voitta-art-ctxmenu-bg:       #ffffff;
+  --voitta-art-ctxmenu-border:   #d4d4d8;
+  --voitta-art-ctxmenu-hover:    #0a84ff;
+  --voitta-art-ctxmenu-fg:       #1f2937;
+  --voitta-art-ctxmenu-fg-hover: #ffffff;
+  --voitta-art-ctxmenu-disabled: #9ca3af;
+  --voitta-art-ctxmenu-shadow:   0 6px 24px rgba(0,0,0,0.15);
+  --voitta-art-footer-bg:        #fafafa;
+  --voitta-art-footer-rule:      #ececec;
+  --voitta-art-badge-bg:         #eef2f7;
+  --voitta-art-badge-border:     #dbe2ea;
+  --voitta-art-badge-fg:         #4b5563;
+  --voitta-art-size-fg:          #4b5563;
+
+  /* ── Status colours ──────────────────────────────────────────── */
+  --voitta-warn-bg:       #fff7e6;
+  --voitta-warn-border:   #fcd9a3;
+  --voitta-warn-fg:       #92400e;
+  --voitta-error-bg:      #fef2f2;
+  --voitta-error-border:  #fecaca;
+  --voitta-error-fg:      #b91c1c;
+  --voitta-ok-fg:         #047857;
+
+  /* ── Shape ───────────────────────────────────────────────────── */
+  --voitta-pane-width:    400px;
+  --voitta-radius:        6px;
+  --voitta-radius-sm:     4px;
+  --voitta-shadow:        -8px 0 24px rgba(15, 23, 42, 0.12);
+  --voitta-shadow-handle: -3px 2px 10px rgba(15, 23, 42, 0.22);
+
+  /* ── Typography ──────────────────────────────────────────────── */
+  --voitta-font-sans:    "Open Sans", system-ui, -apple-system, sans-serif;
+  --voitta-font-display: "Cormorant Garamond", Georgia, serif;
+  --voitta-font-mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

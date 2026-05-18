@@ -7,6 +7,60 @@ import { getActiveReportIframe, getActiveReportInfo } from "./report-iframe";
 
 const DOM_CAP = 200_000;
 
+// ---- inject_chat_message --------------------------------------------------
+// Driven by the CLI ``/cli/chat_inject`` endpoint. The CLI hands us a
+// piece of text; we forward it into ChatPane's ``sendText`` callback
+// (exposed on ``window.__voittaInjectChatMessage`` by ChatPane). The
+// chat then runs through the regular /chat/stream pipeline — message
+// + streamed response appear in the pane exactly as if the user had
+// typed it. Returns ``{ok: true}`` once the send has been kicked off;
+// the LLM's response is delivered asynchronously into the UI, not
+// awaited here. Errors when the chat pane isn't mounted.
+
+interface InjectArgs {
+  text?: unknown;
+}
+
+// ---- read_chat_state ------------------------------------------------------
+// Returns a snapshot of the chat pane state — full messages array, the
+// streaming flag, in-flight streaming items, and the current draft.
+// Used by /cli/chat_state so an external operator can read what the LLM
+// said in the live chat without going through the SSE stream.
+
+registerPrimitive("read_chat_state", async () => {
+  const reader = (window as unknown as {
+    __voittaReadChatState?: () => unknown;
+  }).__voittaReadChatState;
+  if (typeof reader !== "function") {
+    throw new PrimitiveError(
+      "chat_not_mounted",
+      "chat pane is not open",
+    );
+  }
+  return reader() as Record<string, unknown>;
+});
+
+registerPrimitive("inject_chat_message", async (rawArgs) => {
+  const args = (rawArgs || {}) as InjectArgs;
+  const text = typeof args.text === "string" ? args.text : "";
+  if (!text.trim()) {
+    throw new PrimitiveError("invalid_args", "text is required and must be non-empty");
+  }
+  const inject = (window as unknown as {
+    __voittaInjectChatMessage?: (t: string) => Promise<void>;
+  }).__voittaInjectChatMessage;
+  if (typeof inject !== "function") {
+    throw new PrimitiveError(
+      "chat_not_mounted",
+      "chat pane is not open (the bookmarklet must be active on this page)",
+    );
+  }
+  // Fire and forget — the streaming response is rendered into the
+  // chat pane via the regular SSE path, not returned here.
+  void inject(text);
+  return { ok: true };
+});
+
 // ---- get_url ---------------------------------------------------------------
 
 registerPrimitive("get_url", async () => ({
@@ -77,6 +131,7 @@ interface ScreenshotResponse {
   full_height?: number;
   scale?: number;
   format?: string;
+  nested_scenes_captured?: number;
 }
 
 let screenshotCounter = 0;
@@ -150,6 +205,7 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
         height: data.height,
         full_width: data.full_width,
         full_height: data.full_height,
+        nested_scenes_captured: data.nested_scenes_captured,
         scale: data.scale,
         format: data.format,
         report: info

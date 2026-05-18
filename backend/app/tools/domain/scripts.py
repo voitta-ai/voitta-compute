@@ -36,66 +36,18 @@ from app.services import scripts
 from app.tools.registry import ToolCtx, ToolSpec, registry
 
 
-# Pattern-based doc-section hints for HoloViz report smoke errors. When
-# build(ctx) raises something matching one of these substrings, we
-# include the corresponding hint so the LLM goes straight to the right
-# doc section instead of guessing.
-#
-# Pattern matching is intentionally substring-based and ORDERED — the
-# first match wins. Add more entries as patterns surface in real
-# tracebacks; conservative is fine, we'd rather miss a hint than give
-# a wrong one.
-_REPORT_ERROR_HINTS: list[tuple[str, str]] = [
-    (
-        "ListLike",
-        "Looks like you returned a pn.template.* from build(ctx). "
-        "Return a content layout (Column / Row / GridSpec / Card) "
-        "instead — the host wraps it in EditableTemplate itself. See "
-        "docs/18-holoviz-authoring-guide.md § Return value.",
-    ),
-    (
-        "stylesheets",
-        "Stylesheets-related error. Shadow-DOM widgets (Tabulator, "
-        "DataTable, date pickers, Markdown / HTML / Str panes) need "
-        "ctx.add_widget_stylesheets or ctx.apply_theme — outer-doc CSS "
-        "can't pierce their shadow roots. See "
-        "docs/15-theming-architecture.md § Limit 4.",
-    ),
-    (
-        "SlickGrid",
-        "SlickGrid stylesheet race. Common with pn.widgets.DataFrame "
-        "inside EditableTemplate. Switch to pn.widgets.Tabulator. See "
-        "docs/07-report-scripts.md § Tables.",
-    ),
-    (
-        "RecursionError",
-        "Recursive layout — usually a self-reference or a circular "
-        "include in a pn.pane.HTML. See "
-        "docs/18-holoviz-authoring-guide.md § Common mistakes.",
-    ),
-    (
-        "no module named",
-        "Import error in the script. The full venv is available "
-        "(pandas, numpy, scipy, matplotlib, panel, holoviews, bokeh, "
-        "h5py, plotly, …) but exotic libs aren't. List what's "
-        "available with `import importlib.util; importlib.util.find_spec(...)`.",
-    ),
-]
+# NOTE: pattern-based doc-section hints were removed in Stage 3. They
+# encoded "hidden agenda" (the tool layer guessing which doc the LLM
+# should read) and went stale as docs reshuffled. The tool now returns
+# the raw traceback; the LLM searches the RAG with the error text.
 
 
-def _smoke_error_hint(smoke_error: str | None) -> str | None:
-    """Return a doc-section hint for a smoke-test traceback.
-
-    Substring-matches the FIRST entry in ``_REPORT_ERROR_HINTS`` whose
-    pattern appears in the error. None if nothing matches — the caller
-    falls back to the generic 'fix via edit_report_script' hint.
-    """
-    if not smoke_error:
-        return None
-    for pattern, hint in _REPORT_ERROR_HINTS:
-        if pattern.lower() in smoke_error.lower():
-            return hint
-    return None
+_HINT_ON_SMOKE_ERROR = (
+    "build(ctx) raised at smoke-test time — see smoke_error for the raw "
+    "traceback. Search the RAG (rag_query, corpus='docs') for the error "
+    "text or for 'panel <feature>' patterns, then fix via "
+    "edit_report_script."
+)
 
 
 # ---- run_compute ----------------------------------------------------------
@@ -267,32 +219,14 @@ async def _define_report(args: dict[str, Any], ctx: ToolCtx) -> Any:
     # / Bokeh / matplotlib aren't async-friendly.
     smoke_error = await asyncio.to_thread(scripts.smoke_test_report, rec["name"])
     response: dict[str, Any] = {
-        "ok": True,
+        "ok": smoke_error is None,
         **rec,
         "report_id": rec["name"],
         "render_url_path": f"/panel/reports?id={rec['name']}",
+        "smoke_error": smoke_error,
     }
     if smoke_error:
-        response["smoke_error"] = smoke_error
-        pattern_hint = _smoke_error_hint(smoke_error)
-        if pattern_hint:
-            response["hint"] = pattern_hint + (
-                f" Fix via edit_report_script(name={rec['name']!r}, ...) "
-                f"and re-test."
-            )
-        else:
-            response["hint"] = (
-                f"The script was saved, but build(ctx) raised at smoke-test "
-                f"time. rag_query 'docs' corpus for "
-                f"'18-holoviz-authoring-guide' if the error class is "
-                f"unfamiliar, then fix via "
-                f"edit_report_script(name={rec['name']!r}, ...) and re-test."
-            )
-    else:
-        response["hint"] = (
-            f"Use show_holoviz_report(report_id={rec['name']!r}) to open it "
-            "in the iframe pane next to the chat."
-        )
+        response["hint"] = _HINT_ON_SMOKE_ERROR
     return response
 
 
@@ -304,45 +238,23 @@ registry.register(
             "`python_storage/reports/<name>/code.py`. Open via "
             "`show_holoviz_report(report_id=<name>)`.\n"
             "\n"
-            "BEFORE AUTHORING: rag_query docs corpus for "
-            "'18-holoviz-authoring-guide' — picks ctx surface, themes, "
-            "design system, gotchas. Do not author from priors; the API "
-            "evolves.\n"
+            "BEFORE AUTHORING: rag_query the docs corpus for "
+            "'panel-skeleton' (then 'panel-snapshots' / 'panel-theming' / "
+            "'panel-three-scene' / 'panel-common-errors' / "
+            "'panel-screenshot-limits' as needed). These short, intent-"
+            "keyed docs are authoritative — the API evolves, your priors "
+            "may not match.\n"
             "\n"
             "Script signature: `def build(ctx) -> pn.viewable.Viewable`. "
-            "Return a content layout (Column / Row / GridSpec / Card) — "
-            "NOT a pn.template.*. The host wraps in EditableTemplate.\n"
-            "\n"
-            "ctx surface (full reference in 18-holoviz-authoring-guide):\n"
-            "  • Data:    ctx.snapshot/dataframe/raw(handle)\n"
-            "  • CSS:     ctx.add_css(css) → outer-doc <head>\n"
-            "             ctx.add_widget_stylesheets(w, css) → shadow root\n"
-            "  • JS:      ctx.add_js(name, url) → outer-doc <head>\n"
-            "  • Theme:   ctx.get_theme(host=) / ctx.theme_css(host=)\n"
-            "             ctx.apply_theme(layout, host=) — sugar over\n"
-            "               add_css + add_widget_stylesheets for every\n"
-            "               Tabulator / DataTable / DatePicker / Markdown\n"
-            "               / HTML / Str in the layout.\n"
-            "  • Design:  ctx.set_design('material'|'bootstrap'|'fast'|'native')\n"
-            "             — Panel's native widget design system; covers\n"
-            "             most widget chrome via per-class modifiers.\n"
-            "  • Theme:   ctx.set_template_theme('default'|'dark')\n"
-            "             — Panel's light/dark template scheme.\n"
-            "  • Cards:   ctx.fill_cards(layout) — promote stretch_both\n"
-            "             into inner panes so editable-mode resize actually\n"
-            "             reflows charts. Opt-in.\n"
-            "  • 3D:      ctx.three_scene(scene_js, bg=)\n"
-            "  • Debug:   ctx.log(*args)\n"
-            "\n"
-            "Theming axes (independent, layer cleanly):\n"
-            "  1. Design  — set_design picks Panel widget chrome.\n"
-            "  2. Template theme — set_template_theme picks light/dark.\n"
-            "  3. Tokens — apply_theme overlays --voitta-* on top.\n"
-            "All three default to OFF (Panel's bare defaults).\n"
+            "Return any Viewable — content layout (Column / Row / "
+            "GridSpec / Card / pane) or, if you have a strong reason, a "
+            "pn.template.* (the host detects and uses it as-is). For "
+            "content layouts the host wraps in EditableTemplate.\n"
             "\n"
             "Smoke test: tool re-runs build(ctx) after persist. Failures "
-            "land in `smoke_error` with a doc-section hint. Fix via "
-            "edit_report_script before calling show_holoviz_report."
+            "land in `smoke_error` (raw traceback). Use edit_report_script "
+            "for targeted fixes (faster wall-clock than re-submitting "
+            "full source)."
         ),
         input_schema={
             "type": "object",
@@ -522,16 +434,14 @@ async def _edit_report_script(args: dict[str, Any], ctx: ToolCtx) -> Any:
     # surface runtime errors at edit time, not when the iframe loads.
     smoke_error = await asyncio.to_thread(scripts.smoke_test_report, rec["name"])
     response: dict[str, Any] = {
-        "ok": True,
+        "ok": smoke_error is None,
         **rec,
         "report_id": rec["name"],
         "render_url_path": f"/panel/reports?id={rec['name']}",
+        "smoke_error": smoke_error,
     }
     if smoke_error:
-        response["smoke_error"] = smoke_error
-        pattern_hint = _smoke_error_hint(smoke_error)
-        if pattern_hint:
-            response["hint"] = pattern_hint
+        response["hint"] = _HINT_ON_SMOKE_ERROR
     return response
 
 

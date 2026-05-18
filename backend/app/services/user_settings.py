@@ -51,6 +51,35 @@ def js_compute_enabled() -> bool:
         return False
 
 
+def mcp_cli_enabled() -> bool:
+    """Whether the localhost-only CLI back-channel (``/cli/*``) AND the
+    embedded MCP server (``/mcp``) are exposed.
+
+    Default is **False** — both are off unless the user explicitly
+    flips the switch from the tray Settings dialog. The flag gates the
+    whole surface because the two share the same loopback contract
+    (eval arbitrary JS in attached tabs, drive the agent loop). Read on
+    every request via ``app.routes.cli._localhost_only`` and the
+    ``/mcp`` gate middleware, so toggling takes effect without a
+    backend restart.
+    """
+    try:
+        return bool(read().get("mcpCliEnabled", False))
+    except Exception:
+        return False
+
+
+def set_mcp_cli_enabled(enabled: bool) -> None:
+    """Persist the MCP/CLI kill switch. Used by the tray Settings UI."""
+    blob = {}
+    try:
+        blob = read()
+    except Exception:
+        blob = {}
+    blob["mcpCliEnabled"] = bool(enabled)
+    write(blob)
+
+
 def web_fetch_enabled() -> bool:
     """Whether the open-web retrieval tool (``web_fetch``) is exposed
     to the LLM.

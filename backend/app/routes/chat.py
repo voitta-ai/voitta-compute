@@ -249,6 +249,12 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
     iteration = 0
     current_block_index: int | None = None
 
+    # Tracks reports touched by tool calls in this stream so we can drain
+    # post-render errors into the next user message. Closes the "LLM
+    # saw ready, user saw red" gap (see services.render_log_drain).
+    from app.services.render_log_drain import RenderDrain, format_reminder
+    render_drain = RenderDrain()
+
     try:
         for iteration in range(max_iterations):
             # Per-iteration block assembly state.
@@ -436,6 +442,9 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                         sub_seq += 1
 
                 content_payload = res.result if res.ok else {"error": res.error}
+                # Track report_ids the conversation touches so we can
+                # drain post-render errors into the next user message.
+                render_drain.note_tool_result(tu.get("name") or "", content_payload)
                 # Image-bearing tools tag results with `_image`. See the
                 # pre-streaming version of this function (in git history)
                 # for the full rationale on per-provider image handling.
@@ -526,6 +535,16 @@ async def _stream(req: ChatRequest) -> AsyncIterator[dict]:
                     )
 
             messages.append(LlmMessage(role="assistant", content=assistant_content))
+
+            # Drain any post-render errors logged since the last turn.
+            # If any are present, prepend them as a system-reminder text
+            # block so the next LLM turn knows about them without having
+            # to call get_report_render_errors.
+            drained = render_drain.drain()
+            reminder = format_reminder(drained)
+            if reminder:
+                tool_result_blocks.insert(0, {"type": "text", "text": reminder})
+
             messages.append(LlmMessage(role="user", content=tool_result_blocks))
 
         yield _sse(

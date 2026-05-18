@@ -10,6 +10,7 @@ Dropbox, etc.) live in ``app.tools.providers``.
 from app.tools.domain import (  # noqa: F401  — registration side-effects
     rag,
     context,
+    dom,
     buffers,
     buffers_arrow,
     python_storage,

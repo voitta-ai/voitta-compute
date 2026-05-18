@@ -161,6 +161,41 @@ def _promote_sizing_mode(obj: Any, _seen: set[int] | None = None) -> None:
         _promote_sizing_mode(child, _seen)
 
 
+_SHIM_JS_FILES = {
+    # html2canvas is inlined into _panel_shim.js (Stage 4.1) — one
+    # script, one load tick, no race.
+    "voitta_panel_shim": "api/_panel_shim.js",
+}
+
+
+def _unwrap_user_template(template: Any) -> tuple[list[Any], str | None]:
+    """Extract ``(main_objects, title)`` from a user-returned template.
+
+    The permissive return contract (Stage 3.1) allowed ``build(ctx)`` to
+    return ``pn.template.*`` directly. We tried adopting the template
+    in place, but Panel resolves ``js_files`` at construction time —
+    setting it post-hoc doesn't reliably load our shim, and the
+    iframe never reports ``ready``. So instead we unwrap: pull the
+    user's main content + title and feed them through the normal
+    ``_wrap_template`` flow, which constructs a fresh template
+    (Vanilla / Editable) with the shim baked in.
+
+    The user's specific template class choice is overridden — that's
+    the trade-off for keeping the shim contract intact. Their content,
+    layout, and title are preserved.
+    """
+    main_attr = getattr(template, "main", None)
+    if main_attr is None:
+        main = []
+    else:
+        try:
+            main = list(main_attr)
+        except TypeError:
+            main = [main_attr]
+    title = getattr(template, "title", None)
+    return main, (title if isinstance(title, str) and title else None)
+
+
 def _wrap_template(
     layout: Any,
     title: str,
@@ -211,7 +246,21 @@ def _wrap_template(
 
     import panel as pn
 
-    if isinstance(layout, pn.Column):
+    # Permissive return contract: if the user returned a template,
+    # unwrap it. Adopting in place doesn't work — Panel resolves
+    # js_files at construction time, so the shim never loads and the
+    # iframe never reports ready. Pulling the user's main content +
+    # title and feeding them through the normal wrap path below
+    # guarantees the shim is wired correctly. The specific template
+    # subclass the user chose is overridden — that's the trade-off.
+    if isinstance(layout, pn.template.BaseTemplate):
+        user_main, user_title = _unwrap_user_template(layout)
+        main = user_main
+        if user_title and title.startswith("Report "):
+            # Honor the user's title only if the caller didn't pass an
+            # explicit one (the default ``Report <id>`` prefix is the tell).
+            title = user_title
+    elif isinstance(layout, pn.Column):
         main = list(layout.objects)
     else:
         main = [layout]
@@ -236,12 +285,10 @@ def _wrap_template(
         # (a network-path reference) and FastAPI 404s. With `api/...` we
         # get the correct `../api/_panel_shim.js`.
         js_files={
+            # html2canvas is now inlined directly into _panel_shim.js
+            # (Stage 4.1) — single async load tick, no race between
+            # the shim's _emitReady() and html2canvas being available.
             "voitta_panel_shim": "api/_panel_shim.js",
-            # html2canvas is loaded into the iframe so the parent can
-            # postMessage a screenshot request and the shim can rasterise
-            # the entire report (full scrollHeight) without a headless
-            # browser. Loaded in parallel with the shim itself.
-            "voitta_html2canvas": "api/_html2canvas.js",
             # Plus any user-requested libs (Three.js, D3, …) from
             # ctx.add_js() — already filtered against our reserved keys.
             **extra_js,

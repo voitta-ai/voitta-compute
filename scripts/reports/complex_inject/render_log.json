@@ -1,0 +1,98 @@
+[
+  {
+    "render_id": "db81d62d8306",
+    "report_id": "complex_inject",
+    "kind": "ready",
+    "ts": 1779058094.33295,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "f7ba8061a4d2",
+    "report_id": "complex_inject",
+    "kind": "error",
+    "ts": 1779058569.829192,
+    "message": "ResizeObserver loop completed with undelivered notifications.\n\n[voitta-RO-diagnostic] {\"total_observers\":19,\"hot_observers\":[{\"id\":1,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":22,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\\n    at d.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:234:1347)\"},{\"id\":2,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":22,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at M.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at M.initialize (https://127.0.0.1:12358/static/extensions/panel/panel.min.js?v=b081f23dfb5efd1bbe84e7fda7427a25cfc354ce9fbf1fd8e5c35899acb2b3bb:230:1180)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\"},{\"id\":3,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":22,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\\n    at d.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:234:1347)\"},{\"id\":4,\"fire_count\":2,\"fires_in_last_200ms\":2,\"last_fire_age_ms\":4,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd42",
+    "stack": null,
+    "source": "window.error",
+    "url": "https://127.0.0.1:12358/panel/reports?id=complex_inject&render_id=f7ba8061a4d2&_t=1779058569020",
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "f7ba8061a4d2",
+    "report_id": "complex_inject",
+    "kind": "ready",
+    "ts": 1779058570.112878,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "12f6dce30bc0",
+    "report_id": "complex_inject",
+    "kind": "error",
+    "ts": 1779058892.676139,
+    "message": "ResizeObserver loop completed with undelivered notifications.\n\n[voitta-RO-diagnostic] {\"total_observers\":19,\"hot_observers\":[{\"id\":1,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":17,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\\n    at d.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:234:1347)\"},{\"id\":2,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":17,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at M.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at M.initialize (https://127.0.0.1:12358/static/extensions/panel/panel.min.js?v=b081f23dfb5efd1bbe84e7fda7427a25cfc354ce9fbf1fd8e5c35899acb2b3bb:230:1180)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\"},{\"id\":3,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":17,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\\n    at d.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:234:1347)\"},{\"id\":4,\"fire_count\":2,\"fires_in_last_200ms\":2,\"last_fire_age_ms\":3,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd42",
+    "stack": null,
+    "source": "window.error",
+    "url": "https://127.0.0.1:12358/panel/reports?id=complex_inject&render_id=12f6dce30bc0&_t=1779058891947",
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "12f6dce30bc0",
+    "report_id": "complex_inject",
+    "kind": "ready",
+    "ts": 1779058892.951082,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "152fc5b07113",
+    "report_id": "complex_inject",
+    "kind": "error",
+    "ts": 1779059548.382417,
+    "message": "ResizeObserver loop completed with undelivered notifications.\n\n[voitta-RO-verdicts] {\"benign\":false,\"total_hot\":19,\"verdicts\":[{\"id\":1,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":2,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":true,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":3,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":4,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":5,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":6,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":7,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":8,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":9,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":10,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":11,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":12,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":13,\"fires\":1,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":14,\"fires\":4,\"fast\":false,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":15,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":16,\"fires\":2,\"fast\":true,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":17,\"fires\":4,\"fast\":false,\"bokeh\":true,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"},{\"id\":18,\"fires\":3,\"fast\":true,\"bokeh\":false,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"pnx-tabulator tabulator\"},{\"id\":19,\"fires\":1,\"fast\":true,\"bokeh\":false,\"panel\":false,\"target_tag\":\"DIV\",\"target_cls\":\"\"}]}\n[voitta-RO-diagnostic] {\"total_observers\":19,\"hot_observers\":[{\"id\":1,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":30,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at k.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:108)\\n    at d.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:234:1347)\"},{\"id\":2,\"fire_count\":1,\"fires_in_last_200ms\":1,\"last_fire_age_ms\":30,\"targets\":[{\"tag\":\"DIV\",\"id\":\"\",\"cls\":\"\",\"w\":0,\"h\":0}],\"ctor_stack_head\":\"Error\\n    at new Wrapped (https://127.0.0.1:12358/api/_panel_shim.js:55:46)\\n    at M.initialize (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:221:1339)\\n    at M.initialize (https://127.0.0.1:12358/static/extensions/panel/panel.min.js?v=b081f23dfb5efd1bbe84e7fda7427a25cfc354ce9fbf1fd8e5c35899acb2b3bb:230:1180)\\n    at a (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac334505cd7385ebb4453a7b17aa1d3699c35:235:879)\\n    at t.build_view (https://127.0.0.1:12358/static/js/bokeh.min.js?v=2630124d82b67a204b9c9da925d3d456e9ec585bb0cf8f839a1c704dbee3f200b70d237916a9fd429755022dc83ac33450",
+    "stack": null,
+    "source": "window.error",
+    "url": "https://127.0.0.1:12358/panel/reports?id=complex_inject&render_id=152fc5b07113&_t=1779059547657",
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "152fc5b07113",
+    "report_id": "complex_inject",
+    "kind": "ready",
+    "ts": 1779059548.6591969,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  },
+  {
+    "render_id": "cd3551ce6171",
+    "report_id": "complex_inject",
+    "kind": "ready",
+    "ts": 1779059740.706945,
+    "message": null,
+    "stack": null,
+    "source": "ready",
+    "url": null,
+    "line": null,
+    "col": null
+  }
+]

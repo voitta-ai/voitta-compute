@@ -321,11 +321,16 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
     setWidth(DEFAULT_WIDTH_PX);
   }, []);
 
-  const send = useCallback(async () => {
-    const text = draft.trim();
-    // Allow sending an image-only message (no text). Block only when both
-    // text AND attachments are empty, or the turn is already streaming.
-    if ((!text && pendingAttachments.length === 0) || busy) return;
+  // ``sendText`` is the actual sender; ``send()`` is the form-bound
+  // wrapper that pulls from the draft state. ``sendText`` also gets
+  // bridged onto window.__voittaInjectChatMessage so the CLI
+  // ``/cli/chat_inject`` endpoint can drive the same path the user
+  // would by typing — see frontend/src/lib/primitives.ts
+  // ``inject_chat_message``. The phantom call goes through the
+  // normal /chat/stream and renders into the pane exactly like a
+  // user-typed message.
+  const sendText = useCallback(async (override?: string) => {
+    const text = (override !== undefined ? override : draft).trim();
     const s = settingsRef.current;
     const apiKey = activeApiKey(s);
     if (!apiKey) {
@@ -432,6 +437,46 @@ export function ChatPane({ backendOrigin, agentName, hideBrand }: Props) {
       abortRef.current = null;
     }
   }, [draft, busy, messages, backendOrigin, pendingAttachments]);
+
+  const send = useCallback(() => sendText(), [sendText]);
+
+  // Expose ``sendText`` on window so the inject_chat_message primitive
+  // (frontend/src/lib/primitives.ts) can call it. Kept on a ref-style
+  // stable proxy that always forwards to the latest callback —
+  // primitives execute outside React's render scope.
+  useEffect(() => {
+    const proxy = (text: string) => sendText(text);
+    (window as unknown as { __voittaInjectChatMessage?: (t: string) => Promise<void> })
+      .__voittaInjectChatMessage = proxy;
+    return () => {
+      const w = window as unknown as { __voittaInjectChatMessage?: unknown };
+      if (w.__voittaInjectChatMessage === proxy) {
+        delete w.__voittaInjectChatMessage;
+      }
+    };
+  }, [sendText]);
+
+  // Expose the latest chat state (messages + streaming flag + streaming
+  // items + current draft) so the read_chat_state primitive can mirror
+  // it to a CLI caller. Kept fresh through a closure that re-binds on
+  // every state change — primitives just call the latest version.
+  useEffect(() => {
+    const reader = () => ({
+      messages,
+      streaming,
+      streaming_items: streamingItems,
+      draft,
+      error,
+    });
+    (window as unknown as { __voittaReadChatState?: () => unknown })
+      .__voittaReadChatState = reader;
+    return () => {
+      const w = window as unknown as { __voittaReadChatState?: unknown };
+      if (w.__voittaReadChatState === reader) {
+        delete w.__voittaReadChatState;
+      }
+    };
+  }, [messages, streaming, streamingItems, draft, error]);
 
   const handleAttach = useCallback(async (files: File[]) => {
     if (!files.length) return;

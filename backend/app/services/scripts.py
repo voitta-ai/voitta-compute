@@ -493,7 +493,7 @@ class ScriptContext:
         """Ergonomic wrapper that wires Three.js for the common case.
 
         Returns a ``pn.pane.HTML`` containing an ``<iframe srcdoc="...">``
-        (NOT a direct ``<div>`` — see docs/09-panel-threejs-reports.md
+        (NOT a direct ``<div>`` — see docs/panel-three-scene.md
         for why: ``pn.pane.HTML`` reads ``clientWidth=0`` inside Bokeh's
         layout pass, killing canvas sizing). The iframe gets a real
         document context, real layout, and real ``window.load``.
@@ -616,6 +616,34 @@ class ScriptContext:
       source: 'unhandledrejection'
     });
   });
+  // Stage 4.3 — respond to canvas-capture requests from the outer shim.
+  // The parent's screenshot path needs each three_scene's pixels to
+  // composite into the html2canvas output; cross-origin sandboxing
+  // blocks html2canvas from reading inside us directly.
+  window.addEventListener('message', function(e){
+    var d = e && e.data;
+    if (!d || d.type !== 'voitta_three_capture') return;
+    var rid = d.requestId;
+    function reply(payload) {
+      try {
+        window.parent.postMessage(Object.assign(
+          {type: 'voitta_three_capture_response', requestId: rid},
+          payload
+        ), '*');
+      } catch (_) {}
+    }
+    try {
+      var c = document.getElementById('c');
+      if (!c) { reply({ok: false, message: 'canvas not found'}); return; }
+      // toDataURL requires preserveDrawingBuffer: true on the renderer
+      // (set above). Returns blank if it isn't.
+      var url = c.toDataURL('image/png');
+      reply({ok: true, dataUrl: url, width: c.width, height: c.height});
+    } catch (err) {
+      reply({ok: false, message: String((err && err.message) || err)});
+    }
+  });
+
   // Also hook console.error so user code that catches and console.error's
   // (e.g. the user-scene_js try/catch wrapper below) still surfaces.
   var _origCE = console.error.bind(console);
@@ -663,7 +691,13 @@ import * as THREE from 'three';
   const canvas = document.getElementById("c");
   const scene  = new THREE.Scene();
   scene.background = new THREE.Color(""" + repr(bg) + """);
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // preserveDrawingBuffer: true is required for the WebGL capture path
+  // (Stage 4.3) — without it, canvas.toDataURL() returns blank because
+  // WebGL clears the drawing buffer after compositing. Cheap (no perf
+  // hit on modern GPUs) and the only way the parent shim can include
+  // this scene's pixels in a screenshot.
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true,
+                                              preserveDrawingBuffer: true });
   renderer.setPixelRatio(window.devicePixelRatio || 1);
 
   // Initial size — may be 0 if the iframe hasn't been laid out yet.
@@ -758,7 +792,7 @@ __USER_SCENE_JS__
   //
   // If you genuinely want the camera looking elsewhere, you cannot use
   // this helper as-is — drag-rotate is hard-coded to orbit (0, 0, 0).
-  // See docs/09-panel-threejs-reports.md for the custom-iframe pattern.
+  // See docs/panel-three-scene.md for the custom-iframe pattern.
   if (camera.position.lengthSq() === 0) {
     radius = 5; applyCam();
   } else {
