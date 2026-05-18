@@ -1,0 +1,9 @@
+{
+  "name": "linkedin",
+  "version": "0.1.0",
+  "description": "LinkedIn plugin — DOM-scrape page context from the active LinkedIn tab. No API key required.",
+  "host_patterns": ["linkedin.com"],
+  "python_module": "voitta_linkedin",
+  "frontend_bundle": "frontend/widget.ts",
+  "docs_dir": "docs"
+}
