@@ -1,0 +1,52 @@
+# Python build & caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# Virtual envs
+.venv/
+venv/
+
+# Node / frontend (if present)
+node_modules/
+dist-frontend/
+.next/
+
+# RAG indexes (rebuildable from docs/ and libs-info/panel/)
+rag/.chroma/
+rag/.bm25/
+rag/.chroma_panel/
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Secrets (also enforced via permissions.deny)
+.env
+.env.*
+!.env.example
+
+# Local Claude state
+.claude/settings.local.json
+.claude/sessions/
+.claude/tasks/
+.handoffs/
+
+# Backup
+*~
+.#*
+\#*
