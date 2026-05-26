@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { snapshot_UNSTABLE } from "recoil";
-import { activeReportState, reportCollapsedState } from "../state";
+import { reportsState, reportCollapsedState } from "../state";
 import type { ActiveReport } from "../types";
 
 describe("report state atoms", () => {
-  it("defaults to no active report", () => {
+  it("defaults to empty reports list", () => {
     const snap = snapshot_UNSTABLE();
-    expect(snap.getLoadable(activeReportState).valueOrThrow()).toBeNull();
+    expect(snap.getLoadable(reportsState).valueOrThrow()).toEqual([]);
     expect(snap.getLoadable(reportCollapsedState).valueOrThrow()).toBe(false);
   });
 
@@ -15,9 +15,9 @@ describe("report state atoms", () => {
       name: "demo",
       title: "Demo",
       render_id: "abc",
-      payload: { kind: "pyplot", data: "x", mime: "image/png", width: 1, height: 1 },
+      payload: { kind: "html", url: "/api/html-report?id=demo&render_id=abc" },
     };
-    const snap = snapshot_UNSTABLE(({ set }) => set(activeReportState, r));
-    expect(snap.getLoadable(activeReportState).valueOrThrow()).toEqual(r);
+    const snap = snapshot_UNSTABLE(({ set }) => set(reportsState, [r]));
+    expect(snap.getLoadable(reportsState).valueOrThrow()).toEqual([r]);
   });
 });

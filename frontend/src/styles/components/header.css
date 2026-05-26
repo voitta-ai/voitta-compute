@@ -38,6 +38,15 @@ header .hbtn:hover {
 header .hbtn.active {
   background: var(--voitta-header-btn-bg-hover);
 }
+header .hbtn.theme-toggle {
+  display: flex;
+  align-items: center;
+  padding: 4px 5px;
+  opacity: 0.75;
+}
+header .hbtn.theme-toggle:hover {
+  opacity: 1;
+}
 
 /* provider chip — current provider name; click to open Settings */
 header .provider-chip {

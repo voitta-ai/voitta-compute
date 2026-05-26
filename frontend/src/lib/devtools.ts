@@ -211,7 +211,7 @@ function installXHR(store: DevtoolsStore): void {
         } catch { /**/ }
         entry.res_body = truncate(xhr.responseText);
       });
-      return origSend(body);
+      return origSend(body as XMLHttpRequestBodyInit | Document | null | undefined);
     };
 
     return xhr;

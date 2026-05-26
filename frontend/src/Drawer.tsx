@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatInteract, useChatSession } from "@chainlit/react-client";
 import { useSetRecoilState } from "recoil";
 import { useSettings } from "./lib/useSettings";
+import { saveSettings } from "./lib/settings";
 import ChatPane from "./ChatPane";
 import SettingsView from "./SettingsView";
 import CallFnRouter from "./lib/CallFnRouter";
@@ -195,6 +196,50 @@ export default function Drawer({ backendOrigin }: Props) {
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
                   <path d="M1 4h5l1.5 1.5H15V13H1V4z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
                 </svg>
+              </button>
+              <button
+                className="hbtn theme-toggle"
+                type="button"
+                title={(() => {
+                  const eff = settings.theme === "auto"
+                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : settings.theme;
+                  return eff === "dark" ? "Switch to light" : "Switch to dark";
+                })()}
+                aria-label="Toggle color scheme"
+                onClick={() => {
+                  const eff = settings.theme === "auto"
+                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : settings.theme;
+                  saveSettings(backendOrigin, { theme: eff === "dark" ? "light" : "dark" });
+                }}
+              >
+                {(() => {
+                  const eff = settings.theme === "auto"
+                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : settings.theme;
+                  return eff === "dark"
+                    ? (
+                      // sun
+                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                        <circle cx="8" cy="8" r="3" />
+                        <line x1="8" y1="1" x2="8" y2="3" />
+                        <line x1="8" y1="13" x2="8" y2="15" />
+                        <line x1="1" y1="8" x2="3" y2="8" />
+                        <line x1="13" y1="8" x2="15" y2="8" />
+                        <line x1="2.93" y1="2.93" x2="4.34" y2="4.34" />
+                        <line x1="11.66" y1="11.66" x2="13.07" y2="13.07" />
+                        <line x1="13.07" y1="2.93" x2="11.66" y2="4.34" />
+                        <line x1="4.34" y1="11.66" x2="2.93" y2="13.07" />
+                      </svg>
+                    )
+                    : (
+                      // moon
+                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13.5 10A6 6 0 0 1 6 2.5a5.5 5.5 0 1 0 7.5 7.5z" />
+                      </svg>
+                    );
+                })()}
               </button>
               <button
                 className="hbtn"
