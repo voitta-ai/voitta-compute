@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Voitta Chainlit menu-bar .app via briefcase.
+# Build the Voitta Compute menu-bar .app via briefcase.
 #
 # Lives at the repo root because briefcase writes build/ and dist/
 # next to its manifest (also at the repo root).
@@ -16,8 +16,8 @@
 #   roman semeine (KU3WTX9RXB)``.
 #
 # Output:
-#   build/voitta-chainlit/macos/app/Voitta Chainlit.app
-#   dist/Voitta Chainlit-<VERSION>.dmg   (with --package or --release)
+#   build/voitta-compute/macos/app/Voitta Compute.app
+#   dist/Voitta Compute-<VERSION>.dmg   (with --package or --release)
 #
 # Notarisation prerequisite (one-time):
 #   xcrun notarytool store-credentials voitta-notary \
@@ -119,7 +119,7 @@ echo "[build_app] building version $VERSION"
 
 # Stamp the version into the package so the frozen .app can read it at runtime
 # without relying on importlib.metadata (which may not be wired up by briefcase).
-echo "__version__ = \"$VERSION\"" > "$ROOT/src/voitta_chainlit/_version.py"
+echo "__version__ = \"$VERSION\"" > "$ROOT/src/voitta_compute/_version.py"
 
 # ---------------------------------------------------------------------------
 # 3. Build frontend
@@ -172,9 +172,9 @@ _build_wheel_from_sdist "syncer-"     "syncer==2.0.3"
 _build_wheel_from_sdist "lazify-"     "Lazify==0.4.0"
 
 # ---------------------------------------------------------------------------
-# 5. Stage resources into src/voitta_chainlit/resources/
+# 5. Stage resources into src/voitta_compute/resources/
 # ---------------------------------------------------------------------------
-RES="$ROOT/src/voitta_chainlit/resources"
+RES="$ROOT/src/voitta_compute/resources"
 echo "[build_app] staging resources → $RES"
 
 # 5a. Frontend bundle
@@ -234,7 +234,7 @@ fi
 echo "[build_app] briefcase build…"
 "$BRIEFCASE" build macOS app 2>&1 | grep -v "^$" | sed 's/^/  /'
 
-echo "[build_app] .app built: build/voitta-chainlit/macos/app/Voitta Chainlit.app"
+echo "[build_app] .app built: build/voitta-compute/macos/app/Voitta Compute.app"
 
 # ---------------------------------------------------------------------------
 # 7. Package (DMG) + signing + notarisation

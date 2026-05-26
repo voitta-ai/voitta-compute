@@ -200,7 +200,7 @@ def get_server() -> FastMCP:
     if _SERVER is not None:
         return _SERVER
 
-    mcp = FastMCP("voitta-bookmarklet-debug")
+    mcp = FastMCP("voitta-compute-debug")
 
     @mcp.tool()
     async def mcp_session_check(session_id: str, timeout_s: int = 5) -> dict:

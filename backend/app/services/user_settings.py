@@ -28,7 +28,7 @@ from typing import Any
 
 
 # Sourced from ``app.config`` so the chainlit build keeps its own
-# settings file (``~/.config/voitta-bookmarklet-chainlit/settings.json``)
+# settings file (``~/.config/voitta-compute/settings.json``)
 # rather than clobbering / inheriting the legacy bookmarklet's blob.
 from app.config import USER_CONFIG_DIR, USER_SETTINGS_PATH
 

@@ -9,7 +9,7 @@
 //
 //   * OAuth section — Configure clientId/clientSecret → Connect →
 //     poll /api/google/status → Disconnect. The BE persists tokens in
-//     ``~/.config/voitta-bookmarklet-chainlit/settings.json``; this UI
+//     ``~/.config/voitta-compute/settings.json``; this UI
 //     just kicks the flow.
 //
 //   * No-OAuth pickup fallback — dotted-path settings
@@ -66,7 +66,7 @@ export default function GoogleSettingsPanel({ backendOrigin }: Props) {
     <div className="plugin-settings-panel google-settings">
       <GoogleDriveSection backendOrigin={backendOrigin} />
 
-      <hr style={{ margin: "20px 0", border: 0, borderTop: "1px solid var(--voitta-border, #d1d5db)" }} />
+      <hr style={{ margin: "20px 0", border: 0, borderTop: "1px solid var(--voitta-border)" }} />
 
       <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>No-OAuth pickup fallback</h3>
       <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -233,8 +233,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
         <button
           type="button"
           onClick={() => setConfigureOpen((v) => !v)}
-          className="save-btn"
-          style={{ background: "#6b7280" }}
+          className="secondary-btn"
         >
           {configureOpen ? "Cancel" : "Configure"}
         </button>
@@ -252,7 +251,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
       )}
 
       {err && (
-        <p className="muted" style={{ color: "#b00020" }}>
+        <p className="status err" style={{ marginTop: 6 }}>
           {err}
         </p>
       )}
@@ -385,15 +384,7 @@ function ConfigureForm({
   }
 
   return (
-    <div
-      style={{
-        marginTop: 12,
-        padding: 12,
-        border: "1px solid #d1d5db",
-        borderRadius: 6,
-        background: "#f9fafb",
-      }}
-    >
+    <div className="configure-form">
       <p className="muted" style={{ marginTop: 0 }}>
         Upload <code>credentials.json</code> from Google Cloud Console, paste
         the JSON, or fill the fields manually. The redirect URI registered
@@ -402,12 +393,7 @@ function ConfigureForm({
       </p>
 
       <label>Upload JSON file</label>
-      <input
-        type="file"
-        accept=".json,application/json"
-        onChange={onFileChange}
-        style={{ marginTop: 4 }}
-      />
+      <input type="file" accept=".json,application/json" onChange={onFileChange} />
 
       <label style={{ marginTop: 10 }}>Or paste JSON</label>
       <textarea
@@ -415,36 +401,22 @@ function ConfigureForm({
         onChange={(e) => setPasteJson(e.currentTarget.value)}
         rows={4}
         spellCheck={false}
-        style={{
-          width: "100%",
-          marginTop: 4,
-          padding: "7px 10px",
-          border: "1px solid #d1d5db",
-          borderRadius: 5,
-          font: "12px ui-monospace, Menlo, Consolas, monospace",
-          resize: "vertical",
-        }}
+        style={{ font: "12px var(--voitta-font-mono)" }}
         placeholder='{"web": {"client_id": "...", "client_secret": "...", ...}}'
       />
       <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
         <button
           type="button"
           onClick={onParseClick}
-          className="save-btn"
-          style={{ background: "#6b7280", padding: "5px 12px", fontSize: 12 }}
+          className="secondary-btn"
+          style={{ padding: "5px 12px", fontSize: 12 }}
         >
           Parse JSON
         </button>
-        {parseErr && (
-          <span className="status err" style={{ fontSize: 11 }}>
-            {parseErr}
-          </span>
-        )}
+        {parseErr && <span className="status err" style={{ fontSize: 11 }}>{parseErr}</span>}
       </div>
 
-      <label htmlFor="g-client-id" style={{ marginTop: 12 }}>
-        Client ID
-      </label>
+      <label htmlFor="g-client-id" style={{ marginTop: 12 }}>Client ID</label>
       <input
         id="g-client-id"
         type="text"
@@ -470,7 +442,7 @@ function ConfigureForm({
       />
 
       {connected && (
-        <p className="muted" style={{ color: "#92400e", marginTop: 8 }}>
+        <p className="muted status" style={{ marginTop: 8, color: "var(--voitta-warn-fg)" }}>
           Saving will disconnect the current Drive session — the existing
           tokens belong to the old client.
         </p>
@@ -484,16 +456,11 @@ function ConfigureForm({
           type="button"
           onClick={() => onClose(false)}
           disabled={saving}
-          className="save-btn"
-          style={{ background: "#6b7280" }}
+          className="secondary-btn"
         >
           Cancel
         </button>
-        {saveErr && (
-          <span className="status err" style={{ fontSize: 11 }}>
-            {saveErr}
-          </span>
-        )}
+        {saveErr && <span className="status err" style={{ fontSize: 11 }}>{saveErr}</span>}
       </div>
     </div>
   );

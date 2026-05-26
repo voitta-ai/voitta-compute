@@ -73,7 +73,7 @@ ONCE in the manifest. Per-tool overrides win.
   paths (`PROJECT_ROOT`, `DOCS_DIR`, `PLUGINS_DIR`, `RAG_DIR`), TLS
   cert paths, host/port, `MAX_TOKENS`, `MAX_TOOL_ITERATIONS`.
 
-- **Per-user settings** — `~/.config/voitta-bookmarklet-chainlit/settings.json`,
+- **Per-user settings** — `~/.config/voitta-compute/settings.json`,
   read at chat start and on every turn (so settings changes take
   effect without restarting the session). Holds `provider`,
   `api_keys[provider]`, `models[provider]`.

@@ -1,6 +1,6 @@
 """Typed view over the raw settings blob in :mod:`app.services.user_settings`.
 
-The settings file lives at ``~/.config/voitta-bookmarklet-chainlit/settings.json``
+The settings file lives at ``~/.config/voitta-compute/settings.json``
 and stores everything in one nested object:
 
     {

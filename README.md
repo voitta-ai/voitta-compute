@@ -1,4 +1,4 @@
-# voitta-bookmarklet-chainlit
+# Voitta Compute
 
 LLM assistant injected into any web page via a bookmarklet. Chainlit
 owns the chat context; the React frontend talks to it through
@@ -8,13 +8,13 @@ serves both the Chainlit socket and the built bookmarklet bundle.
 ## Layout
 
 ```
-voitta-bookmarklet-chainlit/
+voitta-compute/
 ├── backend/          FastAPI + Chainlit, agent loop, tool registry
 ├── frontend/         Vite IIFE bundle, React widget, primitives
 ├── plugins/          Host-scoped extensions (manifest + BE module + FE widget + docs + prompt)
 ├── docs/             *** MASTER COPY of all prose docs ***
 │                     Bundled into the .app by build_app.sh (step 5b).
-│                     DO NOT create or edit docs under src/voitta_chainlit/resources/docs/ —
+│                     DO NOT create or edit docs under src/voitta_compute/resources/docs/ —
 │                     that directory is build-generated and gitignored.
 ├── lib-sources/      Vendored libraries as git submodules (see below)
 ├── rag/              Built RAG indexes (gitignored — rebuildable)
@@ -28,7 +28,7 @@ voitta-bookmarklet-chainlit/
 > - Core docs → `docs/`
 > - Plugin docs → `plugins/<name>/docs/`
 >
-> `build_app.sh` copies both into `src/voitta_chainlit/resources/` at build
+> `build_app.sh` copies both into `src/voitta_compute/resources/` at build
 > time. The `resources/` subdirectories (`docs/`, `frontend_dist/`,
 > `plugins/`, `vendor_js/`) are gitignored — never edit them directly.
 
@@ -39,8 +39,8 @@ for the plugin model.
 ## Setup
 
 ```bash
-git clone <url> voitta-bookmarklet-chainlit
-cd voitta-bookmarklet-chainlit
+git clone <url> voitta-compute
+cd voitta-compute
 git submodule update --init --recursive --depth 1   # pulls lib-sources/*
 ./build.sh
 ```
@@ -73,7 +73,7 @@ bookmarks bar.
 ## Configuration
 
 Per-user settings at
-`~/.config/voitta-bookmarklet-chainlit/settings.json`:
+`~/.config/voitta-compute/settings.json`:
 
 ```json
 {

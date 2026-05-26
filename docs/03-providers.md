@@ -55,7 +55,7 @@ quirks.
 
 ## Choosing a provider at runtime
 
-Settings JSON at `~/.config/voitta-bookmarklet-chainlit/settings.json`:
+Settings JSON at `~/.config/voitta-compute/settings.json`:
 
 ```json
 {

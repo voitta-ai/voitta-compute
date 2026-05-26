@@ -10,30 +10,30 @@
 [tool.briefcase]
 project_name = "Voitta"
 bundle = "ai.voitta"
-version = "0.1.100"
+version = "0.1.108"
 url = "https://voitta.ai"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
 author = "Voitta"
 author_email = "info@voitta.ai"
 
-[tool.briefcase.app.voitta-chainlit]
-# formal_name → .app filename ("Voitta Chainlit.app") and DMG name.
-# The table key ("voitta-chainlit") becomes the build-dir slug.
-formal_name = "Voitta Chainlit"
-description = "Local Chainlit-based AI assistant with bookmarklet injection."
+[tool.briefcase.app.voitta-compute]
+# formal_name → .app filename ("Voitta Compute.app") and DMG name.
+# The table key ("voitta-compute") becomes the build-dir slug.
+formal_name = "Voitta Compute"
+description = "Local AI assistant with compute and bookmarklet injection."
 icon = "icons/voitta"
 long_description = """
-Voitta Chainlit runs a local Chainlit + FastAPI backend accessible via
+Voitta Compute runs a local Chainlit + FastAPI backend accessible via
 a browser bookmarklet on any HTTPS page. macOS menu-bar shell, no Dock icon.
 """
 
 # Paths relative to this pyproject.toml (repo root).
-# - src/voitta_chainlit  : briefcase shim + bundled resources
+# - src/voitta_compute   : briefcase shim + bundled resources
 # - backend/app          : the actual application code
 # - scripts              : build_rag.py (importable by app.rag_build at runtime)
 sources = [
-    "src/voitta_chainlit",
+    "src/voitta_compute",
     "backend/app",
     "scripts",
 ]
@@ -64,7 +64,7 @@ requires = [
     "wheel",
 ]
 
-[tool.briefcase.app.voitta-chainlit.macOS]
+[tool.briefcase.app.voitta-compute.macOS]
 # arm64 only — universal2 doubles bundle size and scientific wheels
 # default to arm64-only anyway.
 universal_build = false

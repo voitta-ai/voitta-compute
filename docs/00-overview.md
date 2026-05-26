@@ -33,7 +33,7 @@ host page via primitives in the widget).
 ## Where things live
 
 ```
-voitta-bookmarklet-chainlit/
+voitta-compute/
 ├── backend/      FastAPI + Chainlit, agent loop, tool registry
 ├── frontend/     Vite IIFE bundle, React widget, primitives
 ├── plugins/      Host-scoped extensions (manifest + BE module + FE widget + docs + prompt)

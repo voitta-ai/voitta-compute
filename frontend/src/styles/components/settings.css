@@ -19,7 +19,9 @@
 }
 .view-settings input[type="text"],
 .view-settings input[type="number"],
-.view-settings select {
+.view-settings input[type="file"],
+.view-settings select,
+.view-settings textarea {
   width: 100%;
   padding: 7px 10px;
   margin-top: 4px;
@@ -29,6 +31,13 @@
   background: var(--voitta-bg);
   color: var(--voitta-text);
 }
+.view-settings textarea {
+  resize: vertical;
+}
+.view-settings input[type="file"] {
+  padding: 5px 8px;
+  font-size: 12px;
+}
 /* Mask API keys without using type=password (avoids Chrome's
    "Save password?" prompt). */
 .view-settings input.secret {
@@ -36,7 +45,8 @@
   text-security: disc;
 }
 .view-settings input:focus,
-.view-settings select:focus {
+.view-settings select:focus,
+.view-settings textarea:focus {
   outline: none;
   border-color: var(--voitta-accent);
   box-shadow: 0 0 0 2px var(--voitta-accent-tint);
@@ -81,6 +91,30 @@
 .view-settings .save-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.view-settings .secondary-btn {
+  padding: 8px 16px;
+  background: var(--voitta-surface);
+  color: var(--voitta-text-muted);
+  border: 1px solid var(--voitta-border);
+  border-radius: 5px;
+  font: 600 13px var(--voitta-font-sans);
+  cursor: pointer;
+}
+.view-settings .secondary-btn:hover {
+  color: var(--voitta-text);
+  border-color: var(--voitta-text-muted);
+}
+.view-settings .secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.view-settings .configure-form {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+  background: var(--voitta-surface);
 }
 .view-settings .status {
   font-size: 12px;

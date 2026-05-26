@@ -676,10 +676,10 @@ def main() -> None:
     # so set it early — before any chainlit import can happen.
     os.environ.setdefault("CHAINLIT_APP_ROOT", str(PROJECT_ROOT.parent))
 
-    # The frozen .app bundles the frontend under voitta_chainlit/resources/.
+    # The frozen .app bundles the frontend under voitta_compute/resources/.
     # Set VOITTA_FRONTEND_DIST so app.config.FRONTEND_DIST resolves correctly
     # before any import of app.config happens inside the uvicorn worker.
-    _bundle_fe = Path(__file__).resolve().parents[2] / "voitta_chainlit" / "resources" / "frontend_dist"
+    _bundle_fe = Path(__file__).resolve().parents[2] / "voitta_compute" / "resources" / "frontend_dist"
     if _bundle_fe.is_dir():
         os.environ.setdefault("VOITTA_FRONTEND_DIST", str(_bundle_fe))
 

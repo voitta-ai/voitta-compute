@@ -90,7 +90,7 @@ from pathlib import Path
 from rdflib import Graph, Literal, Namespace, URIRef, XSD
 
 P = Namespace("urn:process:")
-GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Chainlit/process.ttl"
+GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Compute/process.ttl"
 
 
 def load_or_create() -> Graph:
@@ -276,7 +276,7 @@ from pathlib import Path
 from rdflib import Graph, URIRef, Literal, Namespace
 
 P = Namespace("urn:process:")
-GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Chainlit/process.ttl"
+GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Compute/process.ttl"
 
 EDGE_COLORS = {
     "approves":      "#27ae60",
@@ -495,7 +495,7 @@ from app.tools.registry import ToolCtx, ToolSpec, registry
 from app.config import PROJECT_ROOT
 from pathlib import Path
 
-GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Chainlit/process.ttl"
+GRAPH_PATH = Path.home() / "Library/Application Support/Voitta Compute/process.ttl"
 
 
 async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:

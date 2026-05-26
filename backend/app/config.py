@@ -1,7 +1,7 @@
 """Process-wide settings — module-level constants.
 
 Per-user settings (provider, api_key, model) live at
-``~/.config/voitta-bookmarklet-chainlit/settings.json`` and are read at
+``~/.config/voitta-compute/settings.json`` and are read at
 chat-start by ``app.settings``.
 
 The base system prompt is no longer a constant here — it lives in
@@ -18,7 +18,7 @@ HOST = "127.0.0.1"
 PORT = 12358
 
 # When running as a packaged .app the launcher sets VOITTA_PROJECT_ROOT to
-# ~/Library/Application Support/Voitta Chainlit/backend so all derived paths
+# ~/Library/Application Support/Voitta Compute/backend so all derived paths
 # (certs, rag, plugins, docs) resolve into the writable user data dir rather
 # than the read-only bundle.
 _env_root = os.environ.get("VOITTA_PROJECT_ROOT")
@@ -26,11 +26,11 @@ PROJECT_ROOT = Path(_env_root) if _env_root else Path(__file__).resolve().parent
 
 # Mutable user data (scripts, python_storage) always lives in Application
 # Support — never inside the source tree or the read-only .app bundle.
-USER_DATA_ROOT = Path.home() / "Library" / "Application Support" / "Voitta Chainlit" / "backend"
+USER_DATA_ROOT = Path.home() / "Library" / "Application Support" / "Voitta Compute" / "backend"
 TLS_CERT_PATH = PROJECT_ROOT / "certs" / "127.0.0.1+1.pem"
 TLS_KEY_PATH = PROJECT_ROOT / "certs" / "127.0.0.1+1-key.pem"
 
-USER_CONFIG_DIR = Path.home() / ".config" / "voitta-bookmarklet-chainlit"
+USER_CONFIG_DIR = Path.home() / ".config" / "voitta-compute"
 USER_SETTINGS_PATH = USER_CONFIG_DIR / "settings.json"
 
 # Plugins live at the REPO root (sibling of backend/ and frontend/), not

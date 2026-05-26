@@ -18,7 +18,7 @@ import { cssText } from "./styles";
 // ``frontend/`` → ``../..`` = repo root → + ``/plugins/...``.
 import.meta.glob("../../plugins/*/frontend/widget.ts", { eager: true });
 
-const HOST_ID = "voitta-bookmarklet-host";
+const HOST_ID = "voitta-compute-host";
 
 function deriveBackendOrigin(): string {
   const cur = document.currentScript as HTMLScriptElement | null;

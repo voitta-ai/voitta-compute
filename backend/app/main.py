@@ -60,7 +60,7 @@ async def _lifespan(_app: FastAPI):
         yield
 
 
-app = FastAPI(title="voitta-bookmarklet-chainlit", lifespan=_lifespan)
+app = FastAPI(title="voitta-compute", lifespan=_lifespan)
 
 # CORS. The bookmarklet runs on third-party origins (drive.google.com,
 # enterprise.voitta.ai, ...) and needs to send credentialed requests to
@@ -1138,8 +1138,8 @@ def _serve_node_module(rel_path: str, package_label: str) -> FileResponse:
 
     # 1. Bundle resources (frozen .app)
     try:
-        import voitta_chainlit
-        bundle = Path(voitta_chainlit.__file__).resolve().parent / "resources" / "vendor_js" / filename
+        import voitta_compute
+        bundle = Path(voitta_compute.__file__).resolve().parent / "resources" / "vendor_js" / filename
         if bundle.is_file():
             return FileResponse(
                 bundle, media_type="application/javascript",

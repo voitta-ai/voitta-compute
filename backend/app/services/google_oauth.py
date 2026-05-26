@@ -6,7 +6,7 @@ proxy). Frontend's only role is the Settings panel button that opens
 window after persisting tokens.
 
 Storage: tokens land in ``settings.googleOAuth.tokens`` of the
-backend-owned settings file (``~/.config/voitta-bookmarklet/settings.json``,
+backend-owned settings file (``~/.config/voitta-compute/settings.json``,
 ``0600``). Same store as the LLM API keys — single source of truth.
 The OAuth client ID/secret are also there
 (``settings.googleOAuth.clientId``, ``…clientSecret``); they're treated
