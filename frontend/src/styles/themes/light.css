@@ -1,0 +1,155 @@
+/* Light theme — applied when ``data-theme`` is ``light`` or ``auto``
+ * (auto + prefers-color-scheme:light), and as the unconditional
+ * default for hosts that don't carry the attribute yet.
+ *
+ * The :host selector hits the shadow-root host element; data-theme
+ * lives on .root inside the shadow, so we use :host (no attr) for the
+ * default and then double-check the inner selector for explicit
+ * data-theme="light". Tokens are organised in the same order as the
+ * dark file so a side-by-side diff stays readable.
+ */
+
+:host,
+:host([data-theme="light"]),
+.root,
+.root[data-theme="light"] {
+  /* ── Surfaces ─────────────────────────────────────────────────── */
+  --voitta-bg:        #ffffff;
+  --voitta-surface:   #fafafa;
+  --voitta-border:    #e8e8e8;
+  --voitta-divider:   #e8e8e8;
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --voitta-text:       #1a1a1a;
+  --voitta-text-muted: #666666;
+  --voitta-text-faint: #9ca3af;
+
+  /* ── Accent (CTAs, pills, focused borders) ───────────────────── */
+  --voitta-accent:        #1a1a1a;
+  --voitta-accent-hover:  #333333;
+  --voitta-accent-fg:     #ffffff;
+  --voitta-accent-tint:   rgba(26, 26, 26, 0.12);
+
+  /* ── Header strip ─────────────────────────────────────────────── */
+  --voitta-header-bg:           #0f172a;
+  --voitta-header-fg:           #f1f5f9;
+  --voitta-header-rule:         #1e293b;
+  --voitta-header-icon:         #f1f5f9;
+  --voitta-header-muted:        rgba(241, 245, 249, 0.55);
+  --voitta-header-btn-bg:       rgba(241, 245, 249, 0.08);
+  --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.16);
+
+  /* ── Conversation bubbles ────────────────────────────────────── */
+  --voitta-user-bubble:    #f1f5f9;
+  --voitta-user-bubble-fg: #1a1a1a;
+
+  /* ── Tool-call chips ─────────────────────────────────────────── */
+  --voitta-tool-bg:     #f4f4f4;
+  --voitta-tool-border: #e0e0e0;
+
+  /* ── Stop button (red while a turn is streaming) ─────────────── */
+  --voitta-stop-bg:       #dc2626;   /* red-600 */
+  --voitta-stop-bg-hover: #b91c1c;   /* red-700 */
+
+  /* ── Scrollbars ──────────────────────────────────────────────── */
+  --voitta-scrollbar-thumb:       rgba(0, 0, 0, 0.22);
+  --voitta-scrollbar-thumb-hover: rgba(0, 0, 0, 0.42);
+  --voitta-scrollbar-track:       transparent;
+
+  /* ── Inline code + code blocks ───────────────────────────────── */
+  --voitta-code-bg:        rgba(0, 0, 0, 0.06);
+  --voitta-code-block-bg:  #1e1e1e;
+  --voitta-code-block-fg:  #eeeeee;
+  --voitta-link-fg:        #1766c4;
+
+  /* ── Rich blocks ─────────────────────────────────────────────── */
+  --voitta-rich-text-bg: #f8f8f8;
+  --voitta-heatmap-bg:   #fafafa;
+
+  /* ── Logs view ───────────────────────────────────────────────── */
+  --voitta-log-bg:           #1e1e1e;
+  --voitta-log-fg:           #dddddd;
+  --voitta-log-toolbar-bg:   #2a2a2a;
+  --voitta-log-toolbar-rule: #000000;
+  --voitta-log-title-fg:     #cfd8dc;
+  --voitta-log-btn-bg:       #3a3a3a;
+  --voitta-log-btn-bg-hover: #4a4a4a;
+  --voitta-log-btn-border:   #555555;
+  --voitta-log-line-rule:    #2a2a2a;
+  --voitta-log-body-bg:      #15191e;
+  --voitta-log-body-rule:    #444444;
+  --voitta-log-error-fg:     #ff8080;
+  --voitta-log-error-rule:   #ff5050;
+  --voitta-log-warn-fg:      #ffcc66;
+  --voitta-log-warn-rule:    #d49b3a;
+  --voitta-log-info-fg:      #dddddd;
+
+  /* ── Artifacts panel ─────────────────────────────────────────── */
+  --voitta-art-titlebar-bg-from: #f3f3f3;
+  --voitta-art-titlebar-bg-to:   #e6e6e6;
+  --voitta-art-titlebar-rule:    #d4d4d8;
+  --voitta-art-window-border:    #d4d4d8;
+  --voitta-art-btn-bg-hover:     #f1f1f1;
+  --voitta-art-btn-border-hover: #9c9c9c;
+  --voitta-art-row-rule:         #f4f4f5;
+  --voitta-art-row-stripe:       #fafafa;
+  --voitta-art-row-hover:        #e8f0fe;
+  --voitta-art-row-selected-bg:  #0a84ff;
+  --voitta-art-row-selected-fg:  #ffffff;
+  --voitta-art-ctxmenu-bg:       #ffffff;
+  --voitta-art-ctxmenu-border:   #d4d4d8;
+  --voitta-art-ctxmenu-hover:    #0a84ff;
+  --voitta-art-ctxmenu-fg:       #1f2937;
+  --voitta-art-ctxmenu-fg-hover: #ffffff;
+  --voitta-art-ctxmenu-disabled: #9ca3af;
+  --voitta-art-ctxmenu-shadow:   0 6px 24px rgba(0, 0, 0, 0.15);
+  --voitta-art-footer-bg:        #fafafa;
+  --voitta-art-footer-rule:      #ececec;
+  --voitta-art-badge-bg:         #eef2f7;
+  --voitta-art-badge-border:     #dbe2ea;
+  --voitta-art-badge-fg:         #4b5563;
+  --voitta-art-size-fg:          #4b5563;
+
+  /* ── Status colours ──────────────────────────────────────────── */
+  --voitta-warn-bg:      #fefbf3;
+  --voitta-warn-border:  #e2c060;
+  --voitta-warn-fg:      #7a5810;
+  --voitta-error-bg:     #fef2f2;
+  --voitta-error-border: #fecaca;
+  --voitta-error-fg:     #b91c1c;
+  --voitta-ok-fg:        #047857;
+
+  /* ── Flow-chart nodes ────────────────────────────────────────── */
+  --voitta-flow-grid: #d4d4d8;
+
+  --voitta-flow-tone-default-bg:     #1e293b;
+  --voitta-flow-tone-default-fg:     #f1f5f9;
+  --voitta-flow-tone-default-border: #cbd5e1;
+  --voitta-flow-edge-default:        #475569;
+
+  --voitta-flow-tone-info-bg:        #0c4a6e;
+  --voitta-flow-tone-info-fg:        #e0f2fe;
+  --voitta-flow-tone-info-border:    #7dd3fc;
+  --voitta-flow-edge-info:           #0284c7;
+
+  --voitta-flow-tone-success-bg:     #064e3b;
+  --voitta-flow-tone-success-fg:     #d1fae5;
+  --voitta-flow-tone-success-border: #6ee7b7;
+  --voitta-flow-edge-success:        #059669;
+
+  --voitta-flow-tone-warning-bg:     #78350f;
+  --voitta-flow-tone-warning-fg:     #fef3c7;
+  --voitta-flow-tone-warning-border: #fcd34d;
+  --voitta-flow-edge-warning:        #d97706;
+
+  --voitta-flow-tone-critical-bg:    #7f1d1d;
+  --voitta-flow-tone-critical-fg:    #fee2e2;
+  --voitta-flow-tone-critical-border:#fca5a5;
+  --voitta-flow-edge-critical:       #dc2626;
+
+  --voitta-flow-node-bg:       #f8fafc;
+  --voitta-flow-node-fg:       #0f172a;
+  --voitta-flow-node-fg-muted: #475569;
+  --voitta-flow-node-fg-faint: #64748b;
+  --voitta-flow-node-border:   #cbd5e1;
+}

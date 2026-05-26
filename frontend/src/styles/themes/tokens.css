@@ -1,0 +1,20 @@
+/* Theme-agnostic design tokens.
+ *
+ * Shape, typography, and the pane-width default — values that are the
+ * same in every colour scheme. Palette tokens live in light.css /
+ * dark.css and override these per data-theme.
+ */
+
+:host {
+  /* ── Shape ───────────────────────────────────────────────────── */
+  --voitta-pane-width:    400px;
+  --voitta-radius:        6px;
+  --voitta-radius-sm:     4px;
+  --voitta-shadow:        -8px 0 24px rgba(15, 23, 42, 0.12);
+  --voitta-shadow-handle: -3px 2px 10px rgba(15, 23, 42, 0.22);
+
+  /* ── Typography ──────────────────────────────────────────────── */
+  --voitta-font-sans:    "Open Sans", system-ui, -apple-system, sans-serif;
+  --voitta-font-display: "Cormorant Garamond", Georgia, serif;
+  --voitta-font-mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

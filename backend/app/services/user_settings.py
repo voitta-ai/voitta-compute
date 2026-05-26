@@ -27,72 +27,39 @@ from pathlib import Path
 from typing import Any
 
 
-SETTINGS_DIR = Path.home() / ".config" / "voitta-bookmarklet"
-SETTINGS_PATH = SETTINGS_DIR / "settings.json"
+# Sourced from ``app.config`` so the chainlit build keeps its own
+# settings file (``~/.config/voitta-bookmarklet-chainlit/settings.json``)
+# rather than clobbering / inheriting the legacy bookmarklet's blob.
+from app.config import USER_CONFIG_DIR, USER_SETTINGS_PATH
+
+SETTINGS_DIR = USER_CONFIG_DIR
+SETTINGS_PATH = USER_SETTINGS_PATH
 
 
-def js_compute_enabled() -> bool:
-    """Whether the browser-side compute paradigm (JS buffers, in-browser
-    plotting via Chart.js, ``buffer_eval`` JS sandbox, parser-to-buffer
-    flow) is enabled.
-
-    Default is **False** — the project has switched to a Python-only
-    workflow (``download_to_python_storage`` + compute scripts). The
-    JS-compute tool family is gated behind this flag so the LLM only
-    sees one consistent paradigm at a time.
-
-    The user toggles this via the Settings panel. Cheap to call (one
-    file read); used as a ``ToolSpec.visibility_check`` so it runs on
-    every chat turn.
+def mcp_debug_enabled() -> bool:
+    """Whether the localhost-only MCP debugging endpoint at ``/mcp`` is
+    exposed. Default **False**: the surface lets external MCP clients
+    enumerate live bookmarklet sessions and eval JS in them, which is
+    exactly the level of privilege we want gated behind an explicit
+    user toggle. The tray-bar Settings dialog flips this; the
+    ``_MCPGate`` middleware (``app.routes.mcp``) reads it on every
+    request so toggling takes effect without a restart.
     """
     try:
-        return bool(read().get("jsCompute", False))
+        return bool(read().get("mcpDebugEnabled", False))
     except Exception:
         return False
 
 
-def mcp_cli_enabled() -> bool:
-    """Whether the localhost-only CLI back-channel (``/cli/*``) AND the
-    embedded MCP server (``/mcp``) are exposed.
-
-    Default is **False** — both are off unless the user explicitly
-    flips the switch from the tray Settings dialog. The flag gates the
-    whole surface because the two share the same loopback contract
-    (eval arbitrary JS in attached tabs, drive the agent loop). Read on
-    every request via ``app.routes.cli._localhost_only`` and the
-    ``/mcp`` gate middleware, so toggling takes effect without a
-    backend restart.
-    """
-    try:
-        return bool(read().get("mcpCliEnabled", False))
-    except Exception:
-        return False
-
-
-def set_mcp_cli_enabled(enabled: bool) -> None:
-    """Persist the MCP/CLI kill switch. Used by the tray Settings UI."""
-    blob = {}
+def set_mcp_debug_enabled(enabled: bool) -> None:
+    """Persist the MCP-debug kill switch. Used by the tray menu."""
+    blob: dict[str, Any] = {}
     try:
         blob = read()
     except Exception:
         blob = {}
-    blob["mcpCliEnabled"] = bool(enabled)
+    blob["mcpDebugEnabled"] = bool(enabled)
     write(blob)
-
-
-def web_fetch_enabled() -> bool:
-    """Whether the open-web retrieval tool (``web_fetch``) is exposed
-    to the LLM.
-
-    Default is **True** — the tool is on unless the user explicitly
-    turns it off in the Settings panel. Older settings blobs that
-    predate this field still get the default-on behaviour, which is
-    why we test ``is False`` rather than truthiness.
-    """
-    try:
-        return read().get("webFetch") is not False
-    except Exception:
-        return True
 
 
 def read() -> dict[str, Any]:

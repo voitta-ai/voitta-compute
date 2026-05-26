@@ -1,0 +1,56 @@
+/* ─── header ─────────────────────────────────────────────────────────────── */
+header {
+  padding: 10px 14px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--voitta-header-rule);
+  flex-shrink: 0;
+}
+header .brand-mark {
+  color: var(--voitta-header-icon);
+  font-size: 14px;
+  line-height: 1;
+}
+header .brand-name {
+  font-family: var(--voitta-font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.02em;
+}
+header .spacer {
+  flex: 1;
+}
+header .hbtn {
+  background: transparent;
+  border: none;
+  color: var(--voitta-header-fg);
+  font: 16px/1 var(--voitta-font-sans);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--voitta-radius-sm);
+}
+header .hbtn:hover {
+  background: var(--voitta-header-btn-bg-hover);
+}
+header .hbtn.active {
+  background: var(--voitta-header-btn-bg-hover);
+}
+
+/* provider chip — current provider name; click to open Settings */
+header .provider-chip {
+  font: 600 10px/1 var(--voitta-font-sans);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  background: var(--voitta-header-btn-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-btn-bg-hover);
+  border-radius: 999px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+header .provider-chip:hover {
+  background: var(--voitta-header-btn-bg-hover);
+}

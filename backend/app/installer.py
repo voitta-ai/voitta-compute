@@ -1,23 +1,16 @@
 """First-launch installer for heavy Python packages.
 
-These are pulled out of the bundle to keep the .app at ~280 MB instead
-of ~870 MB. On first launch ``app.desktop.main`` calls :func:`is_complete`;
-if False it shows :class:`app.install_window.InstallWindow` and runs
-:func:`install_all` on a worker thread.
+These are pulled out of the bundle to keep the .app smaller. On first
+launch the desktop entry point calls :func:`is_complete`; if False it
+shows the installer window (phase 1) and runs :func:`install_all` on
+a worker thread.
 
-State persists via ``install_state.json`` next to the user
-site-packages dir, so a partial install (network drop mid-way) resumes
-on the next launch instead of redoing everything.
+State is tracked in ``<user_data>/install_state.json`` so a partial
+install resumes on the next launch instead of redoing everything.
 
-The state file records ``app_version`` and ``installed: {name: spec}``.
-On launch:
-  • app_version mismatch (binary upgraded since last successful
-    install) → ``is_complete()`` returns False and ``install_all``
-    wipes ``userbase/`` for a clean reinstall. python_storage/ /
-    scripts/ / settings are NOT touched.
-  • Pip-spec change for an individual package (e.g. ``scipy>=1.11`` →
-    ``scipy>=1.13``) → only that package is reinstalled.
-  • Otherwise → fast path; import probe alone decides.
+The state file records ``app_version`` and ``installed: [name, ...]``.
+A version bump (new .app) wipes ``userbase/`` and ``rag/`` via
+``ensure_fresh_deploy`` so pip and RAG both rerun cleanly.
 """
 
 from __future__ import annotations
@@ -33,47 +26,33 @@ import time
 from pathlib import Path
 from typing import Callable
 
-# (import-name, pip-spec).
-#
-# - The import name is what we probe to detect "already installed."
-# - The pip-spec is what we hand to ``pip install``.
-# - Order matters: pip resolves later packages against what's already
-#   on disk from earlier ones, avoiding redundant downloads. Roughly
-#   bottom-up by dep tree (scipy/pandas before things that depend on
-#   them; bokeh before panel; chromadb last because it pulls the
-#   biggest grpc/onnxruntime stack).
+# (import-name, pip-spec)
 _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
-    ("scipy",         "scipy>=1.11"),
-    ("pandas",        "pandas"),
-    ("matplotlib",    "matplotlib>=3.8"),
-    ("plotly",        "plotly>=5.20"),
-    ("bokeh",         "bokeh"),
-    ("panel",         "panel>=1.5"),
-    ("holoviews",     "holoviews>=1.20"),
-    ("hvplot",        "hvplot>=0.10"),
-    ("bokeh_fastapi", "bokeh-fastapi>=0.0.5"),
-    ("tables",        "tables>=3.9"),
-    ("netCDF4",       "netCDF4>=1.6"),
-    ("h5netcdf",      "h5netcdf>=1.3"),
-    ("hdf5plugin",    "hdf5plugin>=4.3"),
-    ("xarray",        "xarray>=2024.1"),
-    ("chromadb",      "chromadb>=0.5.20"),
+    ("fastmcp",    "fastmcp>=2.0"),
+    ("chainlit",   "chainlit==2.11.1"),
+    ("anthropic",  "anthropic>=0.39"),
+    ("openai",     "openai>=1.50"),
+    ("google.genai", "google-genai>=0.3"),
+    ("numpy",      "numpy>=1.26"),
+    ("PIL",        "pillow>=10.0"),
+    ("pypdf",      "pypdf>=5.0"),
+    ("bm25s",      "bm25s>=0.2.6"),
+    ("Stemmer",    "PyStemmer>=2.2.0"),
+    ("scipy",      "scipy>=1.11"),
+    ("pandas",     "pandas"),
+    ("matplotlib", "matplotlib>=3.8"),
+    ("plotly",     "plotly>=5.20"),
+    ("chromadb",   "chromadb>=0.5.20"),  # biggest: pulls onnxruntime + grpc
+    ("rdflib",     "rdflib>=7.0"),
+    ("networkx",   "networkx>=3.0"),
 ]
 
 
 def _plugin_dependencies() -> list[tuple[str, str]]:
-    """Walk every plugin's manifest.json and collect its
-    ``python_dependencies`` entries.
-
-    Plugins declare deps as ``[{"import": "pyarrow", "spec":
-    "pyarrow>=15.0"}, ...]``. We dedupe by import name so two plugins
-    asking for the same package don't double-install.
-    """
+    """Walk plugin manifests and collect ``python_dependencies`` entries."""
     import json as _json
 
-    seen: dict[str, str] = {}  # import_name -> spec
-    # Two layouts: source-checkout /plugins, and bundle's
-    # src/voitta/resources/plugins. Same as the discovery loader.
+    seen: dict[str, str] = {}
     candidate_dirs: list[Path] = []
     here = Path(__file__).resolve()
     repo_root = here.parents[2]
@@ -81,8 +60,8 @@ def _plugin_dependencies() -> list[tuple[str, str]]:
         if d.is_dir():
             candidate_dirs.append(d)
     try:
-        import voitta as _voitta
-        bundled = Path(_voitta.__file__).resolve().parent / "resources" / "plugins"
+        import voitta_chainlit
+        bundled = Path(voitta_chainlit.__file__).resolve().parent / "resources" / "plugins"
         if bundled.is_dir() and bundled not in candidate_dirs:
             candidate_dirs.append(bundled)
     except Exception:
@@ -109,107 +88,71 @@ def _plugin_dependencies() -> list[tuple[str, str]]:
     return list(seen.items())
 
 
-# Plugins extend the install set without editing core. Order: core
-# packages first (heavier deps the plugin packages will resolve
-# against), then plugin extras.
 HEAVY_PACKAGES: list[tuple[str, str]] = _CORE_HEAVY_PACKAGES + _plugin_dependencies()
 
-# Cute rotating commentary for the progress window — one line per
-# heavy package, with a fallback for anything not in this map. Keeps
-# users entertained during the ~5 min download. The spec is the
-# pip-install string (e.g. "scipy>=1.11"), so we key off the import
-# name where possible.
 PACKAGE_BLURBS: dict[str, str] = {
-    "scipy":         "scipy: every numerical operation you'll ever need…",
-    "pandas":        "pandas: tables, frames, the entire data-science Sunday school…",
-    "matplotlib":    "matplotlib: classic plotting library, may take a moment…",
-    "plotly":        "plotly: interactive 3D + WebGL charts, great for big meshes…",
-    "bokeh":         "bokeh: interactive plots — hover, zoom, the works…",
-    "panel":         "panel: the dashboard framework that makes reports clickable…",
-    "holoviews":     "holoviews: high-level plot grammar, sits on top of bokeh…",
-    "hvplot":        "hvplot: one .hvplot() call instead of fifty matplotlib lines…",
-    "bokeh_fastapi": "bokeh-fastapi: glue so Panel reports run inside our backend…",
-    "tables":        "tables (PyTables): HDF5 fluent API for big arrays…",
-    "netCDF4":       "netCDF4: scientific data format, lives next to HDF5…",
-    "h5netcdf":      "h5netcdf: pure-h5py netCDF reader, no extra C deps…",
-    "hdf5plugin":    "hdf5plugin: extra compression codecs (Blosc, BitShuffle)…",
-    "xarray":        "xarray: labelled n-dimensional arrays — pandas for ndarrays…",
-    "chromadb":      "chromadb: vector database for the RAG semantic index…",
+    "chainlit":    "chainlit: chat UI framework…",
+    "anthropic":   "anthropic: Claude API client…",
+    "openai":      "openai: OpenAI API client…",
+    "google.genai":"google-genai: Google AI client…",
+    "numpy":       "numpy: numerical arrays…",
+    "PIL":         "pillow: image processing…",
+    "pypdf":       "pypdf: PDF reading…",
+    "scipy":       "scipy: numerical computing — FFT, stats, linear algebra…",
+    "pandas":      "pandas: data tables and time series…",
+    "matplotlib":  "matplotlib: static and animated plots…",
+    "plotly":      "plotly: interactive WebGL charts…",
+    "chromadb":    "chromadb: vector database for RAG search (biggest download)…",
+    "rdflib":      "rdflib: RDF knowledge graph — triples, SPARQL, OWL…",
+    "networkx":    "networkx: graph algorithms and layout for flowcharts…",
 }
 
-
-# Progress callback signature: (current_count, total, status_label, log_line_or_None)
 ProgressCb = Callable[[int, int, str, "str | None"], None]
 
-
-# When the installer fails, ``install_all`` stashes a multi-line
-# diagnostic here. ``app.desktop`` reads it after `_worker` returns
-# False to feed real detail into the user-visible alert (failing
-# package, pip exit code, last lines of pip's stderr) instead of the
-# previous "Some required Python packages could not be installed."
-# placeholder. Module-level state is fine — install_all is only ever
-# called from one worker thread.
 last_failure_detail: str = ""
 
 
 def _user_site() -> Path:
-    """Where pip --prefix lays out installed site-packages.
-
-    Mirrors the resolution the launcher does in desktop_launcher.py.
-    The state file lives next to ``userbase/`` (not inside it) so it
-    survives a manual purge of installed packages.
-    """
     prefix = os.environ.get("PIP_PREFIX")
     py_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
     if prefix:
         return Path(prefix) / "lib" / py_dir / "site-packages"
     return (
         Path.home()
-        / "Library"
-        / "Application Support"
-        / "Voitta Bookmarklet"
-        / "userbase"
-        / "lib"
-        / py_dir
-        / "site-packages"
+        / "Library" / "Application Support" / "Voitta Chainlit"
+        / "userbase" / "lib" / py_dir / "site-packages"
     )
 
 
 def _user_data_root() -> Path:
-    """``<user_data>`` — the directory that contains ``userbase/``,
-    ``rag/``, ``python_storage/``, ``scripts/``, etc.
-
-    Path math: ``_user_site()`` ends at
-    ``userbase/lib/pythonX.Y/site-packages``; four ``parent``s back is
-    the user data root.
-    """
+    # _user_site() = <user_data>/userbase/lib/pythonX.Y/site-packages
+    # four parents up = <user_data>
     return _user_site().parent.parent.parent.parent
 
 
 def _state_path() -> Path:
-    # Sits at the data root (NOT inside userbase) so a userbase wipe
-    # doesn't lose partial-install resume state.
     return _user_data_root() / "install_state.json"
 
 
 def _deploy_stamp_path() -> Path:
-    """``<user_data>/.deployed_version`` — last app version whose
-    install + RAG-build completed successfully. ``ensure_fresh_deploy``
-    compares it to the current version on every boot. Lives at the
-    data root so a manual ``rm -rf userbase/`` doesn't strand it."""
     return _user_data_root() / ".deployed_version"
 
 
 def current_app_version() -> str:
-    """Best-effort current app version. Bundle: importlib.metadata.
-    Source: pyproject.toml. ``"unknown"`` if both fail."""
+    # Preferred: version stamped into the package at build time by build_app.sh.
+    try:
+        from voitta_chainlit import __version__ as _v
+        if isinstance(_v, str) and _v and _v != "unknown":
+            return _v
+    except Exception:
+        pass
     try:
         from importlib.metadata import version, PackageNotFoundError
         try:
-            return version("voitta")
+            return version("voitta-chainlit")
         except PackageNotFoundError:
             pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     here = Path(__file__).resolve()
     for parent in (here, *here.parents):
@@ -220,69 +163,42 @@ def current_app_version() -> str:
             import tomllib
             with open(pp, "rb") as f:
                 data = tomllib.load(f)
-            v = data.get("project", {}).get("version")
+            v = data.get("project", {}).get("version") or data.get("tool", {}).get("briefcase", {}).get("version")
             if isinstance(v, str) and v:
                 return v
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         break
     return "unknown"
 
 
 def ensure_fresh_deploy(log) -> None:
-    """Single decision point: did the binary change since last successful
-    install? If yes, wipe ``userbase/`` and ``rag/`` so first-run install
-    + RAG-build rerun cleanly.
-
-    Called once at boot (``app.desktop.main``) BEFORE any
-    ``is_complete()`` / ``is_built()`` check. Stamp is written by
-    ``mark_deploy_complete()`` only after both phases succeed.
-
-    python_storage/, scripts/, settings.json, certs, and logs are NOT
-    touched here — only the two regenerable trees.
-    """
+    """On a version bump, wipe userbase/ + rag/ so install + RAG rerun cleanly."""
     user_root = _user_data_root()
     stamp = _deploy_stamp_path()
     current = current_app_version()
     stored = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
     if stored == current:
         return
-    log.info(
-        "deploy: stamp=%r current=%r — wiping userbase/ + rag/ + backend/certs/",
-        stored, current,
-    )
-    for sub in ("userbase", "rag"):
-        p = user_root / sub
-        if p.is_dir():
-            shutil.rmtree(p, ignore_errors=True)
-    # Wipe certs too: existing pairs may have been seeded by an older
-    # bundle (dev-machine signed → untrusted on recipient) or just be
-    # stale. ``app.certs.provision_if_missing`` regenerates against
-    # the bundled mkcert so the user gets a trusted local cert.
+    log.info("deploy: stamp=%r current=%r — wiping userbase/", stored, current)
+    p = user_root / "userbase"
+    if p.is_dir():
+        shutil.rmtree(p, ignore_errors=True)
     certs_dir = user_root / "backend" / "certs"
     if certs_dir.is_dir():
         shutil.rmtree(certs_dir, ignore_errors=True)
-    # Drop ``install_state.json`` — it's the bookkeeping that pairs
-    # with userbase/. Leaving it stranded makes ``install_all`` think
-    # every package is already installed and skip pip entirely.
     _state_path().unlink(missing_ok=True)
-    # Recreate the user site dir so PIP_PREFIX has a target.
     _user_site().mkdir(parents=True, exist_ok=True)
 
 
 def mark_deploy_complete() -> None:
-    """Stamp the current version after install_all + rag_build.build
-    both succeed. Failing either phase leaves the stamp stale so the
-    next launch wipes-and-retries automatically."""
     stamp = _deploy_stamp_path()
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(current_app_version(), encoding="utf-8")
 
 
 def is_complete() -> bool:
-    """All heavy packages importable in the current sys.path?
-    Boot-time ``ensure_fresh_deploy()`` already wiped userbase/ on a
-    version bump, so this probe is sufficient."""
+    """All heavy packages importable in the current sys.path?"""
     for import_name, _ in HEAVY_PACKAGES:
         try:
             importlib.import_module(import_name)
@@ -291,66 +207,198 @@ def is_complete() -> bool:
     return True
 
 
+def _lib_sources_dest() -> Path:
+    return _user_data_root() / "lib-sources"
+
+
+def _lib_sources_stamp_path() -> Path:
+    return _user_data_root() / ".lib_sources_sha"
+
+
+def lib_sources_need_update() -> bool:
+    """True if lib-sources are absent or at a different SHA than the bundle stamp."""
+    dest = _lib_sources_dest()
+    stamp = _lib_sources_stamp_path()
+    if not dest.is_dir() or not stamp.is_file():
+        return True
+    try:
+        import voitta_chainlit
+        bundled_stamp = (
+            Path(voitta_chainlit.__file__).resolve().parent
+            / "resources" / "code_sources_version.txt"
+        )
+        if not bundled_stamp.is_file():
+            return False  # no stamp bundled — skip
+        return stamp.read_text().strip() != bundled_stamp.read_text().strip()
+    except Exception:
+        return False
+
+
+def clone_lib_sources(progress_cb: "Callable[[str], None]") -> bool:
+    """Clone/update source submodules into the user data dir.
+
+    Reads repo URLs from the bundled .gitmodules and SHAs from
+    code_sources_version.txt, then does a shallow clone (or fetch+checkout)
+    of each submodule at the pinned SHA.
+    Returns True on success, False on any failure.
+    """
+    global last_failure_detail
+    import configparser
+    import re
+    import subprocess as _sp
+
+    try:
+        import voitta_chainlit
+        res = Path(voitta_chainlit.__file__).resolve().parent / "resources"
+    except Exception as exc:
+        last_failure_detail = f"Cannot locate bundle resources: {exc}"
+        return False
+
+    gitmodules = res / "gitmodules"
+    version_txt = res / "code_sources_version.txt"
+
+    if not gitmodules.is_file():
+        progress_cb("lib-sources: no .gitmodules in bundle — skipping")
+        return True
+
+    # Parse submodule URLs from bundled gitmodules.
+    cfg = configparser.RawConfigParser()
+    cfg.read_string(gitmodules.read_text())
+    submodules: list[tuple[str, str]] = []  # (name, url)
+    for section in cfg.sections():
+        m = re.match(r'submodule "(.+)"', section)
+        if m:
+            url = cfg.get(section, "url", fallback=None)
+            if url:
+                submodules.append((m.group(1), url))
+
+    if not submodules:
+        progress_cb("lib-sources: no submodules found — skipping")
+        return True
+
+    # Parse pinned SHAs from bundled code_sources_version.txt.
+    # Format: " SHA path (describe)" — same as git submodule status output.
+    pinned: dict[str, str] = {}
+    if version_txt.is_file():
+        for line in version_txt.read_text().splitlines():
+            line = line.strip().lstrip("+-U")
+            parts = line.split()
+            if len(parts) >= 2:
+                pinned[parts[1]] = parts[0]  # path → sha
+
+    dest_root = _lib_sources_dest()
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    if not _can_reach_pypi():  # reuse network check (hits github.com too)
+        last_failure_detail = "No network — cannot clone lib-sources."
+        progress_cb("lib-sources: offline — skipping (RAG code corpus unavailable)")
+        return True  # non-fatal: RAG will skip code corpus
+
+    for name, url in submodules:
+        dest = dest_root / name.split("/")[-1]  # e.g. lib-sources/three.js → three.js
+        sha = pinned.get(name, "")
+        if dest.is_dir():
+            progress_cb(f"lib-sources: updating {name}…")
+            try:
+                _sp.run(["git", "fetch", "--depth=1", "origin", sha or "HEAD"],
+                        cwd=dest, check=True, capture_output=True)
+                _sp.run(["git", "checkout", sha or "FETCH_HEAD"],
+                        cwd=dest, check=True, capture_output=True)
+            except _sp.CalledProcessError as exc:
+                progress_cb(f"lib-sources: {name} fetch failed: {exc.stderr.decode()[:200]}")
+        else:
+            progress_cb(f"lib-sources: cloning {name}…")
+            cmd = ["git", "clone", "--depth=1", "--no-tags"]
+            if sha:
+                cmd += ["--no-checkout"]
+            cmd += [url, str(dest)]
+            try:
+                _sp.run(cmd, check=True, capture_output=True)
+                if sha:
+                    _sp.run(["git", "fetch", "--depth=1", "origin", sha],
+                            cwd=dest, check=True, capture_output=True)
+                    _sp.run(["git", "checkout", sha],
+                            cwd=dest, check=True, capture_output=True)
+            except _sp.CalledProcessError as exc:
+                err = exc.stderr.decode()[:300] if exc.stderr else str(exc)
+                progress_cb(f"lib-sources: {name} clone failed: {err}")
+                last_failure_detail = err
+                return False
+
+    # Write stamp so we don't re-clone on next launch.
+    if version_txt.is_file():
+        _lib_sources_stamp_path().write_text(version_txt.read_text())
+
+    progress_cb("lib-sources: done")
+    return True
+
+
+def force_rebuild_stamps() -> None:
+    """Wipe install + RAG stamps so the next setup run does everything fresh.
+
+    Does NOT delete userbase/ or rag/ — the installer and RAG builder will
+    overwrite them in-place. This means pip re-runs and RAG re-indexes without
+    throwing away the existing wheels cache.
+    """
+    import shutil as _shutil
+    from app.config import RAG_DIR
+
+    from app.config import USER_CONFIG_DIR
+    _state_path().unlink(missing_ok=True)
+    _deploy_stamp_path().unlink(missing_ok=True)
+    _lib_sources_stamp_path().unlink(missing_ok=True)
+    (USER_CONFIG_DIR / ".code_source_hash").unlink(missing_ok=True)
+    (USER_CONFIG_DIR / ".docs_content_hash").unlink(missing_ok=True)
+    # Remove chroma stores so RAG builder recreates them cleanly.
+    for sub in ("chroma_docs", "chroma_code", ".chroma", ".bm25", ".chroma_code"):
+        p = RAG_DIR / sub
+        if p.is_dir():
+            _shutil.rmtree(p, ignore_errors=True)
+
+
 def installed_set() -> set[str]:
-    """Names recorded as installed in the on-disk state file. Used to
-    resume after partial installs (network drop mid-way)."""
     p = _state_path()
     if not p.exists():
         return set()
     try:
         data = json.loads(p.read_text())
         inst = data.get("installed") if isinstance(data, dict) else None
-        if isinstance(inst, list):
-            return set(inst)
-        return set()
-    except Exception:  # noqa: BLE001
+        return set(inst) if isinstance(inst, list) else set()
+    except Exception:
         return set()
 
 
 def _save_state(installed: set[str]) -> None:
     p = _state_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(
-        {"installed": sorted(installed), "ts": time.time()},
-        indent=2,
-    ))
+    p.write_text(json.dumps({"installed": sorted(installed), "ts": time.time()}, indent=2))
 
 
-def status_summary() -> dict:
-    """Cheap snapshot for the Settings menu.
+def _can_reach_pypi(timeout_s: float = 3.0) -> bool:
+    import socket
+    try:
+        with socket.create_connection(("pypi.org", 443), timeout=timeout_s):
+            return True
+    except (OSError, socket.error):
+        return False
 
-    Returns ``{installed, missing, total, last_error}``. ``installed`` and
-    ``missing`` are lists of import names; ``last_error`` is None when
-    ``last_failure_detail`` was never populated this run.
-    """
-    state = installed_set()
-    expected = [name for name, _ in HEAVY_PACKAGES]
-    installed = [n for n in expected if n in state]
-    missing = [n for n in expected if n not in state]
-    return {
-        "installed": installed,
-        "missing": missing,
-        "total": len(expected),
-        "ok": not missing,
-        "last_error": last_failure_detail or None,
-    }
+
+def _tail_lines(text: str, n: int) -> str:
+    if not text:
+        return "(no output)"
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    return "\n".join(lines[-n:])
 
 
 def install_all(progress_cb: ProgressCb) -> bool:
-    """Install every package whose import probe fails AND whose name
-    isn't already in the state file.
+    """Install every package whose import probe fails and isn't in the state file.
 
-    ``progress_cb(i, total, label, log_line)`` is called twice per
-    package — once with ``label="Installing X…"`` before the pip run,
-    once with ``label="Installed X"`` after success. ``log_line`` is
-    None for the post-install ping.
-
-    Returns True on full success, False on the first pip non-zero exit.
+    ``progress_cb(current, total, label, log_line)`` — called on the worker thread.
+    Returns True on full success, False on first pip failure.
     """
-    # State file purpose: resume after partial-install (network drop).
-    # Whole-deployment wipes are handled at boot by
-    # ``ensure_fresh_deploy()``, so all we do here is skip packages
-    # already recorded as done.
+    global last_failure_detail
+    last_failure_detail = ""
+
     state = installed_set()
     todo: list[tuple[str, str]] = []
     for import_name, spec in HEAVY_PACKAGES:
@@ -370,62 +418,25 @@ def install_all(progress_cb: ProgressCb) -> bool:
 
     total = len(todo)
 
-    # Importing pip eagerly — done once. Each pip_main call is fully
-    # self-contained but the module-load cost is non-trivial.
-    from pip._internal.cli.main import main as pip_main
-
-    global last_failure_detail
-    last_failure_detail = ""
-
-    # Pre-flight: cheap TCP probe to PyPI before we kick off pip. On a
-    # live connection this is a 100ms round-trip; on an offline machine
-    # it fails in <1s vs. pip's own ~30s socket-timeout cycle. The
-    # error message is also actionable ("you're offline") in a way
-    # pip's tail isn't.
     if not _can_reach_pypi():
         last_failure_detail = (
-            "Could not reach pypi.org over the network.\n\n"
-            "Voitta needs the internet to download its required\n"
-            "Python packages on first launch. Connect to a network\n"
-            "and relaunch the app — the installer resumes from\n"
-            "where it stopped, no full restart needed."
+            "Could not reach pypi.org.\n\n"
+            "Voitta needs internet access to download required packages on "
+            "first launch. Connect and relaunch — the installer resumes from "
+            "where it stopped."
         )
-        progress_cb(0, len(todo), "Offline — cannot reach pypi.org", "!!! offline")
-        print("=== pre-flight: pypi.org unreachable ===", file=sys.stderr)
+        progress_cb(0, total, "Offline — cannot reach pypi.org", "!!! offline")
         return False
+
+    from pip._internal.cli.main import main as pip_main
 
     for i, (import_name, spec) in enumerate(todo):
         blurb = PACKAGE_BLURBS.get(import_name, f"Installing {import_name}…")
         progress_cb(i, total, blurb, f">>> pip install {spec}")
-        # PIP_PREFIX is set by desktop_launcher to route installs into
-        # ``<user_root>/userbase``. With --prefix (vs --target), pip's
-        # resolver consults sys.path so deps already shipped in the
-        # bundle aren't re-installed. --no-warn-script-location quiets
-        # a noisy message about <userbase>/bin not being on PATH; we
-        # don't need user-installed scripts on PATH, only importable
-        # modules. We deliberately drop --quiet so failure output is
-        # captured below.
-        args = [
-            "install",
-            "--no-warn-script-location",
-            spec,
-        ]
 
-        # Capture pip's stdout + stderr in-memory while it runs. Pip
-        # writes via Python-level ``print`` and ``logging`` (which
-        # streams through ``sys.stderr``), so a contextlib redirect
-        # gets us most of the useful diagnostic output. The fallback
-        # to ``sys.__stdout__`` keeps the launch log readable if pip
-        # decides to dump a 5K wheel-resolution trace per package.
+        args = ["install", "--no-warn-script-location", spec]
         out_buf = io.StringIO()
         err_buf = io.StringIO()
-        # Pip's internal main() *can* call sys.exit() on certain edge
-        # cases (resolver impasse, network kill, sub-runs of build
-        # backends). SystemExit would unwind out of this thread without
-        # any traceback printed, leaving the install state pointing at
-        # the previous package and the user with a silent abort.
-        # Catch + convert to a numeric rc, and treat any other Exception
-        # the same way so we never lose the failure to a dead thread.
         try:
             with (
                 contextlib.redirect_stdout(out_buf),
@@ -435,87 +446,32 @@ def install_all(progress_cb: ProgressCb) -> bool:
         except SystemExit as exc:
             rc = exc.code if isinstance(exc.code, int) else 1
         except Exception as exc:  # noqa: BLE001
-            # Mirror buffered output to the log file (sys.stderr is
-            # restored at this point — desktop_launcher rebinds it to
-            # voitta.log on first-run startup, the redirect_stderr
-            # context manager above is what's been active inside the
-            # try). This is purely diagnostic: it doesn't affect the
-            # user-visible flow but it lets us read the full pip
-            # transcript out of voitta.log when a remote user reports
-            # a failure.
-            print(f"=== pip install {spec} (rc=exception) ===", file=sys.stderr)
+            print(f"=== pip install {spec} (exception) ===", file=sys.stderr)
             print(out_buf.getvalue(), file=sys.stderr)
             print(err_buf.getvalue(), file=sys.stderr)
             tail = _tail_lines(err_buf.getvalue() or out_buf.getvalue() or str(exc), 12)
             last_failure_detail = (
                 f"Failed at: {import_name} ({spec})\n"
-                f"Reason: {type(exc).__name__}: {exc}\n\n"
-                f"Last pip output:\n{tail}"
+                f"Reason: {type(exc).__name__}: {exc}\n\nLast pip output:\n{tail}"
             )
-            progress_cb(
-                i, total,
-                f"pip crashed on {import_name}: {type(exc).__name__}",
-                f"!!! pip crashed: {type(exc).__name__}: {exc}",
-            )
+            progress_cb(i, total, f"pip crashed on {import_name}", f"!!! {type(exc).__name__}: {exc}")
             return False
 
         if rc != 0:
-            # Same mirror as the exception path above — full pip
-            # transcript into voitta.log so a remote failure is
-            # diagnosable from the log alone.
             print(f"=== pip install {spec} (rc={rc}) ===", file=sys.stderr)
             print(out_buf.getvalue(), file=sys.stderr)
             print(err_buf.getvalue(), file=sys.stderr)
             tail = _tail_lines(err_buf.getvalue() or out_buf.getvalue(), 12)
             last_failure_detail = (
-                f"Failed at: {import_name} ({spec})\n"
-                f"pip exit code: {rc}\n\n"
-                f"Last pip output:\n{tail}"
+                f"Failed at: {import_name} ({spec})\npip exit code: {rc}\n\nLast pip output:\n{tail}"
             )
-            progress_cb(
-                i, total,
-                f"Failed: {import_name} (pip exit {rc})",
-                f"!!! {import_name} install failed (rc={rc})\n{tail}",
-            )
+            progress_cb(i, total, f"Failed: {import_name} (pip exit {rc})", f"!!! rc={rc}\n{tail}")
             return False
-        # Success: log a short marker (one line, not the full transcript
-        # — successful pip output is noisy and not useful in voitta.log).
+
         print(f"=== pip install {spec} OK ===", file=sys.stderr)
         state.add(import_name)
         _save_state(state)
         importlib.invalidate_caches()
         progress_cb(i + 1, total, f"Installed {import_name}", None)
+
     return True
-
-
-def _can_reach_pypi(timeout_s: float = 3.0) -> bool:
-    """TCP-connect probe to ``pypi.org:443``.
-
-    A bare ``socket.create_connection`` is a much faster offline check
-    than pip's full HTTPS handshake + index lookup, and it doesn't
-    need any extra deps. We only fail-fast when the connection is
-    *immediately* refused / DNS-unresolvable — transient flakiness
-    falls through to pip's own retry, which is what we want.
-    """
-    import socket
-    try:
-        with socket.create_connection(("pypi.org", 443), timeout=timeout_s):
-            return True
-    except (OSError, socket.error):
-        return False
-
-
-def _tail_lines(text: str, n: int) -> str:
-    """Last ``n`` non-empty lines, joined with newlines.
-
-    pip's noisy output (`Looking in indexes…`, repeated `Collecting`
-    lines, mostly-empty progress bars) is not what the user needs to
-    see in a small alert dialog — only the actual error block at the
-    very end is. ``n=12`` is enough for a typical "ERROR: Could not
-    find a version that satisfies the requirement X" with one or two
-    suggestion lines.
-    """
-    if not text:
-        return "(no output)"
-    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
-    return "\n".join(lines[-n:])

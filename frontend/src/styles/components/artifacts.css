@@ -1,0 +1,319 @@
+/* ─── server artifacts (Finder-like floating window) ─────────────────────── */
+.artifacts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none; /* let clicks pass through; modal grabs its own */
+  font-family: var(--voitta-font-sans);
+}
+.artifacts-modal {
+  position: absolute;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-art-window-border);
+  border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+/* Drag handle: titlebar gets the move cursor (except over its buttons). */
+.artifacts-modal .artifacts-titlebar {
+  cursor: grab;
+  user-select: none;
+}
+.artifacts-modal .artifacts-titlebar:active {
+  cursor: grabbing;
+}
+.artifacts-modal .artifacts-titlebar button,
+.artifacts-modal .artifacts-titlebar .dot {
+  cursor: pointer;
+}
+
+/* Resize handles — invisible strips around the window. */
+.rh {
+  position: absolute;
+  z-index: 1;
+}
+.rh-n { top: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rh-s { bottom: -3px; left: 6px; right: 6px; height: 6px; cursor: ns-resize; }
+.rh-e { top: 6px; right: -3px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rh-w { top: 6px; left: -3px; bottom: 6px; width: 6px; cursor: ew-resize; }
+.rh-nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nwse-resize; }
+.rh-ne { top: -3px; right: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+.rh-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: nesw-resize; }
+.rh-se {
+  bottom: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  /* Subtle SE corner grip — gives a visual cue without being noisy. */
+  background:
+    linear-gradient(135deg, transparent 0 55%, #b9bcc1 55% 60%, transparent 60% 70%, #b9bcc1 70% 75%, transparent 75% 85%, #b9bcc1 85% 90%, transparent 90%);
+  border-bottom-right-radius: 10px;
+}
+.artifacts-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, var(--voitta-art-titlebar-bg-from), var(--voitta-art-titlebar-bg-to));
+  border-bottom: 1px solid var(--voitta-art-titlebar-rule);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.artifacts-traffic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+.artifacts-traffic .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}
+.artifacts-traffic .dot-red {
+  background: #ff5f57;
+  cursor: pointer;
+}
+.artifacts-traffic .dot-yellow {
+  background: #febc2e;
+}
+.artifacts-traffic .dot-green {
+  background: #28c840;
+}
+.artifacts-title {
+  font-weight: 600;
+  color: var(--voitta-text);
+  letter-spacing: 0.02em;
+}
+.artifacts-titlebar .spacer {
+  flex: 1;
+}
+.art-btn {
+  background: var(--voitta-bg);
+  border: 1px solid var(--voitta-border);
+  color: var(--voitta-text);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font: 11px/1 var(--voitta-font-sans);
+  cursor: pointer;
+}
+.art-btn:hover {
+  background: var(--voitta-art-btn-bg-hover);
+  border-color: var(--voitta-art-btn-border-hover);
+}
+.art-btn-close {
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 8px;
+}
+
+/* Shared 3-column grid: name (flex) | size (right) | mtime (right). Both
+   the header strip and every row use the same template so things actually
+   align. */
+.artifacts-columns,
+.art-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px 130px;
+  align-items: center;
+}
+.artifacts-columns {
+  padding: 6px 14px 6px 0;
+  background: var(--voitta-art-titlebar-bg-from);
+  border-bottom: 1px solid var(--voitta-art-titlebar-rule);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--voitta-text-muted);
+  flex-shrink: 0;
+}
+.art-col-name {
+  padding-left: 8px;
+}
+.art-col-size,
+.art-col-mtime {
+  text-align: right;
+}
+
+.artifacts-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--voitta-bg);
+  font-size: 12px;
+}
+
+.art-row {
+  padding: 0 14px 0 0;
+  border-bottom: 1px solid var(--voitta-art-row-rule);
+  cursor: default;
+  user-select: none;
+  height: 24px;
+}
+.art-row:nth-child(even) {
+  background: var(--voitta-art-row-stripe);
+}
+.art-row.art-dir {
+  cursor: pointer;
+}
+.art-row:hover {
+  background: var(--voitta-art-row-hover);
+}
+.art-row.is-selected,
+.art-row.is-selected:nth-child(even),
+.art-row.is-selected:hover {
+  background: var(--voitta-art-row-selected-bg);
+  color: var(--voitta-art-row-selected-fg);
+}
+.art-row.is-selected .art-name,
+.art-row.is-selected .art-size,
+.art-row.is-selected .art-mtime,
+.art-row.is-selected .art-twisty,
+.art-row.is-selected .art-handle,
+.art-row.is-selected .art-origin {
+  color: var(--voitta-art-row-selected-fg);
+}
+.art-rename-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--voitta-text);
+  background: var(--voitta-bg);
+  border: 1px solid var(--voitta-art-ctxmenu-border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: 0;
+  outline: none;
+}
+.art-rename-input.is-invalid {
+  border-color: var(--voitta-error-border);
+  background: var(--voitta-error-bg);
+  color: var(--voitta-error-fg);
+}
+.art-row.is-selected .art-rename-input {
+  /* Switch the input back to the normal (non-blue) palette while editing. */
+  color: var(--voitta-text);
+  background: var(--voitta-bg);
+}
+
+/* Context menu — Finder-ish. Positioned absolutely inside the modal. */
+.art-ctxmenu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--voitta-art-ctxmenu-bg);
+  color: var(--voitta-art-ctxmenu-fg);
+  border: 1px solid var(--voitta-art-ctxmenu-border);
+  border-radius: 6px;
+  box-shadow: var(--voitta-art-ctxmenu-shadow);
+  padding: 4px 0;
+  font-size: 12px;
+  z-index: 100;
+  user-select: none;
+}
+.art-ctxmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.art-ctxmenu-item:hover:not(.is-disabled) {
+  background: var(--voitta-art-ctxmenu-hover);
+  color: var(--voitta-art-ctxmenu-fg-hover);
+}
+.art-ctxmenu-item.is-disabled {
+  color: var(--voitta-art-ctxmenu-disabled);
+  cursor: default;
+}
+.art-ctxmenu-label {
+  flex: 1;
+}
+.art-ctxmenu-shortcut {
+  font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
+  opacity: 0.7;
+}
+.art-ctxmenu-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--voitta-art-ctxmenu-border);
+}
+.art-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 100%;
+  padding-right: 8px;
+}
+.art-twisty {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--voitta-text-muted);
+  font-size: 9px;
+  flex-shrink: 0;
+}
+.art-icon {
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.art-name {
+  color: var(--voitta-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.art-row.art-dir .art-name {
+  font-weight: 600;
+}
+.art-badge {
+  font-size: 10px;
+  color: var(--voitta-art-badge-fg);
+  background: var(--voitta-art-badge-bg);
+  border: 1px solid var(--voitta-art-badge-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+  height: 14px;
+  display: inline-block;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.art-size {
+  text-align: right;
+  font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--voitta-art-size-fg);
+}
+.art-mtime {
+  text-align: right;
+  font: 11px/1 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--voitta-text-muted);
+}
+
+.artifacts-footer {
+  padding: 6px 12px;
+  border-top: 1px solid var(--voitta-art-footer-rule);
+  background: var(--voitta-art-footer-bg);
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  flex-shrink: 0;
+}
+.art-status {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--voitta-text-muted);
+}
+.art-status-err {
+  color: var(--voitta-error-fg);
+}
+

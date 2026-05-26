@@ -36,51 +36,48 @@ from app.tools.registry import ToolCtx, ToolSpec, registry
 # ---- file resolution ------------------------------------------------------
 
 
-def _core_theme_path() -> Path | None:
-    """Locate the canonical ``frontend/src/theme.css``.
+def _core_theme_paths() -> list[Path]:
+    """Locate the chainlit-style split theme files.
 
-    Source-checkout: ``<repo>/frontend/src/theme.css``.
-    Packaged .app: same file ships under the bundled resources tree if
-    ``build_app.sh`` stages it; otherwise this returns None and the tool
-    falls back to an explicit error rather than guessing.
+    The chainlit FE splits tokens across three files under
+    ``frontend/src/styles/themes/``:
+
+    * ``tokens.css``  — palette-agnostic (shape, fonts, sizes).
+    * ``light.css``   — default light palette.
+    * ``dark.css``    — dark-mode overrides.
+
+    We merge in order: tokens → light → dark. The dark overrides win
+    so ``is_dark`` and dark colours come through unless the host
+    plugin explicitly forces light. (The Bokeh-served report iframe
+    has no OS preference signal, so we default to dark for legibility
+    on dark host pages; light reports can call
+    ``ctx.set_template_theme('default')``.)
     """
-    candidates: list[Path] = [PROJECT_ROOT / "frontend" / "src" / "theme.css"]
-    try:
-        import voitta  # type: ignore[import-not-found]
-        res = Path(voitta.__file__).resolve().parent / "resources"
-        candidates.append(res / "frontend_src" / "theme.css")
-        candidates.append(res / "theme.css")
-    except Exception:  # noqa: BLE001
-        pass
-    for p in candidates:
-        if p.is_file():
-            return p
-    return None
+    base = PROJECT_ROOT.parent / "frontend" / "src" / "styles" / "themes"
+    out: list[Path] = []
+    for name in ("tokens.css", "light.css", "dark.css"):
+        candidate = base / name
+        if candidate.is_file():
+            out.append(candidate)
+    return out
 
 
-def _plugin_for_host(host: str) -> dict[str, Any] | None:
-    """Suffix-match the same way ``/api/plugin`` does.
+def _plugin_for_host(host: str):
+    """Suffix-match against the chainlit plugin registry.
 
-    Kept inline rather than importing ``main._plugin_for_host`` because
-    ``main`` imports tools; depending the other direction would create
-    an import cycle.
+    Reuses :func:`app.plugins.for_host` so the matching rule stays in
+    one place. Returns the first :class:`app.plugins.Plugin` whose
+    ``host_patterns`` cover ``host``, or ``None``.
     """
-    from app.tools.providers import LOADED_PLUGINS
+    from app.plugins import for_host
 
-    hostname = host.split(":", 1)[0].lower().rstrip(".")
-    for plugin in LOADED_PLUGINS:
-        raw_patterns = plugin["manifest"].get("host_patterns", [])
-        if isinstance(raw_patterns, str):
-            raw_patterns = [raw_patterns]
-        if not isinstance(raw_patterns, list):
-            continue
-        for raw in raw_patterns:
-            if not isinstance(raw, str) or not raw:
-                continue
-            pat = raw.lower().rstrip(".")
-            if hostname == pat or hostname.endswith("." + pat):
-                return plugin
-    return None
+    matches = for_host(host)
+    # Skip the wildcard "default" plugin so the resolver picks the
+    # host-specific theme.css when present.
+    non_wildcard = [
+        p for p in matches if "*" not in p.host_patterns
+    ]
+    return (non_wildcard[0] if non_wildcard else (matches[0] if matches else None))
 
 
 # ---- parser ---------------------------------------------------------------
@@ -231,26 +228,27 @@ def resolve_theme(host: str | None) -> dict[str, Any]:
     """
     host_str = (host or "").strip() if isinstance(host, str) else ""
 
-    core_path = _core_theme_path()
-    if core_path is None:
+    core_paths = _core_theme_paths()
+    if not core_paths:
         return {
             "ok": False,
             "error": "core_theme_unavailable",
             "message": (
-                "Could not locate frontend/src/theme.css. In a dev "
-                "checkout it lives at <repo>/frontend/src/theme.css; in "
-                "a packaged .app it should be staged under the bundle "
-                "resources tree."
+                "Could not locate frontend/src/styles/themes/{tokens,"
+                "light,dark}.css. They should ship with the chainlit "
+                "FE source tree."
             ),
         }
-    core_tokens = _read_file(core_path)
+    core_tokens: dict[str, str] = {}
+    for path in core_paths:
+        core_tokens.update(_read_file(path))
 
-    plugin: dict[str, Any] | None = None
+    plugin = None
     plugin_overrides: dict[str, str] = {}
     if host_str:
         plugin = _plugin_for_host(host_str)
         if plugin is not None:
-            plugin_theme = Path(plugin["path"]) / "theme.css"
+            plugin_theme = plugin.dir / "theme.css"
             if plugin_theme.is_file():
                 plugin_overrides = _read_file(plugin_theme)
 
@@ -260,9 +258,9 @@ def resolve_theme(host: str | None) -> dict[str, Any]:
 
     return {
         "ok": True,
-        "plugin": plugin["name"] if plugin else None,
+        "plugin": plugin.name if plugin else None,
         "host": host_str or None,
-        "agent_name": (plugin["manifest"].get("agent_name") if plugin else None),
+        "agent_name": (plugin.agent_name if plugin else None),
         "is_dark": looks_dark(merged.get("--voitta-bg", "#ffffff")),
         "palette": _categorise(merged),
         "raw_tokens": merged,

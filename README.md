@@ -1,225 +1,170 @@
-# Voitta Bookmarklet
+# voitta-bookmarklet-chainlit
 
-A right-side chat pane you can inject into any web page with a
-one-click bookmark. Backend is FastAPI on `https://127.0.0.1:12358`;
-chat runs against your choice of **Anthropic**, **OpenAI**, or
-**Gemini**; data-provider tools (Google Drive today, more on the
-roadmap) reach into third-party services on the user's behalf.
+LLM assistant injected into any web page via a bookmarklet. Chainlit
+owns the chat context; the React frontend talks to it through
+`@chainlit/react-client`. Single FastAPI process at `127.0.0.1:12358`
+serves both the Chainlit socket and the built bookmarklet bundle.
 
-## Project layout
+## Layout
 
 ```
-voitta-bookmarklet/
-├── README.md                 ← you are here
-├── docs/                     ← agent's authoritative reference (RAG-indexed)
-│   ├── 00-overview.md
-│   ├── 01-architecture.md
-│   ├── 02-frontend.md
-│   ├── 03-providers.md
-│   ├── 04-tool-catalog.md
-│   ├── 05-bridge-protocol.md
-│   ├── 07-report-scripts.md
-│   └── 08-drive-tools.md
-├── backend/
-│   ├── pyproject.toml
-│   ├── run.sh
-│   ├── certs/                ← mkcert cert+key (gitignored)
-│   ├── tests/                ← pytest: registry, providers, drive context, config
-│   └── app/
-│       ├── main.py
-│       ├── config.py         ← server constants + the Voitta system prompt
-│       ├── routes/
-│       ├── services/         ← LLM adapters, OAuth, Panel renderer, scripts, …
-│       ├── bridge/           ← in-memory ToolBridge (sessions/queues/futures)
-│       └── tools/
-│           ├── registry.py
-│           ├── browser.py
-│           ├── rag/
-│           ├── domain/       ← provider-agnostic tools (rag, web, screenshot, …)
-│           └── providers/    ← provider-specific tools (drive today, more later)
-│               └── drive/
-├── frontend/
-│   ├── package.json
-│   ├── vite.config.ts        ← single IIFE → dist/widget.js
-│   ├── vitest.config.ts
-│   ├── index.html            ← dev harness
-│   └── src/
-│       ├── main.tsx
-│       ├── widget.tsx        ← Shadow DOM host + Preact mount
-│       ├── theme.css         ← design tokens — swap to rebrand
-│       ├── styles.css        ← consumes theme tokens
-│       ├── lib/              ← bridge, primitives, buffers, settings, …
-│       └── components/
-├── bookmarklet/
-│   └── bookmarklet.js        ← readable source for the URL
-├── libs-info/
-│   └── panel/                ← HoloViz Panel source (RAG-indexed for report authoring)
-├── rag/
-│   ├── build_rag.py          ← indexes docs/
-│   └── build_panel_rag.py    ← indexes libs-info/panel/
-├── python_storage/           ← snapshot cache (gitignored)
-└── scripts/
-    ├── compute/              ← user-defined compute scripts (gitignored)
-    └── reports/              ← user-defined report scripts (gitignored)
+voitta-bookmarklet-chainlit/
+├── backend/          FastAPI + Chainlit, agent loop, tool registry
+├── frontend/         Vite IIFE bundle, React widget, primitives
+├── plugins/          Host-scoped extensions (manifest + BE module + FE widget + docs + prompt)
+├── docs/             *** MASTER COPY of all prose docs ***
+│                     Bundled into the .app by build_app.sh (step 5b).
+│                     DO NOT create or edit docs under src/voitta_chainlit/resources/docs/ —
+│                     that directory is build-generated and gitignored.
+├── lib-sources/      Vendored libraries as git submodules (see below)
+├── rag/              Built RAG indexes (gitignored — rebuildable)
+├── scripts/          Dev tooling (RAG builder)
+├── start.sh          Run uvicorn directly (dev mode)
+├── tray.sh           macOS menu-bar tray (uvicorn on a daemon thread)
+└── build.sh          Install FE deps, build FE bundle, set up BE venv
 ```
 
-## First-time setup
+> **Single source of truth for docs:**
+> - Core docs → `docs/`
+> - Plugin docs → `plugins/<name>/docs/`
+>
+> `build_app.sh` copies both into `src/voitta_chainlit/resources/` at build
+> time. The `resources/` subdirectories (`docs/`, `frontend_dist/`,
+> `plugins/`, `vendor_js/`) are gitignored — never edit them directly.
 
-### 0. TLS cert for the chat backend (one-time)
+Five plugins ship today: `default` (always-on system prompt), `ebay`,
+`google`, `linkedin`, `voitta-enterprise`. See [`docs/05-plugins.md`](docs/05-plugins.md)
+for the plugin model.
+
+## Setup
 
 ```bash
-brew install mkcert
-sudo mkcert -install
-mkdir -p backend/certs && cd backend/certs
-mkcert 127.0.0.1 localhost
-cd ../..
+git clone <url> voitta-bookmarklet-chainlit
+cd voitta-bookmarklet-chainlit
+git submodule update --init --recursive --depth 1   # pulls lib-sources/*
+./build.sh
 ```
 
-`backend/certs/` is gitignored. The cert auto-detects on backend start.
+`build.sh` installs the FE deps, builds the bookmarklet bundle, and
+sets up the BE venv with chromadb, bm25s, fastmcp, rumps, etc.
 
-### 1. Start the backend
+## Run
 
+**Terminal mode**:
 ```bash
-cd backend
-./run.sh
+./start.sh                       # https://127.0.0.1:12358
 ```
 
-`run.sh` creates a `.venv`, installs dependencies (`pip install -e .`),
-and starts uvicorn on `127.0.0.1:12358`. Sanity check:
-
+**macOS tray mode** (uvicorn on a daemon thread, rumps owns the main
+thread):
 ```bash
-CACERT="$HOME/Library/Application Support/mkcert/rootCA.pem"
-curl --cacert "$CACERT" https://127.0.0.1:12358/health
-# {"ok":true,"providers_supported":["anthropic","openai","gemini"], ...}
+./tray.sh
 ```
 
-### 2. Build the RAG indexes
+The tray menu has About / Open / Copy bookmarklet / Settings (with
+the MCP-debug toggle) / Show data folder / (Re)create TLS certs /
+Reset / Quit.
 
-```bash
-backend/.venv/bin/python rag/build_rag.py
-backend/.venv/bin/python rag/build_panel_rag.py   # optional, large
-```
-
-Re-run when you change `docs/`. The chat backend lazy-loads on first
-`rag_query`, no restart needed.
-
-### 3. Build the frontend widget
-
-```bash
-cd frontend
-npm install
-npm run build      # produces dist/widget.js
-```
-
-Re-run on every frontend change. (Or `npm run dev` for the standalone
-Vite harness at `http://localhost:5173`.)
-
-### 4. Browser CSP extension (recommended)
-
-Strict-CSP sites (eBay, GitHub, some banks) refuse to load scripts from
-`127.0.0.1:12358` by default. Install one Chrome extension to bypass:
-
-* **CSP Unblock** (4.5★) — universal, strips all CSP headers everywhere.
-* **Anti-CORS, anti-CSP** (4.3★) — per-hostname allowlist, narrower
-  blast radius.
-
-Either is safe to leave on the sites you actually use — turn it off
-elsewhere. Without it, the bookmarklet will still load on most sites,
-but eBay-class CSP-strict pages will silently refuse to fetch
-`/widget.js`.
-
-If you're not sure whether you need it: try the bookmarklet on a site,
-open DevTools → Console. If you see *"Loading the script
-https://127.0.0.1:12358/widget.js... violates the following Content
-Security Policy directive ... The action has been blocked"*, you need
-the extension. *"...The policy is report-only, so the violation has
-been logged but no further action has been taken"* — extension
-optional, the bookmarklet still works.
-
-### 5. Use the bookmarklet
-
-The minified one-liner:
-
-```
-javascript:(function(){var B="https://127.0.0.1:12358";if(window.__voittaBookmarkletLoaded){if(window.VoittaBookmarklet&&typeof window.VoittaBookmarklet.mount==="function")window.VoittaBookmarklet.mount();return;}window.__voittaBookmarkletLoaded=true;var s=document.createElement("script");s.src=B+"/widget.js?t="+Date.now();s.async=true;s.onerror=function(){window.__voittaBookmarkletLoaded=false;alert("Voitta bookmarklet: could not load widget from "+B+"\n\nIs the backend running? (cd backend && ./run.sh)");};document.documentElement.appendChild(s);})();
-```
-
-Add as a bookmark and click on any HTTPS page. The backend must be
-running. Readable source:
-[`bookmarklet/bookmarklet.js`](bookmarklet/bookmarklet.js).
+Open `https://127.0.0.1:12358/` once in a browser to accept the
+self-signed cert. Then drag the bookmarklet (Copy bookmarklet from
+the tray, or build your own pointing at `/widget.js`) to your
+bookmarks bar.
 
 ## Configuration
 
-Server-side constants live in
-[`backend/app/config.py`](backend/app/config.py) (no env vars, no
-`.env`):
+Per-user settings at
+`~/.config/voitta-bookmarklet-chainlit/settings.json`:
 
-| Constant | Default | Notes |
-| -------- | ------- | ----- |
-| `HOST` | `127.0.0.1` | uvicorn bind host |
-| `PORT` | `12358` | uvicorn port |
-| `TLS_CERT_PATH` / `TLS_KEY_PATH` | auto-detected from `backend/certs/` | HTTPS iff both files exist |
-| `MAX_TOKENS` | `16384` | Default per-iteration response cap |
-| `MAX_TOOL_ITERATIONS` | `25` | Default tool-use loop cap |
-| `MAX_TOOL_ITERATIONS_CEILING` | `200` | Hard server-side ceiling |
+```json
+{
+  "provider": "anthropic",
+  "api_keys": { "anthropic": "sk-ant-..." },
+  "models":   { "anthropic": "claude-sonnet-4-5-20250929" },
+  "googleOAuth": { "clientId": "...", "clientSecret": "..." },
+  "plugins": { "voitta-enterprise": { "mcp": { "url": "...", "api_key": "..." } } }
+}
+```
 
-LLM keys live in the **Settings panel** in the drawer (⚙ button) and
-persist on the local backend at
-`~/.config/voitta-bookmarklet/settings.json` (`0600`).
+You don't edit this file by hand — open the in-page Settings panel
+(gear icon in the widget), which has tabs for Global + each plugin
+that ships configurable fields.
 
-### Connecting Google Drive
+## `lib-sources/` — vendored libraries
 
-Drive tools appear in the LLM's tool list once OAuth is configured:
+Five libraries live here as git submodules so the LLM can grep
+through their source via the RAG `code` corpus:
 
-1. Create a Google Cloud OAuth client (Desktop or Web type, redirect
-   URI `https://127.0.0.1:12358/api/google/oauth/callback`).
-2. Paste `googleOAuth.clientId` and `googleOAuth.clientSecret` into
-   `~/.config/voitta-bookmarklet/settings.json`.
-3. In the in-pane Settings, click **Connect Google Drive**.
+| Submodule              | Indexed roots                  | Why                          |
+|------------------------|--------------------------------|------------------------------|
+| `pallets/jinja`        | `src/jinja2/`, `docs/`, `examples/` | Python — Jinja2 template engine source + RST API docs |
+| `kieler/elkjs`         | `src/`, `typings/`             | TypeScript — ELK layout engine (used by `kind="elk"`) |
+| `eclipse/elk`          | `plugins/`, `docs/`, `test/`   | Java — Eclipse ELK algorithm implementations |
+| `mrdoob/three.js`      | `src/`, `docs/`, `examples/jsm/` | JavaScript — three.js core + API docs |
 
-Scope is `drive.readonly`. Read-only by design — there are no upload
-or share tools.
+After cloning, run:
+```bash
+git submodule update --init --recursive --depth 1
+```
+
+To bump pinned versions later:
+```bash
+git submodule update --remote --merge
+git add lib-sources/<repo>
+git commit -m "Bump <repo> to <sha>"
+```
+
+## RAG
+
+Two corpora, both Chroma (dense) + bm25s (sparse) with hybrid score
+fusion:
+
+```bash
+python scripts/build_rag.py                       # both corpora
+python scripts/build_rag.py --corpus docs         # docs/ + plugins/*/docs/  (fast, ~1s)
+python scripts/build_rag.py --corpus code         # lib-sources/*  (slower, ~1 min)
+python scripts/build_rag.py --corpus code --repo panel             # one repo only
+python scripts/build_rag.py --corpus code --repo panel,three.js    # subset
+```
+
+Each run is a **full rewrite** of the named corpus — `--repo panel`
+REPLACES the code corpus with just panel chunks, it doesn't merge.
+Use it for fast iteration after bumping a submodule, then rebuild
+all when you're done.
+
+**After editing any file under `docs/` or `plugins/*/docs/`, always run:**
+```bash
+python scripts/build_rag.py --corpus docs
+```
+`--corpus docs` only touches the docs index, so you don't pay the
+cost of re-walking `lib-sources/`.
+
+The LLM queries them via the `rag_query` tool — pass `corpus="docs"`
+(default) or `corpus="code"`. The code corpus returns chunks with
+`repo`, `path`, `folder`, `lang`, `kind` (module / class / function /
+method), and `symbol` metadata so the model can navigate to a
+specific file or pull neighbouring chunks via `rag_get_chunk_range`.
+
+Indexes live under `rag/.chroma{,_code}/` + `rag/.bm25{,_code}/` —
+gitignored, ~few MB combined, rebuilt in ~1 min.
+
+## MCP debugging
+
+The BE exposes a FastMCP server at `/mcp` for external MCP clients
+(Claude Desktop, `mcp-cli`, etc.). Gated three ways: tray-flag
+(`mcpDebugEnabled` off by default) + loopback-only peer + no browser
+`Origin` header. Tools: `mcp_sessions`, `mcp_page`, `mcp_eval`,
+`mcp_screenshot`. See [`backend/app/services/mcp_server.py`](backend/app/services/mcp_server.py).
+
+## Docs
+
+[`docs/`](docs/) has seven numbered prose docs (overview,
+architecture, frontend, providers, tool catalogue, plugins, reports).
+They're indexed into the `docs` RAG corpus alongside every plugin's
+`docs/` tree, so the LLM can look up its own design without leaving
+the chat.
 
 ## Tests
 
-Backend (`pytest`):
-
 ```bash
-cd backend
-./.venv/bin/pip install -e ".[dev]"
-./.venv/bin/python -m pytest
+cd backend && ./.venv/bin/python -m pytest
 ```
-
-Frontend (`vitest`):
-
-```bash
-cd frontend
-npm test
-```
-
-## Theming
-
-The visual tokens (colours, typography, shape) live in
-[`frontend/src/theme.css`](frontend/src/theme.css). `styles.css`
-consumes them via `var(--voitta-…)`. To rebrand, swap the values in
-`theme.css` and rebuild.
-
-## Adding a data provider
-
-Every data provider lives in its own subpackage under
-`backend/app/tools/providers/`. The recipe is in
-[docs/04-tool-catalog.md](docs/04-tool-catalog.md). Short version:
-
-1. `backend/app/tools/providers/<name>/context.py` — host-gated
-   `<name>_get_page_context` tool.
-2. `backend/app/tools/providers/<name>/tools.py` — action tools,
-   visibility-gated by an OAuth-status check.
-3. Mirror `app/services/google_oauth.py` if the provider needs OAuth.
-4. Wire the new package into `app/tools/providers/__init__.py`.
-
-## Where to read next
-
-- New here? [docs/00-overview.md](docs/00-overview.md).
-- Wiring a new tool? [docs/04-tool-catalog.md](docs/04-tool-catalog.md).
-- Debugging the bridge? [docs/05-bridge-protocol.md](docs/05-bridge-protocol.md).
-- Switching LLM providers? [docs/03-providers.md](docs/03-providers.md).

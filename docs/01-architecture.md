@@ -1,138 +1,88 @@
 # Architecture
 
-## Backend layout
+## Request flow (happy path)
 
 ```
-backend/
-├── pyproject.toml
-├── run.sh                     ← starts uvicorn (HTTPS via mkcert)
-├── certs/                     ← mkcert-generated cert+key (gitignored)
-├── tests/                     ← pytest: registry, providers, drive context, config
-└── app/
-    ├── main.py                ← FastAPI app, CORS, /widget.js, /health, OAuth callbacks
-    ├── config.py              ← server constants + the Voitta system prompt
-    ├── routes/
-    │   ├── chat.py            ← provider-agnostic tool-use loop, SSE to browser
-    │   ├── tools.py           ← bridge endpoints (/tools/inbox, /tools/result, /tools/register)
-    │   ├── providers.py       ← LLM provider config readback for the Settings panel
-    │   └── cli.py             ← localhost-only back-channel for external automation
-    ├── services/
-    │   ├── llm/               ← Anthropic / OpenAI / Gemini adapters
-    │   ├── google_oauth.py    ← Drive OAuth state + token refresh
-    │   ├── panel_app.py       ← Bokeh+Panel app factory mounted under /panel/reports
-    │   ├── panel_renderer.py  ← LLM-authored report scripts → Panel layout
-    │   ├── python_storage.py  ← server-side snapshot directory ops
-    │   ├── render_events.py   ← /api/report-render-events bus
-    │   ├── scripts.py         ← compute + report script storage / runner
-    │   └── user_settings.py   ← ~/.config/voitta-bookmarklet/settings.json I/O
-    ├── bridge/
-    │   ├── bus.py             ← in-memory ToolBridge (sessions + futures + queues)
-    │   └── models.py          ← wire types for /tools/* routes
-    └── tools/
-        ├── registry.py        ← LLM-facing ToolRegistry (host gating, visibility check)
-        ├── browser.py         ← thin wrapper over bridge.call()
-        ├── rag/               ← Chroma + BM25 index loader + query/range
-        ├── domain/            ← provider-agnostic tools (rag, web, screenshot, …)
-        └── providers/         ← provider-specific tools (drive today, more later)
-            └── drive/
-                ├── context.py ← drive_get_page_context, host-gated
-                └── tools.py   ← drive_list_files / search / get / download / export
+user types in widget
+    │
+    ▼
+@chainlit/react-client emits "send-message" over Socket.IO
+    │
+    ▼
+backend/app/chainlit_app.py:on_message
+    │
+    ▼
+agent.py:run_turn        ◄── messages, system prompt, provider_id
+    │
+    ├── provider.stream_message(NormalisedRequest)
+    │       │
+    │       ├── yields BlockStart / BlockDelta / BlockStop / MessageStop
+    │       │
+    │       └── cl.Message.stream_token → widget renders incrementally
+    │
+    ├── if stop_reason == "tool_use":
+    │       for each tool block:
+    │         registry.dispatch(name, args)
+    │           │
+    │           ├── side="server"  → await spec.impl(args)
+    │           └── side="browser" → cl.CopilotFunction(name, args).acall()
+    │                                 ↳ FE routes to primitives.ts
+    │
+    └── append synthetic tool_result message; loop
 ```
 
-## Request flow (one chat turn)
+The loop terminates when the model emits a non-`tool_use` stop reason
+or hits `MAX_TOOL_ITERATIONS`.
 
-1. Browser POSTs `/api/chat/stream` with `{messages, session_id, provider?, model?}`.
-2. Server opens an SSE response. The first event is `start`.
-3. Server picks the provider and runs the **tool-use loop**:
-   - Build the normalised request: messages + system + tool list filtered
-     by host (see "Host-gated tool exposure" below).
-   - Call `provider.create_message(req)`.
-   - Emit one `delta` event per text block.
-   - If `stop_reason == "tool_use"`: dispatch every `tool_use` block in
-     parallel through the registry, append `tool_result` blocks, loop.
-   - Otherwise emit `done` and close.
-4. Hard cap: `MAX_TOOL_ITERATIONS = 25` per turn (configurable, ceilinged
-   server-side).
+## Key modules
 
-### Tool dispatch — single registry, two execution sides
+| Module | Role |
+|---|---|
+| [`chainlit_app.py`](../backend/app/chainlit_app.py) | `@cl.on_chat_start`, `@cl.on_message`, `@cl.on_window_message`. Composes system prompt from applicable plugins. |
+| [`agent.py`](../backend/app/agent.py) | The agent loop. Provider-agnostic — drives a `BaseProvider`. |
+| [`services/llm/`](../backend/app/services/llm) | Provider abstraction. `NormalisedRequest`, `ToolSchema`, streaming events. One subpackage per provider. |
+| [`tools/registry.py`](../backend/app/tools/registry.py) | `ToolSpec` + register / dispatch / `schemas_for_host`. |
+| [`tools/load.py`](../backend/app/tools/load.py) | Side-effect imports — every tool module registers itself here. |
+| [`plugins.py`](../backend/app/plugins.py) | Plugin discovery, manifest parsing, system-prompt loading, Python-module side-effect import. |
+| [`reports/`](../backend/app/reports) | User-authored Python scripts → renderable panes. |
 
-The registry holds `ToolSpec(name, description, input_schema, handler,
-side, host_pattern?, visibility_check?)`.
+## System prompt composition
 
-- `side="server"` — handler runs entirely in Python.
-- `side="hybrid"` — handler is Python but composes browser primitives
-  via `app.tools.browser.call_browser`.
+The base Voitta prompt lives in [`plugins/default/system.md`](../plugins/default/system.md).
+At every turn, [`chainlit_app.py`](../backend/app/chainlit_app.py)
+calls `plugins.for_host(host)` — which returns every plugin whose
+`host_patterns` matches the page's host — and concatenates their
+`system_prompt` contents. The default plugin's `host_patterns: ["*"]`
+ensures the base prompt always applies; host-scoped plugins
+(e.g. `ebay`) layer their own rules on top when active.
 
-The LLM sees a single flat tool list and doesn't know which side runs
-each tool.
+## Tool gating
 
-### Host-gated tool exposure
+`ToolSpec.host_pattern` gates a tool to specific hosts. `None` means
+"always visible." `schemas_for_host(host)` filters the registry before
+handing the tool list to the model — the model never sees tools that
+don't apply on the current page.
 
-Provider page-context tools (e.g. `drive_get_page_context`) only make
-sense on the matching host. They declare `host_pattern="drive.google.com"`;
-the chat route filters them out when the bookmarklet's reported
-`page.host` doesn't match (strict suffix rule — see
-`ToolRegistry.visible_for_host`).
+Plugins back-fill `host_pattern` on their contributed ToolSpecs from
+the manifest's `host_patterns`, so plugin authors specify host gating
+ONCE in the manifest. Per-tool overrides win.
 
-Action tools (`drive_list_files`, etc.) are NOT host-gated — the LLM
-can use them from any page once the user has connected the provider's
-OAuth in Settings (`visibility_check=google_oauth.is_connected`).
+## Configuration
 
-## Browser primitives
+- **Process-wide constants** — [`config.py`](../backend/app/config.py):
+  paths (`PROJECT_ROOT`, `DOCS_DIR`, `PLUGINS_DIR`, `RAG_DIR`), TLS
+  cert paths, host/port, `MAX_TOKENS`, `MAX_TOOL_ITERATIONS`.
 
-Generic primitives exposed via the bridge. The browser implements them;
-hybrid Python tools call them.
+- **Per-user settings** — `~/.config/voitta-bookmarklet-chainlit/settings.json`,
+  read at chat start and on every turn (so settings changes take
+  effect without restarting the session). Holds `provider`,
+  `api_keys[provider]`, `models[provider]`.
 
-| Primitive | Purpose |
-| --------- | ---- |
-| `get_url` | URL/title of the active page |
-| `read_dom` | `querySelector`-style read with a 200 KB cap |
-| `read_selection` | The user's current text selection |
-| `screenshot_report` | Rasterise the active HoloViz Panel iframe |
-| `get_report_edits` | Read live drag/resize state out of the editable report iframe |
-| `eval_js` | Sandboxed `new AsyncFunction(...)` evaluator with console capture |
-| `get_page_dump` | URL + title + full outerHTML (CLI back-channel only) |
+## TLS
 
-Provider-specific primitives (Drive download, etc.) live with their
-provider package, not in the global primitives surface.
-
-## Provider abstraction (LLM)
-
-Each LLM provider implements:
-
-```python
-class Provider(Protocol):
-    id: Literal["anthropic", "openai", "gemini"]
-    async def create_message(self, req: NormalisedRequest) -> NormalisedResponse: ...
-```
-
-`NormalisedRequest` / `NormalisedResponse` use the Anthropic block shape
-as the canonical interchange. Each adapter converts in/out. See
-[03-providers.md](03-providers.md).
-
-## RAG (local, hybrid)
-
-Dense (Chroma) + sparse (bm25s), fused with
-`final = w * dense + (1 - w) * sparse`. Two corpora:
-
-- `docs` — this project's own `docs/`.
-- `panel` — the HoloViz Panel source under `libs-info/panel/`.
-
-Indexes are built out-of-process by `rag/build_rag.py` and
-`rag/build_panel_rag.py`, lazy-loaded on first query.
-
-Two server-side tools expose it: `rag_query`, `rag_get_chunk_range`.
-
-## Cancellation chain
-
-User clicks Stop, or closes the pane mid-turn:
-
-1. Browser closes the chat-stream SSE; aborts every in-flight primitive.
-2. Server's chat handler raises `asyncio.CancelledError` through the
-   orchestrator.
-3. Orchestrator cancels the active provider call, then for every still-
-   pending bridge `call_id`:
-   - emits `event: cancel { call_id }` on the inbox,
-   - resolves the corresponding `Future` so the awaiting coroutine unwinds.
-
-Every pending Future is also drained on inbox SSE close (full pane close).
+The widget runs on a foreign origin and embeds the BE via
+`https://127.0.0.1:12358`. Modern browsers require HTTPS for the
+Socket.IO upgrade — a self-signed cert lives at
+[`certs/127.0.0.1+1.pem`](../certs). The user accepts the cert once
+(visit the BE root in the browser), and the bookmarklet works
+thereafter.

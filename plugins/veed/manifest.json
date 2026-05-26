@@ -1,0 +1,8 @@
+{
+  "name": "veed",
+  "version": "0.1.0",
+  "description": "VEED.IO video editor integration — read the open project's composition, media sources, and subtitles.",
+  "host_patterns": ["www.veed.io"],
+  "python_module": "voitta_veed",
+"system_prompt": "prompt.md"
+}

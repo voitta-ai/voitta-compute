@@ -1,0 +1,193 @@
+/* Dark theme. Applied when ``data-theme="dark"`` lives on the root,
+ * or when ``data-theme="auto"`` is set and the OS prefers dark.
+ *
+ * Surfaces inverted: drawer body → near-black, cards → faint elevated
+ * grey, borders → low-contrast grey. Header keeps the same deep-slate
+ * (works in both schemes). Accent flips to light so high-contrast CTAs
+ * still pop on the dark body.
+ */
+
+:host([data-theme="dark"]),
+.root[data-theme="dark"] {
+  /* ── Surfaces ─────────────────────────────────────────────────── */
+  --voitta-bg:        #0f1115;
+  --voitta-surface:   #161922;
+  --voitta-border:    #262a35;
+  --voitta-divider:   #1d212c;
+
+  /* ── Text ─────────────────────────────────────────────────────── */
+  --voitta-text:       #e6e6e8;
+  --voitta-text-muted: #a0a3ad;
+  --voitta-text-faint: #6b6e78;
+
+  /* ── Accent (light-on-dark inverts the light scheme's near-black). */
+  --voitta-accent:        #f1f5f9;
+  --voitta-accent-hover:  #cbd5e1;
+  --voitta-accent-fg:     #0f172a;
+  --voitta-accent-tint:   rgba(241, 245, 249, 0.16);
+
+  /* ── Header strip ─────────────────────────────────────────────── */
+  --voitta-header-bg:           #070a14;
+  --voitta-header-fg:           #f1f5f9;
+  --voitta-header-rule:         #1e293b;
+  --voitta-header-icon:         #f1f5f9;
+  --voitta-header-muted:        rgba(241, 245, 249, 0.55);
+  --voitta-header-btn-bg:       rgba(241, 245, 249, 0.06);
+  --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.14);
+
+  /* ── Conversation bubbles ────────────────────────────────────── */
+  --voitta-user-bubble:    #1f2733;
+  --voitta-user-bubble-fg: #e6e6e8;
+
+  /* ── Tool-call chips ─────────────────────────────────────────── */
+  --voitta-tool-bg:     #161922;
+  --voitta-tool-border: #262a35;
+
+  /* ── Stop button — same red as light, slightly hotter for the
+       darker surround so it reads as stop, not as a warning chip. */
+  --voitta-stop-bg:       #ef4444;   /* red-500 */
+  --voitta-stop-bg-hover: #dc2626;   /* red-600 */
+
+  /* ── Scrollbars ──────────────────────────────────────────────── */
+  --voitta-scrollbar-thumb:       rgba(255, 255, 255, 0.22);
+  --voitta-scrollbar-thumb-hover: rgba(255, 255, 255, 0.42);
+  --voitta-scrollbar-track:       transparent;
+
+  /* ── Inline code + code blocks ───────────────────────────────── */
+  --voitta-code-bg:        rgba(255, 255, 255, 0.08);
+  --voitta-code-block-bg:  #0a0d12;
+  --voitta-code-block-fg:  #e6e6e8;
+  --voitta-link-fg:        #7fb3ff;
+
+  /* ── Rich blocks ─────────────────────────────────────────────── */
+  --voitta-rich-text-bg: #161922;
+  --voitta-heatmap-bg:   #161922;
+
+  /* ── Logs view (already dark in light theme — slightly tuned) ── */
+  --voitta-log-bg:           #0a0d12;
+  --voitta-log-fg:           #dddddd;
+  --voitta-log-toolbar-bg:   #15191e;
+  --voitta-log-toolbar-rule: #000000;
+  --voitta-log-title-fg:     #cfd8dc;
+  --voitta-log-btn-bg:       #262a35;
+  --voitta-log-btn-bg-hover: #323845;
+  --voitta-log-btn-border:   #3a3f4d;
+  --voitta-log-line-rule:    #1d212c;
+  --voitta-log-body-bg:      #0a0d12;
+  --voitta-log-body-rule:    #2a2a2a;
+  --voitta-log-error-fg:     #ff8080;
+  --voitta-log-error-rule:   #ff5050;
+  --voitta-log-warn-fg:      #ffcc66;
+  --voitta-log-warn-rule:    #d49b3a;
+  --voitta-log-info-fg:      #dddddd;
+
+  /* ── Artifacts panel ─────────────────────────────────────────── */
+  --voitta-art-titlebar-bg-from: #161922;
+  --voitta-art-titlebar-bg-to:   #0f1115;
+  --voitta-art-titlebar-rule:    #262a35;
+  --voitta-art-window-border:    #262a35;
+  --voitta-art-btn-bg-hover:     #1d212c;
+  --voitta-art-btn-border-hover: #3a3f4d;
+  --voitta-art-row-rule:         #1d212c;
+  --voitta-art-row-stripe:       #161922;
+  --voitta-art-row-hover:        #1f2a3a;
+  --voitta-art-row-selected-bg:  #0a84ff;
+  --voitta-art-row-selected-fg:  #ffffff;
+  --voitta-art-ctxmenu-bg:       #161922;
+  --voitta-art-ctxmenu-border:   #262a35;
+  --voitta-art-ctxmenu-hover:    #0a84ff;
+  --voitta-art-ctxmenu-fg:       #e6e6e8;
+  --voitta-art-ctxmenu-fg-hover: #ffffff;
+  --voitta-art-ctxmenu-disabled: #6b6e78;
+  --voitta-art-ctxmenu-shadow:   0 6px 24px rgba(0, 0, 0, 0.6);
+  --voitta-art-footer-bg:        #15191e;
+  --voitta-art-footer-rule:      #1d212c;
+  --voitta-art-badge-bg:         #1f2733;
+  --voitta-art-badge-border:     #2a3548;
+  --voitta-art-badge-fg:         #a0a3ad;
+  --voitta-art-size-fg:          #a0a3ad;
+
+  /* ── Status colours (toned for dark surface) ─────────────────── */
+  --voitta-warn-bg:      #0d0905;
+  --voitta-warn-border:  #b05a10;
+  --voitta-warn-fg:      #b87030;
+  --voitta-error-bg:     #0d0606;
+  --voitta-error-border: #8a2020;
+  --voitta-error-fg:     #c47070;
+  --voitta-ok-fg:        #6ee7b7;
+
+  /* ── Flow-chart nodes ────────────────────────────────────────── */
+  --voitta-flow-grid: #1d212c;
+
+  --voitta-flow-tone-default-bg:     #1e293b;
+  --voitta-flow-tone-default-fg:     #f1f5f9;
+  --voitta-flow-tone-default-border: #475569;
+  --voitta-flow-edge-default:        #64748b;
+
+  --voitta-flow-tone-info-bg:        #0c4a6e;
+  --voitta-flow-tone-info-fg:        #e0f2fe;
+  --voitta-flow-tone-info-border:    #7dd3fc;
+  --voitta-flow-edge-info:           #0ea5e9;
+
+  --voitta-flow-tone-success-bg:     #064e3b;
+  --voitta-flow-tone-success-fg:     #d1fae5;
+  --voitta-flow-tone-success-border: #6ee7b7;
+  --voitta-flow-edge-success:        #10b981;
+
+  --voitta-flow-tone-warning-bg:     #78350f;
+  --voitta-flow-tone-warning-fg:     #fef3c7;
+  --voitta-flow-tone-warning-border: #fcd34d;
+  --voitta-flow-edge-warning:        #f59e0b;
+
+  --voitta-flow-tone-critical-bg:    #7f1d1d;
+  --voitta-flow-tone-critical-fg:    #fee2e2;
+  --voitta-flow-tone-critical-border:#fca5a5;
+  --voitta-flow-edge-critical:       #ef4444;
+
+  --voitta-flow-node-bg:       #161922;
+  --voitta-flow-node-fg:       #e6e6e8;
+  --voitta-flow-node-fg-muted: #a0a3ad;
+  --voitta-flow-node-fg-faint: #6b6e78;
+  --voitta-flow-node-border:   #262a35;
+}
+
+/* ``auto`` mode: derive from the OS preference. The :host[data-theme="auto"]
+   case is just the light defaults (already applied unconditionally above),
+   plus this @media block flips to dark when the OS asks for it. */
+@media (prefers-color-scheme: dark) {
+  :host([data-theme="auto"]),
+  .root[data-theme="auto"] {
+    color-scheme: dark;
+    /* Re-apply every dark-theme token by referencing the same selectors
+       indirectly: redeclare here to keep this file self-contained. */
+    --voitta-bg:        #0f1115;
+    --voitta-surface:   #161922;
+    --voitta-border:    #262a35;
+    --voitta-divider:   #1d212c;
+    --voitta-text:       #e6e6e8;
+    --voitta-text-muted: #a0a3ad;
+    --voitta-text-faint: #6b6e78;
+    --voitta-accent:        #f1f5f9;
+    --voitta-accent-hover:  #cbd5e1;
+    --voitta-accent-fg:     #0f172a;
+    --voitta-accent-tint:   rgba(241, 245, 249, 0.16);
+    --voitta-header-bg:           #070a14;
+    --voitta-user-bubble:    #1f2733;
+    --voitta-user-bubble-fg: #e6e6e8;
+    --voitta-tool-bg:     #161922;
+    --voitta-tool-border: #262a35;
+    --voitta-scrollbar-thumb:       rgba(255, 255, 255, 0.22);
+    --voitta-scrollbar-thumb-hover: rgba(255, 255, 255, 0.42);
+    --voitta-code-bg:        rgba(255, 255, 255, 0.08);
+    --voitta-link-fg:        #7fb3ff;
+    --voitta-rich-text-bg: #161922;
+    --voitta-heatmap-bg:   #161922;
+    --voitta-warn-bg:      #0d0905;
+    --voitta-warn-border:  #b05a10;
+    --voitta-warn-fg:      #b87030;
+    --voitta-error-bg:     #0d0606;
+    --voitta-error-border: #8a2020;
+    --voitta-error-fg:     #c47070;
+    --voitta-ok-fg:        #6ee7b7;
+  }
+}

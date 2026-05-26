@@ -1,227 +1,153 @@
-"""``ctx.ensure_local`` — resolve an upstream-artefact ref to a local path.
+"""``ensure_local`` registry + dispatcher.
 
-Reports and compute scripts persist source code that runs months later.
-Hard-coding a ``py_<handle>`` snapshot id in the script means it breaks
-the moment the snapshot is GC'd or the user deletes it. The contract
-documented in ``VOITTA_SYSTEM_PROMPT`` (§ REPORTS — REFERENCE UPSTREAM
-ARTEFACTS) is: write canonical refs, let the runtime materialise local
-copies on demand.
+Plugins register an async resolver for their URI scheme at import time::
 
-This module is that runtime. ``ensure_local(ref)``:
+    from app.services import ensure_local
+    ensure_local.register("vre", resolve)   # async def resolve(ref: Ref) -> Path
 
-  1. Parses ``ref`` via :mod:`app.services.refs`.
-  2. Walks ``python_storage/cache/snapshot_*/meta.json`` looking for an
-     ``origin.ref`` that matches the canonical form. Hit → return its
-     local path. (This is the "share" semantics: two reports requesting
-     the same upstream artefact share its cache entry.)
-  3. Miss → dispatch to the scheme's resolver, which fetches the
-     artefact, writes a snapshot, and stamps ``meta.json::origin.ref``
-     with the canonical so step 2 wins next time.
+``ensure_local(ref_string, loop=...)`` dispatches by scheme, runs the
+resolver, and returns the local path as a string.
 
-Resolvers run async — VRE goes over MCP, Drive uses httpx. From sync
-script code we hand them to ``run_coroutine_threadsafe`` against the
-backend's main loop. The script's executor thread blocks on ``.result()``
-until the resolver returns. Crashes / non-existent connectors / signed
-URL failures surface as :class:`EnsureLocalError`.
+**Sync/async bridge**: resolvers are always ``async def``. Scripts run
+inside ``asyncio.to_thread`` (sandbox.run offloads _execute to a thread
+pool), so the event loop is free. We bridge back with
+``run_coroutine_threadsafe(resolver(ref), loop).result()``. Callers
+outside an asyncio context (tests, CLI) fall through to ``asyncio.run``.
+
+Adding a new plugin scheme:
+
+1.  Write ``async def resolve(ref: refs.Ref) -> Path``
+2.  Call ``ensure_local.register("myscheme", resolve)`` at import time
+3.  Write ``meta.json`` in the snapshot dir with ``origin.ref = ref.canonical``
+    so subsequent runs skip the download.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import concurrent.futures
 import logging
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from app.services import python_storage, refs
+from app.services import refs
 
-_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class EnsureLocalError(RuntimeError):
-    """Raised when a ref can't be resolved.
-
-    The script's ``try/except`` around ``ctx.ensure_local`` can catch
-    this and decide whether to degrade gracefully or propagate.
-    """
+    pass
 
 
-# Resolver registry. Keyed by scheme. Each resolver is an async
-# function ``async def resolve(parsed_ref) -> Path`` that performs the
-# fetch and returns the local path of the freshly-cached snapshot.
 ResolverFn = Callable[[refs.Ref], Awaitable[Path]]
-_RESOLVERS: dict[str, ResolverFn] = {}
+
+_resolvers: dict[str, ResolverFn] = {}
+# In-memory dedup: canonical ref string → resolved local path.
+# Cleared if the cached path no longer exists on disk.
+_cache: dict[str, str] = {}
 
 
 def register(scheme: str, fn: ResolverFn) -> None:
-    """Register a resolver for ``scheme``. Last-write-wins — useful in
-    test fixtures. Re-registering a scheme already bound to a different
-    function logs a WARNING so production plugin conflicts aren't silent."""
-    key = scheme.lower()
-    prior = _RESOLVERS.get(key)
-    if prior is not None and prior is not fn:
-        _logger.warning(
-            "ensure_local: scheme %r resolver overwritten "
-            "(was %s.%s, now %s.%s) — last plugin to load wins",
-            key,
-            prior.__module__, getattr(prior, "__qualname__", prior),
-            fn.__module__, getattr(fn, "__qualname__", fn),
+    """Register the resolver for ``scheme``. Called at plugin import time.
+    Re-registration replaces — last writer wins."""
+    scheme = scheme.lower()
+    if scheme in _resolvers:
+        logger.warning(
+            "ensure_local resolver for %r already registered; replacing", scheme
         )
-    _RESOLVERS[key] = fn
+    _resolvers[scheme] = fn
+    logger.debug("ensure_local: registered resolver for scheme %r", scheme)
 
 
 def available_schemes() -> set[str]:
-    """Return the set of registered ref schemes. Useful for UIs that
-    want to disable features when their plugin isn't loaded."""
-    return set(_RESOLVERS)
+    return set(_resolvers)
 
 
-def _find_cached(canonical: str) -> Path | None:
-    """Walk the snapshot cache and return the cached path for ``canonical``.
+def ensure_local(
+    ref_string: str,
+    *,
+    loop: asyncio.AbstractEventLoop | None = None,
+) -> str:
+    """Materialise ``ref_string`` to a local path and return it.
 
-    Single-file snapshots return the file path (so the script can
-    ``Path(p).read_bytes()`` immediately); multi-file snapshots
-    return the directory (so the script can enumerate variants).
-    The choice is driven by ``meta.stored_name`` — single-file
-    resolvers set it, multi-file resolvers leave it None. Crucially,
-    this must match the shape the resolver returns on a *fresh* fetch;
-    otherwise scripts see ``Is a directory: …`` errors the second
-    time they reference the same ref.
-
-    Slow path is linear in number of snapshots, but every miss already
-    triggers a network fetch — a few ``stat`` + ``read_text`` calls
-    don't move the needle.
-    """
-    root = python_storage.STORAGE_ROOT
-    if not root.exists():
-        return None
-    for snap_dir in root.iterdir():
-        if not snap_dir.is_dir():
-            continue
-        meta_path = snap_dir / "meta.json"
-        if not meta_path.is_file():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            continue
-        origin = meta.get("origin") or {}
-        if not (isinstance(origin, dict) and origin.get("ref") == canonical):
-            continue
-        stored = meta.get("stored_name")
-        if isinstance(stored, str) and stored:
-            candidate = snap_dir / stored
-            if candidate.is_file():
-                return candidate
-            # Fall through: meta says single-file but the file is gone.
-            # Returning the dir is safer than returning a non-existent
-            # path; scripts that wrap ensure_local in try/except will
-            # see a clear error. Bare dir return matches multi-file
-            # semantics.
-        return snap_dir
-    return None
-
-
-def _resolve_sync(ref_str: str) -> Path:
-    """Synchronous entry point used by ``ctx.ensure_local`` (which is
-    itself called from sync script code).
-
-    Cache lookup is sync. On miss we hand off to the registered async
-    resolver via ``run_coroutine_threadsafe`` against whichever event
-    loop happens to be running the backend — the same loop that
-    scheduled the script's executor thread.
+    ``loop`` must be the running event loop when called from a thread
+    (i.e. from inside ``asyncio.to_thread``). Pass ``ctx._loop`` from
+    ``ScriptContext`` — it is set by ``sandbox.run`` before offloading
+    ``_execute`` to the thread pool.
     """
     try:
-        parsed = refs.parse(ref_str)
+        ref = refs.parse(ref_string)
     except refs.RefError as exc:
-        raise EnsureLocalError(f"invalid ref: {exc}") from exc
+        raise EnsureLocalError(f"invalid ref {ref_string!r}: {exc}") from exc
 
-    # Cache lookup first.
-    cached = _find_cached(parsed.canonical)
-    if cached is not None:
-        _logger.info("ensure_local cache hit: %s -> %s", parsed.canonical, cached)
+    # In-memory cache: skip the resolver entirely if we already have it.
+    cached = _cache.get(ref.canonical)
+    if cached and Path(cached).exists():
+        logger.debug("ensure_local: cache hit %r → %r", ref.canonical, cached)
         return cached
 
-    resolver = _RESOLVERS.get(parsed.scheme)
+    resolver = _resolvers.get(ref.scheme)
     if resolver is None:
         raise EnsureLocalError(
-            f"no resolver registered for scheme {parsed.scheme!r} "
-            f"(ref={parsed.canonical!r})"
+            f"no ensure_local resolver for scheme {ref.scheme!r} — "
+            f"registered schemes: {sorted(_resolvers) or '(none)'}"
         )
 
-    # Dispatch onto the dedicated resolver loop. We do NOT use the
-    # main FastAPI loop: report_script_layout (Panel session handler)
-    # runs synchronously on the main loop, then calls build(ctx) →
-    # ctx.ensure_local() → us. Scheduling back to the main loop with
-    # run_coroutine_threadsafe and blocking on .result() would
-    # deadlock the loop with itself. A private loop on its own
-    # thread side-steps the whole class of problem and works
-    # identically from the script-executor thread (compute scripts)
-    # and from the main loop (Panel report handlers).
-    loop = _resolver_loop()
-    fut = asyncio.run_coroutine_threadsafe(resolver(parsed), loop)
-    try:
-        path = fut.result()
-    except Exception as exc:
-        raise EnsureLocalError(
-            f"resolver for {parsed.scheme!r} failed: {exc}"
-        ) from exc
-    _logger.info("ensure_local cache miss → fetched: %s -> %s", parsed.canonical, path)
-    return path
+    coro = resolver(ref)
+
+    if loop is not None and loop.is_running():
+        # We are in a thread pool thread; the event loop is running in another
+        # thread. Bridge the async resolver back into that loop.
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            path = future.result(timeout=120)
+        except concurrent.futures.TimeoutError:
+            raise EnsureLocalError(
+                f"resolver for {ref.scheme!r} timed out after 120 s"
+            )
+    else:
+        # No running loop (tests, CLI). Run synchronously.
+        path = asyncio.run(coro)
+
+    result = str(path)
+    _cache[ref.canonical] = result
+    return result
 
 
-# ─── Dedicated resolver loop ───────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Built-in py:// resolver — python_storage snapshots
 #
-# One background thread, one private asyncio loop. Started lazily on
-# first use; lives for the process lifetime (no shutdown hook — the
-# OS reclaims it when uvicorn exits). The loop is dedicated to
-# ensure_local's resolver coroutines so the main FastAPI loop is
-# never blocked or recursed into.
+# URI format:  py://<handle>/<filename>
+#              py://<handle>          ← first non-meta file in snapshot dir
+#
+# Examples:
+#   py://py_71e1c5b2/frame_0.00s.jpg
+#   py://py_71e1c5b2
+# ---------------------------------------------------------------------------
 
-import threading
+async def _resolve_py(ref: refs.Ref) -> Path:
+    from app.services import python_storage
+    # ref.authority is the handle; ref.path is optional filename
+    handle = ref.authority
+    filename = (ref.path or "").lstrip("/")
 
-_resolver_loop_lock = threading.Lock()
-_resolver_loop_obj: asyncio.AbstractEventLoop | None = None
+    rec = python_storage.get(handle)
+    if rec is None:
+        raise EnsureLocalError(f"py:// no snapshot with handle {handle!r}")
 
+    snap_dir = Path(rec["path"])
+    if filename:
+        p = snap_dir / filename
+        if not p.exists():
+            raise EnsureLocalError(f"py://{handle}/{filename} not found in snapshot")
+        return p
 
-def _resolver_loop() -> asyncio.AbstractEventLoop:
-    global _resolver_loop_obj
-    if _resolver_loop_obj is not None:
-        return _resolver_loop_obj
-    with _resolver_loop_lock:
-        if _resolver_loop_obj is not None:
-            return _resolver_loop_obj
-        loop = asyncio.new_event_loop()
-        # Daemon=True so the process can exit cleanly without joining.
-        # Name shows up in py-spy / debuggers if someone goes looking.
-        t = threading.Thread(
-            target=loop.run_forever,
-            name="ensure_local-resolver",
-            daemon=True,
-        )
-        t.start()
-        _resolver_loop_obj = loop
-        _logger.info("ensure_local: resolver loop started on background thread")
-        return loop
-
-
-def bind_loop(_loop: asyncio.AbstractEventLoop) -> None:
-    """Compatibility shim — kept so main.py's startup hook keeps
-    importing cleanly during the in-place refactor. The resolver loop
-    is now self-managing (lazy-started on first ensure_local call),
-    so the bound loop is just ignored. The shim stays as a tombstone
-    until the next API-sweep commit."""
-    _logger.debug(
-        "ensure_local.bind_loop called; resolver now uses its own private loop"
-    )
+    # No filename — return the first non-meta file
+    skip = {"meta.json", "raw.json", "curves.pkl"}
+    for f in sorted(snap_dir.iterdir()):
+        if f.name not in skip and f.is_file():
+            return f
+    raise EnsureLocalError(f"py://{handle} snapshot contains no data files")
 
 
-def ensure_local(ref: str) -> str:
-    """Public entry point used by ``ScriptCtx.ensure_local``.
-
-    Returns the local *file or directory* path (as a string) that
-    materialises ``ref``. Raises :class:`EnsureLocalError` on any
-    failure — script authors can wrap the call in ``try/except`` to
-    degrade gracefully if a single asset is missing.
-    """
-    return str(_resolve_sync(ref))
+register("py", _resolve_py)

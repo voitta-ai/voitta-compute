@@ -1,0 +1,184 @@
+/* ─── messages ───────────────────────────────────────────────────────────── */
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.empty {
+  margin: auto;
+  text-align: center;
+  color: var(--voitta-text-muted);
+  padding: 24px 16px;
+}
+.empty .badge {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.msg {
+  max-width: 92%;
+  word-wrap: break-word;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.msg.user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--voitta-user-bubble);
+  color: var(--voitta-user-bubble-fg);
+  white-space: pre-wrap;
+}
+.msg.assistant {
+  align-self: flex-start;
+  max-width: 95%;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-border);
+}
+.msg.error {
+  align-self: stretch;
+  background: var(--voitta-error-bg);
+  color: var(--voitta-error-fg);
+  border: 1px solid var(--voitta-error-border);
+  white-space: pre-wrap;
+}
+
+/* assistant turn = vertical stack of items (text bubbles, tool blocks) */
+.turn.assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: stretch;
+  min-width: 0;
+}
+.turn.assistant.streaming .msg.assistant:last-child {
+  border-color: var(--voitta-accent-tint);
+}
+.turn.assistant .msg.assistant {
+  align-self: flex-start;
+}
+
+/* sequential tool-call blocks (collapsible `<details>`) */
+.tool-line {
+  align-self: flex-start;
+  max-width: 95%;
+  background: var(--voitta-tool-bg);
+  border: 1px solid var(--voitta-tool-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--voitta-text);
+}
+.tool-line .sym {
+  font-weight: 700;
+  margin-right: 4px;
+}
+.tool-line .name {
+  font-weight: 600;
+}
+.tool-line .extra {
+  color: var(--voitta-text-muted);
+  margin-left: 4px;
+  font-weight: normal;
+}
+.tool-line summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  outline: none;
+}
+.tool-line summary::-webkit-details-marker {
+  display: none;
+}
+.tool-line summary::before {
+  content: "▸ ";
+  color: var(--voitta-text-faint);
+  font-size: 10px;
+}
+.tool-line[open] summary::before {
+  content: "▾ ";
+}
+.tool-line.status-running {
+  background: var(--voitta-warn-bg);
+  border-color: var(--voitta-warn-border);
+  color: var(--voitta-warn-fg);
+  box-shadow: 0 0 0 1px var(--voitta-warn-border), 0 0 10px rgba(176, 90, 16, 0.25);
+}
+.tool-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: voitta-spin 0.7s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+@keyframes voitta-spin {
+  to { transform: rotate(360deg); }
+}
+.tool-line.status-ok {
+  background: var(--voitta-tool-bg);
+  border-color: var(--voitta-tool-border);
+  color: var(--voitta-text);
+}
+.tool-line.status-ok .sym {
+  color: var(--voitta-ok-fg);
+}
+.tool-line.status-error {
+  background: var(--voitta-error-bg);
+  border-color: var(--voitta-error-border);
+  color: var(--voitta-error-fg);
+  box-shadow: 0 0 0 1px var(--voitta-error-border), 0 0 10px rgba(138, 32, 32, 0.2);
+}
+.tool-line.status-error .sym {
+  color: var(--voitta-error-fg);
+}
+.tool-line .tool-body {
+  margin: 6px 0 0;
+  padding: 6px;
+  background: var(--voitta-bg);
+  border: 1px solid var(--voitta-border);
+  border-radius: 4px;
+  overflow: auto;
+  max-height: 240px;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  color: var(--voitta-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes voitta-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.dots {
+  display: inline-block;
+  color: var(--voitta-text-faint);
+  letter-spacing: 2px;
+}
+
+/* Rotating Claude-Code-style "thinking" verb shown next to the streaming
+   indicator. Italic + muted; the trailing .dots inherit the existing
+   muted styling so they sit visually next to the verb. */
+.spinner-verb {
+  display: inline-block;
+  margin-top: 6px;
+  font-style: italic;
+  color: var(--voitta-text-faint);
+  font-size: 13px;
+}
+.spinner-verb .dots {
+  margin-left: 2px;
+}

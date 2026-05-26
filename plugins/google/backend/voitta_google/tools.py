@@ -630,6 +630,7 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
         return {"ok": False, "error": "invalid_args", "message": "file_id required"}
     name_override = (args.get("name") or "").strip() or None
     force_refresh = bool(args.get("force_refresh", False))
+    folder_name: str | None = args.get("folder_name") or None
 
     started = time.time()
 
@@ -750,6 +751,7 @@ async def _do_drive_download(
         src_path=tmp_path,
         original_name=name,
         kind="drive_file",
+        folder_name=folder_name,
         meta={
             "origin": python_storage.make_origin(
                 source="google_drive",
@@ -827,6 +829,10 @@ registry.register(
                     "default": False,
                     "description": "Bypass the 24 h dedup cache.",
                 },
+                "folder_name": {
+                    "type": "string",
+                    "description": "Workspace folder to store the file in. Create with create_folder first.",
+                },
             },
             "required": ["file_id"],
             "additionalProperties": False,
@@ -847,6 +853,7 @@ async def _drive_export(args: dict[str, Any], ctx: ToolCtx) -> Any:
         return {"ok": False, "error": "invalid_args", "message": "file_id required"}
     fmt = (args.get("format") or "").strip().lower()
     force_refresh = bool(args.get("force_refresh", False))
+    folder_name: str | None = args.get("folder_name") or None
 
     started = time.time()
 
@@ -941,6 +948,7 @@ async def _drive_export(args: dict[str, Any], ctx: ToolCtx) -> Any:
         src_path=tmp_path,
         original_name=name_with_ext,
         kind="drive_file",
+        folder_name=folder_name,
         meta={
             "origin": python_storage.make_origin(
                 source="google_drive_export",
@@ -1021,6 +1029,10 @@ registry.register(
                     ),
                 },
                 "force_refresh": {"type": "boolean", "default": False},
+                "folder_name": {
+                    "type": "string",
+                    "description": "Workspace folder to store the export in. Create with create_folder first.",
+                },
             },
             "required": ["file_id"],
             "additionalProperties": False,
@@ -1077,6 +1089,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
             "message": "file_id (or pick_filename, for adopt mode) required",
         }
     name_hint = (args.get("name") or "").strip() or None
+    folder_name: str | None = args.get("folder_name") or None
     timeout_s = float(args.get("timeout_s") or _PICKUP_TIMEOUT_S)
     timeout_s = max(5.0, min(600.0, timeout_s))
 
@@ -1166,7 +1179,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
         _log(f"adopt-pick: moving {target!s} into python_storage")
         return _adopt_from_path(
             target, dl_dir, file_id="", started=started, via="adopt_pick",
-            progress_log=progress_log,
+            progress_log=progress_log, folder_name=folder_name,
         )
 
     # ---- normal path: trigger + watch -------------------------------------
@@ -1334,6 +1347,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
         via="adopt_fallback" if used_fallback else "watch",
         progress_log=progress_log,
         manual_url=download_url_advance,
+        folder_name=folder_name,
     )
 
 
@@ -1381,6 +1395,7 @@ def _adopt_from_path(
     src: Path, dl_dir: Path, *, file_id: str, started: float, via: str,
     progress_log: list[str] | None = None,
     manual_url: str | None = None,
+    folder_name: str | None = None,
 ) -> dict[str, Any]:
     """Move ``src`` into python_storage and return the standard envelope.
 
@@ -1396,6 +1411,7 @@ def _adopt_from_path(
         src_path=src,
         original_name=src.name,
         kind="soundcheck_dat" if soundcheck_kind else "drive_file",
+        folder_name=folder_name,
         meta={
             "origin": python_storage.make_origin(
                 source="google_drive_pickup",
@@ -1593,6 +1609,10 @@ registry.register(
                     "maximum": 600,
                     "default": 120,
                     "description": "How long to wait for the file to land. Default 120 s.",
+                },
+                "folder_name": {
+                    "type": "string",
+                    "description": "Workspace folder to store the file in. Create with create_folder first.",
                 },
             },
             "additionalProperties": False,

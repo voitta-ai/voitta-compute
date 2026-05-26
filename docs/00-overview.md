@@ -1,85 +1,46 @@
 # Overview
 
-Voitta is a right-side chat pane you inject into any web page with a
-one-click bookmarklet. The pane talks to a local FastAPI backend that
-runs the LLM tool-use loop. Server-side **provider** modules turn the
-chat into action (Google Drive today, more on the roadmap).
+Voitta is an LLM assistant injected into any web page via a
+bookmarklet. The user clicks the bookmark, a closed shadow-DOM widget
+mounts in the corner of the page, and the user can chat with a model
+that has both **server-side tools** (running in the local FastAPI/
+Chainlit backend) and **browser-side tools** (running inside the
+host page via primitives in the widget).
 
-## Project pillars
+## Two halves
 
-- **Run anywhere.** Click the bookmark on any HTTPS page; the widget
-  mounts itself in a Shadow DOM and never leaks styles either way.
-- **Server-side tools.** The browser exposes a small set of generic
-  primitives (URL, DOM, screenshot, sandboxed JS eval). Domain logic
-  lives in Python so the LLM gets one place to reason about it and
-  user data never has to round-trip through the LLM context.
-- **Provider abstraction.** Adding a data source means adding a
-  Python package under `app/tools/providers/<name>/`. Tools register
-  themselves with `host_pattern` (so they only show on the matching
-  site) and an OAuth-aware `visibility_check` (so they only show
-  once the user has connected the provider in Settings).
-- **Reports as Python.** Persistent dashboards live in
-  `scripts/reports/<name>/script.py` and render into a HoloViz Panel
-  iframe pane next to the chat. The LLM can author them via
-  `define_report(name, code)` and refresh them via
-  `show_holoviz_report(name)`.
-- **Hybrid local RAG.** A Chroma + BM25 index over `docs/` (this
-  project's own docs) and `libs-info/panel/` (HoloViz Panel source +
-  examples) gives the LLM authoritative context for answering
-  questions and writing report code.
+- **Backend** ([`backend/`](../backend)) — a [Chainlit](https://docs.chainlit.io/)
+  app driving an agent loop. The loop streams tokens, executes tool
+  calls (server or browser), and feeds results back to the LLM until
+  the model produces a final answer or hits the iteration cap. LLM
+  provider is pluggable: Anthropic, OpenAI, and Gemini are wired today.
 
-## Four layers
+- **Frontend** ([`frontend/`](../frontend)) — a Vite IIFE bundle
+  injected by the bookmarklet. It mounts React into a closed shadow
+  root, talks to the backend via [`@chainlit/react-client`](https://www.npmjs.com/package/@chainlit/react-client),
+  and exposes browser-side **primitives** the BE can call via Chainlit's
+  `CopilotFunction` round-trip.
+
+## What it's NOT
+
+- Not a Chrome extension. The bookmarklet is a single `<script>` tag —
+  no install, no manifest v3, works on any browser that supports ES2020.
+- Not multi-tenant. The backend binds to `127.0.0.1:12358` and trusts
+  the local user. There's no auth layer.
+- Not a Slack-style chat history server. Conversation state lives in
+  Chainlit's session; restarting the BE clears it.
+
+## Where things live
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Server (Python / FastAPI, this repo)                               │
-│  ┌──────────────────┐    ┌─────────────────────┐                    │
-│  │  Domain tools    │    │  LLM orchestrator   │                    │
-│  │  + providers/    │◀──▶│  (Anthropic /       │                    │
-│  │  (RAG, web,      │    │   OpenAI / Gemini)  │                    │
-│  │   Drive, …)      │    └──────────┬──────────┘                    │
-│  └──────────────────┘               │                               │
-│         tool calls dispatched to    │                               │
-│         server-side OR browser-side │                               │
-│                                     ▼                               │
-│  ┌──────────────────────────────────────────────┐                   │
-│  │  Browser-tool gateway                        │                   │
-│  │  • SSE inbox: server → browser requests      │                   │
-│  │  • POST result: browser → server             │                   │
-│  └────────────────────┬─────────────────────────┘                   │
-└───────────────────────┼─────────────────────────────────────────────┘
-                        │ HTTPS (127.0.0.1:12358 in dev)
-                        ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Browser pane (Preact, injected via bookmarklet)                    │
-│  ┌──────────────────┐   ┌────────────────────────┐                  │
-│  │  Chat UI         │   │  Browser tool runner   │                  │
-│  └──────────────────┘   │  • generic primitives  │                  │
-│                         │  • report iframe       │                  │
-│                         │  • buffers + eval      │                  │
-│                         └────────────────────────┘                  │
-└─────────────────────────────────────────────────────────────────────┘
+voitta-bookmarklet-chainlit/
+├── backend/      FastAPI + Chainlit, agent loop, tool registry
+├── frontend/     Vite IIFE bundle, React widget, primitives
+├── plugins/      Host-scoped extensions (manifest + BE module + FE widget + docs + prompt)
+├── docs/         This folder
+├── scripts/      Dev tools (RAG builder)
+└── rag/          Built RAG indexes (gitignored)
 ```
 
-## Tech stack at a glance
-
-| Layer | Stack |
-| ----- | ----- |
-| Backend | Python 3.11+, FastAPI, sse-starlette |
-| LLM | `anthropic`, `openai`, `google-genai` SDKs, behind a `Provider` protocol |
-| RAG | Local `chromadb` (dense) + `bm25s` (sparse), hybrid score fusion |
-| Frontend | Vite + Preact + TypeScript, single IIFE in a Shadow DOM |
-| Bookmarklet | One-line URL that loads `widget.js` from `https://127.0.0.1:12358` |
-| Reports | HoloViz Panel rendered server-side, iframed into the chat pane |
-
-## Where to read next
-
-- Backend architecture? [01-architecture.md](01-architecture.md)
-- Front-end widget? [02-frontend.md](02-frontend.md)
-- Tool catalogue (what the LLM can do)? [04-tool-catalog.md](04-tool-catalog.md)
-- Adding a new LLM provider? [03-providers.md](03-providers.md)
-- Adding a new data provider (next to Drive)? See "Adding a provider"
-  in [04-tool-catalog.md](04-tool-catalog.md).
-- Bridge protocol? [05-bridge-protocol.md](05-bridge-protocol.md)
-- Authoring `compute` / `report` scripts? [07-report-scripts.md](07-report-scripts.md)
-- Drive specifics? [08-drive-tools.md](08-drive-tools.md)
+See [`01-architecture.md`](01-architecture.md) for the request flow,
+[`05-plugins.md`](05-plugins.md) for the extension model.

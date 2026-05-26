@@ -109,3 +109,68 @@ OAuth state lives in `~/.config/voitta-bookmarklet/settings.json` under `googleO
 File mode `0600`, dir `0700`. PUT writes from the Settings panel **merge** into the existing blob (top-level keys), so saving LLM API keys doesn't wipe `googleOAuth`.
 
 The 7-day refresh-token expiry on External-Testing OAuth apps means you'll re-authenticate weekly via the Settings panel button. To remove that limit you'd publish the app (still External, but not Testing) — overkill for personal use.
+
+## The `drive://` ref scheme — reports reference upstream
+
+Core rule: reports never bake `py_xxx` handles into their source.
+For anything sourced from Google Drive, the canonical ref is:
+
+    drive://file_id=<FILE_ID>[&export=<mime>]
+
+Keys (URL-encode values that contain `/` or `;`):
+
+- `file_id` — required. The Drive file id (the `1AbCdEf...` string,
+  not the file name). Stable for the lifetime of the file.
+- `export` — only for Google-native types (Docs, Sheets, Slides).
+  Picks an export format: `text/csv`, `application/pdf`,
+  `text/plain`, etc. Omitted for normal binary files (.csv, .pdf,
+  .xlsx already uploaded) — those go through plain download, not
+  export. If you don't know whether a file is native or binary,
+  `drive_get_file(file_id)` tells you (look for `is_google_native`).
+
+Examples:
+
+    drive://file_id=1aBcDeF...XYZ
+    drive://file_id=1aBcDeF...XYZ&export=text/csv
+    drive://file_id=1aBcDeF...XYZ&export=application/pdf
+
+### How the resolver works
+
+`ctx.ensure_local("drive://...")` hides two pieces of nuance:
+
+1. **Auth refresh.** OAuth tokens expire. The Drive download
+   tools already transparently refresh on 401 — `ensure_local`
+   just calls them, so report code never thinks about token
+   freshness.
+2. **Native vs binary.** When `export` is set, the resolver calls
+   `drive_export_to_python_storage(file_id, format=export)`.
+   Otherwise it calls `drive_download_to_python_storage(file_id)`.
+   The resulting snapshot's `meta.json::origin` records the
+   canonical `drive://` ref so subsequent `ensure_local` calls
+   hit the cache.
+
+### Correct pattern at report-authoring time
+
+```python
+def build(ctx):
+    csv_path = ctx.ensure_local(
+        "drive://file_id=1AbCdEf...XYZ&export=text/csv"
+    )
+    df = pd.read_csv(csv_path)
+    # ...
+```
+
+### Wrong pattern (handle baked into persisted code)
+
+```python
+def build(ctx):
+    rec = ctx.snapshot("py_a1b2c3")      # ← brittle, will break
+    df = pd.read_csv(rec["path"] + "/" + rec["meta"]["stored_name"])
+```
+
+### When a handle IS fine
+
+One-shot analysis (you're not authoring a report — just
+inspecting). The handle's lifetime matches the conversation.
+The upstream-ref rule applies to **persisted** code
+(`define_script`), where someone else will run it later.

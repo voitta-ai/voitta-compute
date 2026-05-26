@@ -41,6 +41,57 @@ Tools are gated to `enterprise.voitta.ai` via the plugin's
 `host_patterns` — they're hidden from the LLM on every other host
 (matching how every other plugin scopes its tools).
 
+## The `vre://` ref scheme — reports reference upstream
+
+Core rule (Voitta-wide): reports never bake `py_xxx` handles
+into their source. For anything sourced through VRE, the
+canonical ref is:
+
+    vre://<folder_display_name>/<relative/path/to/file>[?params]
+
+Path-based: the folder display name and the file's relative path
+within that folder. No integer IDs — stable across re-indexing.
+
+Query params (all optional):
+
+- `asset` — asset type: `original` (default) / `cad_projection` /
+  `cad_mesh` (or any future type `vre_list_assets` exposes).
+- `slug` — required for `cad_projection`; required for
+  per-component `cad_mesh`; omitted for whole-file `cad_mesh`
+  or `original`.
+- `export` — for `cad_projection`, picks one view: `front` /
+  `top` / `side` / `iso`. Omitting it means the ref resolves to
+  a directory containing all four PNGs.
+
+Param order doesn't matter; use `vre_list_indexed_folders` to
+discover folder names and file paths.
+
+Examples:
+
+    vre://McKinsey Quarterly/2025_q1.pdf
+    vre://Stella NFS/stella_park_prepared/docs/report.pdf
+    vre://Stella NFS/parts/base-frame.glb?asset=cad_mesh
+    vre://Stella NFS/parts/rail-l.glb?asset=cad_projection&slug=base-frame/rail-l
+    vre://Stella NFS/parts/rail-l.glb?asset=cad_projection&slug=base-frame/rail-l&export=iso
+
+### How the resolver works
+
+`ctx.ensure_local("vre://...")` hides the signed-URL TTL. When
+the ref is requested, the resolver:
+
+1. Looks up the folder display name → folder id via
+   `list_indexed_folders` (module-level cache; refreshed on miss).
+2. Looks up the file path within the folder → `file_id`.
+3. Calls `request_asset(file_id, asset_type, slug=...)` → fresh
+   signed URL(s).
+4. Streams the file(s) into a snapshot dir whose
+   `meta.json::origin` records the canonical `vre://` ref.
+
+The 2-step flow below is documented for one-shot manual use
+(you're not authoring a report — you're doing a one-shot fetch
+for analysis). For persisted code, write the ref and let
+`ensure_local` run the steps.
+
 ## Working with the file bytes — three-step flow
 
 `vre_request_asset` returns a signed URL, not bytes. To get the

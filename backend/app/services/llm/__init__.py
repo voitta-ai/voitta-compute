@@ -1,20 +1,9 @@
-"""LLM provider factory.
-
-Three providers, one shape (``Provider`` protocol from ``base.py``). The
-chat orchestrator imports ``get_provider(id, api_key)`` and otherwise
-stays provider-agnostic.
-
-API keys are **per-request** — supplied by the browser-side settings
-view in the chat request body. The backend never persists them.
-``get_provider`` raises ``ProviderNotConfigured`` when the key is empty,
-and the chat route surfaces that to the user as a 400-ish error event.
-"""
+"""LLM provider factory. Phase-1: Anthropic only."""
 
 from __future__ import annotations
 
 from typing import Literal
 
-from app.config import DEFAULT_MODELS
 from app.services.llm.base import (
     ContentBlock,
     Message,
@@ -31,12 +20,18 @@ from app.services.llm.base import (
 
 ProviderId = Literal["anthropic", "openai", "gemini"]
 
+DEFAULT_MODELS: dict[ProviderId, str] = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
+    "gemini": "gemini-2.0-flash-exp",
+}
+
 
 def get_provider(provider_id: ProviderId, api_key: str | None) -> Provider:
     if not api_key:
         raise ProviderNotConfigured(
             provider_id,
-            f"no API key for provider {provider_id!r} — open the Settings panel and add one",
+            f"no API key for provider {provider_id!r}",
         )
     if provider_id == "anthropic":
         from app.services.llm.anthropic import AnthropicProvider

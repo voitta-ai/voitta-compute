@@ -1,0 +1,197 @@
+/* ─── floating handle (visible only when closed) ─────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
+.handle {
+  position: fixed;
+  top: 50%;
+  right: 0;                      /* layout: chat-right default */
+  transform: translateY(-50%);
+  z-index: 2147483647;           /* above .report-pane so the handle stays clickable
+                                     when chat is collapsed and a report fills the viewport */
+  width: 22px;
+  height: 60px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-bg);
+  border-right: none;            /* layout: chat-right default */
+  border-radius: 6px 0 0 6px;   /* layout: chat-right default */
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--voitta-shadow-handle);
+  transition: background 0.15s ease, opacity 0.18s ease;
+  padding: 0;
+}
+.handle:hover {
+  background: var(--voitta-header-bg);
+}
+.root[data-open="true"] .handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ─── drawer ─────────────────────────────────────────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;                      /* layout: chat-right default */
+  height: 100vh;
+  width: var(--voitta-pane-width);
+  max-width: 92vw;
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  border-left: 1px solid var(--voitta-border);  /* layout: chat-right default */
+  box-shadow: var(--voitta-shadow);
+  transform: translateX(100%);   /* layout: chat-right default — slides in from right */
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.root[data-open="true"] .drawer {
+  transform: translateX(0);
+}
+.root[data-resizing="true"] .drawer {
+  transition: none;
+}
+
+/* ─── left-edge resize grip ──────────────────────────────────────────────── */
+/* layout‑dependent rules are overridden below in [data-layout="chat-left"]  */
+.resizer {
+  position: absolute;
+  left: 0;                       /* layout: chat-right default — grip on inner (left) edge */
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 1;
+  user-select: none;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.resizer:hover {
+  background: var(--voitta-accent-tint);
+}
+.root[data-resizing="true"] .resizer {
+  background: var(--voitta-accent-tint);
+}
+/* Voitta bookmarklet pane styles. Loaded as a `?raw` import into the
+   Shadow DOM so they never touch the host page. All color/typography
+   tokens come from `theme.css` — swap that file to rebrand. */
+
+:host {
+  all: initial;
+}
+* {
+  box-sizing: border-box;
+}
+
+.root {
+  font-family: var(--voitta-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--voitta-text);
+}
+/* ─── chat pane layout ───────────────────────────────────────────────────── */
+/* .chat-wrap: flex child of .drawer that owns the remaining vertical space.
+   .chat-pane: owns the flex-col layout so ChatPane is self-contained. */
+.chat-wrap {
+  flex: 1;
+  min-height: 0;
+}
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ─── chat-left layout overrides ─────────────────────────────────────────── */
+/* All direction-dependent rules from .handle / .drawer / .resizer /
+   .report-handle / .report-pane are mirrored here.
+   .root[data-layout="chat-left"] is set by ChatPane when settings.layout
+   equals "chat-left". Default (no attribute or "chat-right") falls through
+   to the base rules above. */
+
+/* Chat handle: left edge, open towards the right */
+.root[data-layout="chat-left"] .handle {
+  right: auto;
+  left: 0;
+  border-right: 1px solid var(--voitta-header-bg);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+
+/* Chat drawer: anchored to left, slides in from left */
+.root[data-layout="chat-left"] .drawer {
+  right: auto;
+  left: 0;
+  border-left: none;
+  border-right: 1px solid var(--voitta-border);
+  transform: translateX(-100%);
+}
+.root[data-layout="chat-left"][data-open="true"] .drawer {
+  transform: translateX(0);
+}
+
+/* Resize grip: right edge of the drawer (inner edge in chat-left) */
+.root[data-layout="chat-left"] .resizer {
+  left: auto;
+  right: 0;
+}
+
+/* Report-pane resize grip when chat is collapsed.
+   `position: fixed` anchored at the original chat/report boundary so
+   iframes inside the report can't overlap the hit zone, and so the
+   grip is reachable even though the report has expanded to fill the
+   viewport. ReportPane renders this only when chat is collapsed.
+   In chat-right layout the chat sits at the right, so the boundary
+   is at `right: var(--voitta-pane-width)`. chat-left mirrors. */
+.report-resizer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  right: var(--voitta-pane-width);  /* layout: chat-right default */
+  width: 8px;
+  margin-right: -4px;               /* centre the 8px strip on the boundary */
+  cursor: ew-resize;
+  z-index: 2147483647;              /* above the report-pane stacking context */
+  user-select: none;
+  background: transparent;
+  transition: background 0.12s ease;
+  pointer-events: auto;
+}
+.report-resizer:hover {
+  background: var(--voitta-accent-tint);
+}
+.root[data-resizing="true"] .report-resizer {
+  background: var(--voitta-accent-tint);
+}
+.root[data-layout="chat-left"] .report-resizer {
+  right: auto;
+  left: var(--voitta-pane-width);
+  margin-right: 0;
+  margin-left: -4px;
+}
+
+/* Report handle: right edge, open towards the left */
+.root[data-layout="chat-left"] .report-handle {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--voitta-header-bg);
+  border-radius: 6px 0 0 6px;
+}
+
+/* Report pane: anchored to right, slides in from right */
+.root[data-layout="chat-left"] .report-pane {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid var(--voitta-border);
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+}
+.root[data-layout="chat-left"] .report-pane.is-collapsed {
+  transform: translateX(100%);
+}

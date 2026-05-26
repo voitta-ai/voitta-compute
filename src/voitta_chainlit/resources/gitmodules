@@ -1,0 +1,12 @@
+[submodule "lib-sources/three.js"]
+	path = lib-sources/three.js
+	url = https://github.com/mrdoob/three.js.git
+[submodule "lib-sources/elkjs"]
+	path = lib-sources/elkjs
+	url = https://github.com/kieler/elkjs
+[submodule "lib-sources/elk"]
+	path = lib-sources/elk
+	url = https://github.com/eclipse/elk
+[submodule "lib-sources/jinja"]
+	path = lib-sources/jinja
+	url = https://github.com/pallets/jinja

@@ -1,81 +1,92 @@
 # Tool catalogue
 
-The LLM-facing surface, grouped by package. Every tool is a
-`ToolSpec(name, description, input_schema, handler, side, host_pattern?,
-visibility_check?)` registered as an import side-effect of its
-module.
+Every tool the LLM can invoke is a `ToolSpec` registered with
+`app.tools.registry.register(...)`. Tools split into **server**
+(run in the BE process) and **browser** (round-trip to the FE via
+`cl.CopilotFunction`).
 
-## Domain — provider-agnostic (`backend/app/tools/domain/`)
+This catalogue lists the tools shipped by the core. Plugin tools are
+discovered separately — see [`05-plugins.md`](05-plugins.md).
 
-| Module | Tools | Notes |
-| ------ | ----- | ----- |
-| `rag.py` | `rag_query`, `rag_get_chunk_range` | Hybrid search over `docs/` and `libs-info/panel/` |
-| `web.py` | `web_fetch` | Open-web GET with HTML/JSON/PDF/text extraction |
-| `context.py` | `get_page_context` | Generic URL/title parser, no host gating |
-| `screenshot.py` | `screenshot_report` | Rasterise the active HoloViz Panel iframe |
-| `report_edits.py` | `get_report_edits` | Read live drag/resize state out of the editable iframe |
-| `holoviz.py` | `show_holoviz_report` | Open a `define_report`-built layout in the iframe pane |
-| `scripts.py` | `run_compute`, `define_report`, `list_*`, `get_*`, `delete_*`, `clear_script_output` | Persistent Python scripts (compute → inline output, report → iframe pane) |
-| `python_storage.py` | `list_python_storage`, `get_python_storage_info`, `delete_python_storage`, `clear_python_storage` | Server-side snapshot store management |
-| `buffers.py` | `list_buffers`, `get_buffer_summary`, `delete_buffer`, `delete_buffer_keys`, `clear_buffers`, `query_buffer_curves`, `plot_buffer_curves`, `plot_bars_from_buffer`, `plot`, `buffer_eval` | Browser-side data buffers + Chart.js plotting + sandboxed Worker eval |
-| `buffers_arrow.py` | (Arrow buffer ops, optional) | Arrow IPC reads when a provider tool opts in |
+## Server tools
 
-## Providers (`backend/app/tools/providers/`)
+| Tool | Source | What it does |
+|---|---|---|
+| `now` | [`tools/server/now.py`](../backend/app/tools/server/now.py) | Returns the server's current time as an ISO-8601 UTC string. Smoke-test tool. |
+| `rag_query` | [`tools/server/rag.py`](../backend/app/tools/server/rag.py) | Hybrid dense+sparse search over the docs corpus. Returns ranked chunks. |
+| `rag_get_chunk_range` | [`tools/server/rag.py`](../backend/app/tools/server/rag.py) | Stitch contiguous chunks from one file (overlap de-duplicated). Follow-up to `rag_query`. |
+| `define_script` | [`tools/server/scripts/define_script.py`](../backend/app/tools/server/scripts/define_script.py) | Write a new user-authored Python script at `scripts/<name>/code.py`. Smoke-tests `build(ctx)` before persisting. |
+| `edit_script` | [`tools/server/scripts/edit_script.py`](../backend/app/tools/server/scripts/edit_script.py) | Apply search-replace patches to an existing script. |
+| `get_script` | [`tools/server/scripts/get_script.py`](../backend/app/tools/server/scripts/get_script.py) | Read a script back. |
+| `list_scripts` | [`tools/server/scripts/list_scripts.py`](../backend/app/tools/server/scripts/list_scripts.py) | Enumerate every script in `scripts/`. |
+| `delete_script` | [`tools/server/scripts/delete_script.py`](../backend/app/tools/server/scripts/delete_script.py) | Remove a script directory. |
+| `run_script` | [`tools/server/scripts/run_script.py`](../backend/app/tools/server/scripts/run_script.py) | Execute a script's `build(ctx)`; mount the result as a pane (figure / plotly / react tree) or inline output. |
+| `verify_script` | [`tools/server/scripts/verify_script.py`](../backend/app/tools/server/scripts/verify_script.py) | Last render's inventory — lightweight check that the FE actually mounted what the script returned. |
+| `get_script_errors` | [`tools/server/scripts/get_script_errors.py`](../backend/app/tools/server/scripts/get_script_errors.py) | Render-event log; catches errors that happened after "looks ready." Consecutive duplicates deduped. |
+| `screenshot_report` | [`tools/server/scripts/screenshot_report.py`](../backend/app/tools/server/scripts/screenshot_report.py) | Trigger the browser-side `screenshot_report` primitive; returns the PNG inline. |
+| `list_data` | [`tools/server/scripts/list_data.py`](../backend/app/tools/server/scripts/list_data.py) | List all python_storage data snapshots. Each entry includes handle, name, kind, files, size, created_at, folder_name. |
+| `preview_data` | [`tools/server/scripts/preview_data.py`](../backend/app/tools/server/scripts/preview_data.py) | Preview a file from a data snapshot. Images are returned inline as base64; text files as content. |
+| `get_active_report` | [`tools/server/scripts/get_active_report.py`](../backend/app/tools/server/scripts/get_active_report.py) | Returns which script/tab is currently mounted in the FE report pane. Call this before editing a report you haven't just created. |
+| `create_folder` | [`tools/server/scripts/create_folder.py`](../backend/app/tools/server/scripts/create_folder.py) | Create a workspace folder in the data domain, scripts domain, or both (default). No-op if already exists. |
+| `move_to_folder` | [`tools/server/scripts/move_to_folder.py`](../backend/app/tools/server/scripts/move_to_folder.py) | Move a data snapshot (handle) or script (slug) into a folder. Pass `folder_name=null` to move back to root. |
+| `delete_folder` | [`tools/server/scripts/delete_folder.py`](../backend/app/tools/server/scripts/delete_folder.py) | Delete a folder. **Contents are moved to root, not deleted.** |
 
-A "provider" is a third-party host the bookmarklet adds smarts for —
-Google Drive today, with more on the roadmap.
+See [`06-reports.md`](06-reports.md) for the scripts-and-reports
+subsystem in depth. See [`07-workspace.md`](07-workspace.md) for the
+workspace folder system, filesystem layout, and best practices.
 
-| Provider | Module | Tools | Gating |
-| -------- | ------ | ----- | ------ |
-| Google Drive | `providers/drive/context.py` | `drive_get_page_context` | `host_pattern="drive.google.com"` |
-| Google Drive | `providers/drive/tools.py` | `drive_list_files`, `drive_search`, `drive_get_file`, `drive_download_to_python_storage`, `drive_export_to_python_storage` | `visibility_check=google_oauth.is_connected` |
+## Browser tools
 
-### Adding a provider
+| Tool | Source | What it does |
+|---|---|---|
+| `get_page_title` | [`tools/browser/get_page_title.py`](../backend/app/tools/browser/get_page_title.py) (BE spec) + `primitives.ts:get_page_title` (FE impl) | Returns the host page's `<title>`. |
 
-1. Create `backend/app/tools/providers/<name>/`.
-2. Add `context.py` registering a `<name>_get_page_context` tool with
-   `host_pattern="<your-host.example>"`. Page-context tools are
-   host-gated because their output describes the user's *current*
-   page state (which is meaningless on other hosts).
-3. Add `tools.py` for the action tools (list / search / download /
-   etc.). Action tools should NOT be host-gated — the LLM may want
-   to act on `<provider>` content from any host page. They SHOULD be
-   visibility-gated by the provider's auth check (e.g.
-   `visibility_check=<provider>_oauth.is_connected`) so they
-   disappear from the LLM's tool list until the user has connected.
-4. Wire the package into `app/tools/providers/__init__.py` so it
-   imports on backend startup.
-5. If the provider needs OAuth, mirror the
-   `app/services/google_oauth.py` pattern and surface a connect
-   button in the Settings panel.
+The browser-tool **spec** lives in the BE (so the LLM sees it in
+`schemas_for_host`); the **implementation** lives in the FE
+[`primitives.ts`](../frontend/src/lib/primitives.ts) (so it has DOM
+access). Dispatch: BE calls `cl.CopilotFunction(name, args).acall()`,
+which round-trips through the Chainlit socket; the FE's
+[`CallFnRouter.tsx`](../frontend/src/lib/CallFnRouter.tsx) looks up the
+primitive by name and ACKs.
 
-## Tool naming conventions
+## Browser-side primitives without a BE-side spec
 
-- `list_X` — paginated list (filters become tool args).
-- `get_X(id)` — single entity by id.
-- `<provider>_<verb>` — provider-namespaced (e.g. `drive_list_files`).
-- `<provider>_get_page_context` — host-gated context tool.
-- `<provider>_download_to_python_storage(file_id, …)` — preferred
-  download path; the LLM never sees raw bytes, only a snapshot
-  handle.
+Some primitives exist only to be triggered by other tools (e.g.
+`screenshot_report` is called by the server-side `screenshot_report`
+tool). They live in `primitives.ts` but have no `ToolSpec` — the LLM
+doesn't see them as tools, they're internal mechanics.
 
-## Result-size discipline
+## Adding a new tool
 
-Three conventions, in order of preference:
+Server tool:
 
-1. **Domain-specific trimmer** — return only fields the model needs.
-2. **Snapshot handle** — content writes go to `python_storage/`; the
-   LLM gets a handle and inspects via `run_compute` /
-   `ctx.snapshot(handle)`.
-3. **Hard cap** — every tool result is JSON-encoded and clamped at
-   the orchestrator level. Tools that may exceed the cap must return
-   a handle instead.
+```python
+# backend/app/tools/server/foo.py
+from app.tools.registry import ToolSpec, register
 
-## Buffers vs. python_storage
+async def _impl(args):
+    return {"ok": True}
 
-| | Browser buffer (`buffers.py`) | Python storage (`python_storage.py`) |
-| --- | --- | --- |
-| Where | In-memory in the page | On disk under `python_storage/` |
-| Lifetime | Until tab reload / explicit free | Until explicit delete (survives restarts) |
-| Best for | Tight iteration loops, Chart.js plots, Worker eval | Pandas / matplotlib / HoloViz, large files |
-| Writer | `buffer_eval` return value (or any provider tool that opts in) | Provider download tools (`drive_download_to_python_storage`, …) |
+register(ToolSpec(
+    name="foo",
+    description="...",
+    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    side="server",
+    impl=_impl,
+))
+```
+
+Then add the side-effect import to
+[`tools/load.py`](../backend/app/tools/load.py):
+
+```python
+from app.tools.server import foo as _foo  # noqa: F401
+```
+
+Browser tool: same `ToolSpec` shape but `side="browser"` and no
+`impl`. Add the FE counterpart to `primitives.ts` (or
+`CallFnRouter.tsx` if it needs Recoil state).
+
+For host-scoped tools, prefer registering them inside a **plugin** —
+see [`05-plugins.md`](05-plugins.md). The plugin manifest's
+`host_patterns` back-fills the tool's `host_pattern` automatically.

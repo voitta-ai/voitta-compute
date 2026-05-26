@@ -10,6 +10,19 @@ project root. Inside each snapshot:
                      the ``curves`` array. Absent if the response wasn't
                      curves-shaped or pandas wasn't available.
 
+Folders
+-------
+Snapshots can optionally be placed in a named folder:
+
+    python_storage/cache/
+      snapshot_{handle}/           ← unfoldered
+      folders/
+        {folder_name}/
+          folder.json              ← {"name", "description", "color", "created_at"}
+          snapshot_{handle}/       ← foldered snapshots
+
+Folder names must match ``[a-z0-9_-]{1,64}``.
+
 Why a separate Python store at all?
 
   • It survives a browser reload — the JS-side buffer doesn't.
@@ -27,6 +40,7 @@ between sessions for disk hygiene.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import shutil
 import time
@@ -44,7 +58,7 @@ META_VALUE_CAP = 20
 
 # Mirror app.config.PROJECT_ROOT so packaged (.app) and dev modes agree
 # on where mutable state lives. See app/config.py for the env-var override.
-from app.config import PROJECT_ROOT  # noqa: E402
+from app.config import USER_DATA_ROOT  # noqa: E402
 
 # Snapshot cache lives under ``python_storage/cache/``. The parent
 # ``python_storage/`` is the unified state dir; sibling subdirs
@@ -52,11 +66,22 @@ from app.config import PROJECT_ROOT  # noqa: E402
 # hold persisted LLM-authored code. Keeping snapshots in a named
 # subdir means the namespace at the top is meaningful (cache vs
 # durable code) rather than a soup of mixed kinds.
-STORAGE_ROOT = PROJECT_ROOT / "python_storage" / "cache"
+STORAGE_ROOT = USER_DATA_ROOT / "python_storage" / "cache"
+
+# Folder container inside the cache root.
+FOLDERS_ROOT = STORAGE_ROOT / "folders"
+
+
+def _validate_folder_name(name: str) -> None:
+    if not re.fullmatch(r'[a-z0-9_-]{1,64}', name):
+        raise ValueError(
+            f"Invalid folder name {name!r}: use [a-z0-9_-], max 64 chars"
+        )
 
 
 def _ensure_root() -> None:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+    FOLDERS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def _new_handle() -> str:
@@ -66,6 +91,141 @@ def _new_handle() -> str:
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
+
+# ---------------------------------------------------------------------------
+# Folder management
+# ---------------------------------------------------------------------------
+
+def create_folder(name: str, description: str = "", color: str = "") -> dict:
+    """Create a new folder inside FOLDERS_ROOT.
+
+    Raises ``ValueError`` for invalid names or if the folder already exists.
+    Returns the folder metadata dict.
+    """
+    _validate_folder_name(name)
+    _ensure_root()
+    folder_dir = FOLDERS_ROOT / name
+    if folder_dir.exists():
+        raise ValueError(f"Folder {name!r} already exists")
+    folder_dir.mkdir(parents=True)
+    data = {
+        "name": name,
+        "description": description,
+        "color": color,
+        "created_at": _now_iso(),
+    }
+    (folder_dir / "folder.json").write_text(
+        json.dumps(data, indent=2, ensure_ascii=False)
+    )
+    return data
+
+
+def list_folders() -> list[dict]:
+    """Return a list of all folder metadata dicts, each with a ``snapshot_count`` key."""
+    _ensure_root()
+    out: list[dict] = []
+    if not FOLDERS_ROOT.is_dir():
+        return out
+    for folder_dir in sorted(FOLDERS_ROOT.iterdir()):
+        if not folder_dir.is_dir():
+            continue
+        folder_json = folder_dir / "folder.json"
+        if not folder_json.exists():
+            continue
+        try:
+            data = json.loads(folder_json.read_text())
+        except Exception:
+            continue
+        # Count snapshots inside this folder.
+        count = sum(
+            1
+            for d in folder_dir.iterdir()
+            if d.is_dir() and d.name.startswith("snapshot_")
+        )
+        data["snapshot_count"] = count
+        out.append(data)
+    return out
+
+
+def delete_folder(name: str) -> bool:
+    """Delete a folder, moving all its snapshots back to STORAGE_ROOT first.
+
+    Returns False if the folder doesn't exist.
+    """
+    _ensure_root()
+    folder_dir = FOLDERS_ROOT / name
+    if not folder_dir.is_dir():
+        return False
+    # Move any snapshots out to the root first.
+    for d in list(folder_dir.iterdir()):
+        if d.is_dir() and d.name.startswith("snapshot_"):
+            dest = STORAGE_ROOT / d.name
+            shutil.move(str(d), str(dest))
+    shutil.rmtree(folder_dir)
+    return True
+
+
+def move_to_folder(handle: str, folder_name: str | None) -> bool:
+    """Move a snapshot to a folder (or back to root when folder_name is None).
+
+    Returns False if the snapshot handle is not found.
+    """
+    _ensure_root()
+    snap_dir = _find_snapshot_dir(handle)
+    if snap_dir is None:
+        return False
+
+    if folder_name is None:
+        dest = STORAGE_ROOT / f"snapshot_{handle}"
+    else:
+        _validate_folder_name(folder_name)
+        folder_dir = FOLDERS_ROOT / folder_name
+        if not folder_dir.is_dir():
+            raise ValueError(f"Folder {folder_name!r} does not exist")
+        dest = folder_dir / f"snapshot_{handle}"
+
+    if snap_dir == dest:
+        return True  # Already in the right place.
+
+    shutil.move(str(snap_dir), str(dest))
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _find_snapshot_dir(handle: str) -> Path | None:
+    """Locate the snapshot directory for *handle*, searching root then folders."""
+    root_dir = STORAGE_ROOT / f"snapshot_{handle}"
+    if root_dir.is_dir():
+        return root_dir
+    if FOLDERS_ROOT.is_dir():
+        for folder_dir in FOLDERS_ROOT.iterdir():
+            if not folder_dir.is_dir():
+                continue
+            candidate = folder_dir / f"snapshot_{handle}"
+            if candidate.is_dir():
+                return candidate
+    return None
+
+
+def _folder_name_for_dir(snap_dir: Path) -> str | None:
+    """Return the folder name if *snap_dir* lives inside FOLDERS_ROOT, else None."""
+    try:
+        rel = snap_dir.relative_to(FOLDERS_ROOT)
+        # rel is  <folder_name>/snapshot_<handle>
+        parts = rel.parts
+        if len(parts) >= 1:
+            return parts[0]
+    except ValueError:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Summarizers
+# ---------------------------------------------------------------------------
 
 def summarize_curves(body: Any) -> dict:
     """Compute a metadata-rich summary of a curves-shaped payload.
@@ -266,7 +426,13 @@ def make_origin(
     return out
 
 
-def put(*, kind: str, response_body: Any, meta: dict) -> dict:
+def put(
+    *,
+    kind: str,
+    response_body: Any,
+    meta: dict,
+    folder_name: str | None = None,
+) -> dict:
     """Persist a response body to disk and return the snapshot record.
 
     For ``kind="curves"`` we also try to flatten into a pandas DataFrame
@@ -277,11 +443,23 @@ def put(*, kind: str, response_body: Any, meta: dict) -> dict:
     A rich summary (see ``summarize_curves`` / ``summarize_generic``) is
     computed and stored in ``meta["summary"]`` so subsequent
     ``get_python_storage_info`` calls return it for free.
+
+    If ``folder_name`` is given the snapshot is placed inside
+    ``FOLDERS_ROOT/{folder_name}/snapshot_{handle}/``.
     """
 
     _ensure_root()
+    if folder_name is not None:
+        _validate_folder_name(folder_name)
+        folder_dir = FOLDERS_ROOT / folder_name
+        if not folder_dir.is_dir():
+            raise ValueError(f"Folder {folder_name!r} does not exist")
+
     handle = _new_handle()
-    snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
+    if folder_name is not None:
+        snapshot_dir = FOLDERS_ROOT / folder_name / f"snapshot_{handle}"
+    else:
+        snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
     snapshot_dir.mkdir()
 
     files: list[dict] = []
@@ -321,6 +499,7 @@ def put(*, kind: str, response_body: Any, meta: dict) -> dict:
         "kind": kind,
         "files": files,
         "meta": full_meta,
+        "folder_name": folder_name,
     }
 
 
@@ -334,14 +513,31 @@ def find_latest_by_meta(predicate: Any) -> dict | None:
 
     Returns the same shape as ``get(handle)`` plus ``meta``, or
     ``None`` if no match.
+
+    Searches both root snapshots and all foldered snapshots.
     """
 
     if not STORAGE_ROOT.exists():
         return None
-    matches: list[tuple[float, Path, dict]] = []
+
+    candidates: list[Path] = []
+
+    # Root-level snapshots.
     for d in STORAGE_ROOT.iterdir():
-        if not d.is_dir() or not d.name.startswith("snapshot_"):
-            continue
+        if d.is_dir() and d.name.startswith("snapshot_"):
+            candidates.append(d)
+
+    # Foldered snapshots.
+    if FOLDERS_ROOT.is_dir():
+        for folder_dir in FOLDERS_ROOT.iterdir():
+            if not folder_dir.is_dir():
+                continue
+            for d in folder_dir.iterdir():
+                if d.is_dir() and d.name.startswith("snapshot_"):
+                    candidates.append(d)
+
+    matches: list[tuple[float, Path, dict]] = []
+    for d in candidates:
         meta_path = d / "meta.json"
         if not meta_path.exists():
             continue
@@ -361,6 +557,7 @@ def find_latest_by_meta(predicate: Any) -> dict | None:
         except OSError:
             continue
         matches.append((mtime, d, meta))
+
     if not matches:
         return None
     matches.sort(reverse=True)
@@ -373,6 +570,7 @@ def find_latest_by_meta(predicate: Any) -> dict | None:
         "kind": meta.get("kind"),
         "files": files,
         "meta": meta,
+        "folder_name": _folder_name_for_dir(snap_dir),
     }
 
 
@@ -383,6 +581,7 @@ def put_file(
     kind: str,
     meta: dict,
     move: bool = True,
+    folder_name: str | None = None,
 ) -> dict:
     """Bring an external file into python_storage.
 
@@ -394,21 +593,32 @@ def put_file(
     rest of the system (compute scripts, ctx.snapshot, etc.) sees both
     flavours uniformly.
 
-    Returns ``{handle, path, kind, files, meta}`` (same shape as ``put``).
+    Returns ``{handle, path, kind, files, meta, folder_name}`` (same shape
+    as ``put``).
 
     ``move=True`` means the source is unlinked after copy. ``False``
     leaves it in place (useful for tests).
-    """
 
-    import shutil
+    If ``folder_name`` is given the snapshot is placed inside
+    ``FOLDERS_ROOT/{folder_name}/snapshot_{handle}/``.
+    """
 
     src = Path(src_path)
     if not src.is_file():
         raise FileNotFoundError(f"src_path {src!s} is not a file")
 
     _ensure_root()
+    if folder_name is not None:
+        _validate_folder_name(folder_name)
+        folder_dir = FOLDERS_ROOT / folder_name
+        if not folder_dir.is_dir():
+            raise ValueError(f"Folder {folder_name!r} does not exist")
+
     handle = _new_handle()
-    snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
+    if folder_name is not None:
+        snapshot_dir = FOLDERS_ROOT / folder_name / f"snapshot_{handle}"
+    else:
+        snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
     snapshot_dir.mkdir()
 
     # Sanitise the destination name — keep the user-recognisable original,
@@ -458,6 +668,7 @@ def put_file(
         "kind": kind,
         "files": files,
         "meta": full_meta,
+        "folder_name": folder_name,
     }
 
 
@@ -517,67 +728,112 @@ def _flatten_and_pickle(body: Any, snapshot_dir: Path) -> dict | None:
 
 
 def list_all() -> list[dict]:
+    """Return all snapshots from both root and all folders.
+
+    Each entry includes a ``folder_name`` key (``str`` if foldered,
+    ``None`` if at root).
+    """
     _ensure_root()
     out: list[dict] = []
-    for d in sorted(STORAGE_ROOT.iterdir()):
-        if not d.is_dir() or not d.name.startswith("snapshot_"):
-            continue
+
+    def _read_snapshot(d: Path, folder: str | None) -> dict:
         meta_path = d / "meta.json"
         if not meta_path.exists():
-            out.append(
-                {"handle": d.name.removeprefix("snapshot_"), "path": str(d), "corrupt": True}
-            )
-            continue
+            return {
+                "handle": d.name.removeprefix("snapshot_"),
+                "path": str(d),
+                "corrupt": True,
+                "folder_name": folder,
+            }
         try:
             meta = json.loads(meta_path.read_text())
         except Exception as exc:
             meta = {"corrupt": True, "error": str(exc)}
-        out.append(
-            {
-                "handle": meta.get("handle", d.name.removeprefix("snapshot_")),
-                "path": str(d),
-                "meta": meta,
-            }
-        )
+        return {
+            "handle": meta.get("handle", d.name.removeprefix("snapshot_")),
+            "path": str(d),
+            "meta": meta,
+            "folder_name": folder,
+        }
+
+    # Root-level snapshots.
+    for d in sorted(STORAGE_ROOT.iterdir()):
+        if d.is_dir() and d.name.startswith("snapshot_"):
+            out.append(_read_snapshot(d, None))
+
+    # Foldered snapshots.
+    if FOLDERS_ROOT.is_dir():
+        for folder_dir in sorted(FOLDERS_ROOT.iterdir()):
+            if not folder_dir.is_dir():
+                continue
+            for d in sorted(folder_dir.iterdir()):
+                if d.is_dir() and d.name.startswith("snapshot_"):
+                    out.append(_read_snapshot(d, folder_dir.name))
+
     return out
 
 
 def get(handle: str) -> dict | None:
+    """Locate and return a snapshot by handle.
+
+    Searches root first, then all folders. Returns ``None`` if not found.
+    Result includes ``folder_name``.
+    """
     _ensure_root()
-    snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
-    if not snapshot_dir.is_dir():
+    snap_dir = _find_snapshot_dir(handle)
+    if snap_dir is None:
         return None
-    meta_path = snapshot_dir / "meta.json"
+    meta_path = snap_dir / "meta.json"
     if not meta_path.exists():
         return None
     return {
         "handle": handle,
-        "path": str(snapshot_dir),
+        "path": str(snap_dir),
         "meta": json.loads(meta_path.read_text()),
+        "folder_name": _folder_name_for_dir(snap_dir),
     }
 
 
 def delete(handle: str) -> bool:
+    """Delete a snapshot by handle, searching root then folders.
+
+    Returns False if not found.
+    """
     _ensure_root()
-    snapshot_dir = STORAGE_ROOT / f"snapshot_{handle}"
-    if not snapshot_dir.is_dir():
+    snap_dir = _find_snapshot_dir(handle)
+    if snap_dir is None:
         return False
-    shutil.rmtree(snapshot_dir)
+    shutil.rmtree(snap_dir)
     return True
 
 
 def clear() -> dict:
-    """Remove every snapshot. Returns total bytes freed."""
+    """Remove every snapshot (root + foldered). Returns total bytes freed."""
 
     _ensure_root()
     freed = 0
     removed = 0
-    for d in list(STORAGE_ROOT.iterdir()):
-        if not d.is_dir() or not d.name.startswith("snapshot_"):
-            continue
+
+    def _nuke(d: Path) -> None:
+        nonlocal freed, removed
         for f in d.rglob("*"):
             if f.is_file():
                 freed += f.stat().st_size
         shutil.rmtree(d)
         removed += 1
+
+    # Root snapshots.
+    for d in list(STORAGE_ROOT.iterdir()):
+        if d.is_dir() and d.name.startswith("snapshot_"):
+            _nuke(d)
+
+    # Foldered snapshots.
+    if FOLDERS_ROOT.is_dir():
+        for folder_dir in list(FOLDERS_ROOT.iterdir()):
+            if not folder_dir.is_dir():
+                continue
+            for d in list(folder_dir.iterdir()):
+                if d.is_dir() and d.name.startswith("snapshot_"):
+                    _nuke(d)
+
     return {"freed_bytes": freed, "removed_snapshots": removed}

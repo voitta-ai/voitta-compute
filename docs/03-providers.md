@@ -1,138 +1,76 @@
-# LLM providers
+# Providers
 
-Three providers, one shape. The chat orchestrator only knows the
-normalised types from `app.services.llm.base`.
+LLM providers are pluggable. The agent loop in
+[`agent.py`](../backend/app/agent.py) drives a `Provider` interface
+defined in [`services/llm/base.py`](../backend/app/services/llm/base.py);
+each backend lives in its own subpackage.
 
-## Where keys live
+Three providers wired today:
 
-API keys do **not** live in `.env`. They live in the browser's
-`localStorage.voitta-bkmk-settings`, edited via the in-pane **Settings**
-view (⚙ in the drawer header), and travel with each chat request:
+| `ProviderId` | Module | Default model |
+|---|---|---|
+| `anthropic` | [`anthropic.py`](../backend/app/services/llm/anthropic.py) | `claude-sonnet-4-5-20250929` |
+| `openai`    | [`openai.py`](../backend/app/services/llm/openai.py)       | `gpt-4o` |
+| `gemini`    | [`gemini.py`](../backend/app/services/llm/gemini.py)       | `gemini-2.0-flash-exp` |
 
-```jsonc
-POST /api/chat/stream
+(See [`services/llm/__init__.py`](../backend/app/services/llm/__init__.py)
+for the authoritative `DEFAULT_MODELS` map.)
+
+## The canonical block shape
+
+The Anthropic SDK's content-block shape is the **interchange format**.
+A `Message` has `role` (`"user"` or `"assistant"`) and `content` —
+either a string or a list of blocks:
+
+```python
+{"type": "text", "text": "..."}
+{"type": "tool_use", "id": "...", "name": "...", "input": {...}}
+{"type": "tool_result", "tool_use_id": "...", "content": "...", "is_error": false}
+{"type": "image", "source": {...}}
+```
+
+OpenAI and Gemini adapters convert in/out of this shape so the agent
+loop only ever sees Anthropic-flavoured blocks.
+
+## Sentinel-key convention
+
+Keys starting with `_` (`_name`, `_image`) are cross-provider internal
+sentinels — the orchestrator and adapters may read them, but they
+must NOT reach the wire. The Anthropic adapter strips them in
+`_strip_internal_keys` before send; OpenAI and Gemini access blocks
+by named key so unknown keys are naturally invisible.
+
+## Streaming events
+
+Providers yield a uniform stream of events from `stream_message`:
+
+- `BlockStart(index, block_type, …)`
+- `BlockDelta(index, delta)` — chunked text or input-json
+- `BlockStop(index)`
+- `MessageStop(stop_reason)` — `"end_turn"`, `"tool_use"`, `"max_tokens"`, etc.
+- `StreamError(message)` — fatal; orchestrator surfaces it to the user.
+
+The agent loop treats these uniformly. The provider absorbs vendor
+quirks.
+
+## Choosing a provider at runtime
+
+Settings JSON at `~/.config/voitta-bookmarklet-chainlit/settings.json`:
+
+```json
 {
-  "messages": [...],
-  "session_id": "...",
   "provider": "anthropic",
-  "api_key":  "sk-ant-...",
-  "model":    "claude-sonnet-4-6",
-  "max_tokens": 16384,
-  "max_tool_iterations": 25
+  "api_keys": {
+    "anthropic": "sk-ant-...",
+    "openai": "sk-...",
+    "gemini": "..."
+  },
+  "models": {
+    "anthropic": "claude-opus-4-5"
+  }
 }
 ```
 
-The backend forwards the key to the provider SDK for that request and
-drops the request DTO at end-of-handler. No on-disk persistence; nothing
-in any log line.
-
-| Provider | Default model |
-| -------- | ------------- |
-| Anthropic | `claude-sonnet-4-6` |
-| OpenAI | `gpt-5` (Responses API) |
-| Gemini | `gemini-3.1-pro-preview` |
-
-The frontend offers a richer per-provider model dropdown — see
-`frontend/src/lib/settings.ts::MODELS_BY_PROVIDER`.
-
-Missing-key behaviour: a chat request with an empty `api_key` (or no
-`provider`) yields one SSE event:
-
-```
-event: error
-data: {"message": "...", "type": "provider_not_configured", "provider": "anthropic"}
-```
-
-The chat pane catches this and switches to the Settings view so the user
-can fix it. The other providers are unaffected — keys are independent.
-
-## Normalised request
-
-```python
-class NormalisedRequest:
-    model: str
-    system: str
-    max_tokens: int
-    messages: list[Message]   # role + content blocks
-    tools: list[ToolSchema]   # name, description, input_schema
-```
-
-## Normalised response
-
-Anthropic-shaped, because it's the most expressive of the three:
-
-```python
-class NormalisedResponse:
-    content: list[ContentBlock]      # text | tool_use blocks
-    stop_reason: Literal["end_turn", "tool_use", "max_tokens", "stop_sequence"]
-    usage: Usage                     # input/output tokens, cache hit/miss
-```
-
-All three providers translate in and out of this shape. The orchestrator's
-loop is provider-agnostic.
-
-## Adapter notes
-
-### Anthropic
-
-Pass-through. Native streaming is supported; we use the streaming API for
-real-time delta emission.
-
-### OpenAI
-
-Use the **Responses API** (`client.responses.create(...)`), not the legacy
-ChatCompletions API. Mapping rules:
-
-- `system` → `instructions`.
-- `messages` → `input`. Anthropic `tool_use` blocks become OpenAI
-  `function_call` items; `tool_result` blocks become `function_call_output`
-  items.
-- `tools` → `[{"type": "function", "name", "description", "parameters": input_schema}]`.
-- Response `output` items: `message` → text block(s); `function_call` →
-  `tool_use` block (`id` taken from the `call_id`).
-- `stop_reason`:
-  - any `function_call` items present → `"tool_use"`,
-  - `incomplete_details.reason == "max_output_tokens"` → `"max_tokens"`,
-  - else → `"end_turn"`.
-
-Streaming is non-streaming for now (one delta per assistant text block). A
-future upgrade can switch to `client.responses.stream(...)`.
-
-### Gemini
-
-Use `google-genai` (not the deprecated `google-generativeai`). Mapping rules:
-
-- `system` → `system_instruction`.
-- `messages` → `contents`. Roles map: `user` → `user`, `assistant` →
-  `model`. `tool_use` blocks become `function_call` parts; `tool_result`
-  blocks become `function_response` parts.
-- `tools` → `[{"function_declarations": [...]}]`. **The schema must be
-  Gemini-flavoured**: drop unsupported keywords (`additionalProperties`,
-  `$schema`, `default`, etc.); use `type` not `type[]`. The reference
-  conversion lives in `the original plugin/lib/providers.js::sanitizeGeminiSchema`.
-- Response `candidates[0].content.parts`: `text` → text block; `functionCall`
-  → `tool_use` block (id minted client-side).
-- `stop_reason`: any `function_call` → `"tool_use"`,
-  `finishReason == "MAX_TOKENS"` → `"max_tokens"`, else `"end_turn"`.
-
-## Caching
-
-Anthropic only. Mark the system prompt + tool list as ephemeral cache, and
-mark the second-to-last and last user turn boundaries to keep the running
-KV-cache hot across iterations. See `the original plugin/lib/providers.js`
-for the markup convention. OpenAI's prompt caching is automatic; Gemini's
-is opt-in but limited.
-
-## Adding a new provider
-
-1. New file in `app/services/llm/<name>.py` exporting a class implementing
-   `Provider`.
-2. Register it in `app/services/llm/__init__.py::get_provider`.
-3. Add a default-model entry in `app/config.py::DEFAULT_MODELS`.
-4. Add the provider id + model list to
-   `frontend/src/lib/settings.ts::MODELS_BY_PROVIDER`, the matching
-   placeholder/destination text in
-   `frontend/src/components/SettingsView.tsx`, and rebuild the widget.
-5. Update this doc with the conversion rules.
-
-The chat orchestrator does not change.
+The model field is optional — `default_model_for(provider_id)` is
+used when absent. Settings are re-read on every turn so changes via
+the in-widget Settings panel take effect without a session restart.

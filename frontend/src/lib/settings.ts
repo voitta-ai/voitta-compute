@@ -1,331 +1,221 @@
-// Settings — persisted on the FastAPI backend at GET/PUT /api/settings,
-// edited via the in-pane Settings view, sent with every chat request.
-//
-// API keys live HERE (in the backend's user-config dir), not in the
-// browser. The backend is still a key-less *relay* for chat traffic:
-// each /api/chat/stream request includes the chosen provider's key in
-// its body. The key never appears in any log line (the backend redacts
-// at the DTO level — `api_key` is consumed, then the DTO is dropped at
-// end of request).
-//
-// Why backend storage instead of localStorage: localStorage is
-// partitioned per host origin, so keys saved when the bookmarklet was
-// run on one site would be invisible when run on another. The backend
-// lives at a single origin (127.0.0.1:12358) shared across every host,
-// so keys persist.
-//
-// Bootstrap protocol:
-//   • The bridge (lib/bridge.ts) calls bootstrapSettings(backendOrigin)
-//     once on widget mount. That fires GET /api/settings and updates
-//     the in-memory cache + notifies subscribers (so React re-renders).
-//   • Until bootstrap returns, loadSettings() yields DEFAULT_SETTINGS.
-//   • saveSettings(patch) updates the cache synchronously and fires
-//     PUT /api/settings in the background.
+// Settings cache + bootstrap. Per-provider api_keys + models so
+// switching providers in the UI doesn't blow away the previous key.
+// Keys are write-only on the wire — GET returns booleans only.
 
-import { log } from "./logger";
-
+export type Layout = "chat-right" | "chat-left";
+export type Theme = "light" | "dark" | "auto";
 export type ProviderId = "anthropic" | "openai" | "gemini";
 
-export interface Settings {
+export interface GoogleOAuthBlob {
+  // The wire shape is whatever the BE saved minus ``tokens`` (redacted
+  // server-side). Today the relevant fields are ``clientId`` /
+  // ``clientSecret`` but more may appear over time, so we keep the
+  // shape open.
+  clientId?: string;
+  clientSecret?: string;
+  [k: string]: unknown;
+}
+
+export interface PublicSettings {
   provider: ProviderId;
-  // Per-provider keys; the chat request only sends the chosen one.
-  anthropicApiKey: string;
-  openaiApiKey: string;
-  geminiApiKey: string;
-  // Per-provider models so switching providers doesn't lose your model
-  // choice for the inactive provider.
-  anthropicModel: string;
-  openaiModel: string;
-  geminiModel: string;
-  maxTokens: number;
-  maxToolIterations: number;
-  // Browser-side compute paradigm (JS buffers, in-browser plotting,
-  // buffer_eval JS sandbox, parser-to-buffer flow). Default OFF —
-  // the project's default workflow is Python-only
-  // (download_to_python_storage + compute scripts). When OFF, the
-  // 16 JS-compute tools are hidden from the LLM.
-  jsCompute: boolean;
-  // Open-web retrieval tool (web_fetch). Default ON — disable to hide
-  // the tool from the LLM (e.g. on a host where you don't want any
-  // outbound traffic to third parties).
-  webFetch: boolean;
-  // Hacky no-OAuth Drive download fallback. When true AND Google OAuth
-  // is NOT connected, the LLM gets `drive_pickup_to_python_storage`
-  // which opens the Drive download URL in a new tab and watches the
-  // configured Downloads directory for the resulting file. Default OFF
-  // — racy, only opt in if you know what you're doing.
-  driveDownloadViaPickup: boolean;
-  // Where the pickup tool watches for downloaded files. Tilde and env
-  // vars are expanded server-side. Empty string → ~/Downloads.
-  pickupDownloadsDir: string;
-  // Panel layout. "chat-right" (default): chat drawer on the right, report
-  // on the left. "chat-left": mirrored. The server-side default is set via
-  // VOITTA_DEFAULT_LAYOUT; the user can override here.
-  layout: "chat-right" | "chat-left";
-  // Plugin-namespaced settings tree. Each loaded plugin gets its own
-  // sub-object — the manifest's ``settings_schema`` fields reference
-  // dot-paths like ``plugins.<name>.<...>``. The backend reads these
-  // same dot-paths in :func:`app.services.mcp.registry._dotted_get`
-  // when resolving an MCP server's URL + bearer token.
-  //
-  // Stored as an opaque ``unknown``-valued dict so the core type
-  // doesn't need to learn about every plugin's fields. Plugins access
-  // their slice via :func:`getPluginSetting` / :func:`setPluginSetting`.
+  models: Record<string, string>;
+  layout: Layout;
+  theme: Theme;
+  max_tool_iterations: number;
+  max_tokens: number;
+  has_api_keys: Record<string, boolean>;
+  // Nested slices for the per-plugin Settings tabs. Plugin panels read
+  // their saved fields out of ``plugins[name]`` (which the BE projects
+  // from the dotted-path namespace ``plugins.<name>.<...>``). The
+  // Google panel reads ``googleOAuth`` separately because the OAuth
+  // flow predates the plugin-settings system.
+  googleOAuth: GoogleOAuthBlob;
   plugins: Record<string, Record<string, unknown>>;
 }
 
-export const MODELS_BY_PROVIDER: Record<ProviderId, string[]> = {
-  anthropic: [
-    "claude-opus-4-7",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-  ],
-  openai: ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o"],
-  gemini: [
-    "gemini-3.1-pro-preview",
-    "gemini-3-pro-preview",
-    "gemini-pro-latest",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3-flash-preview",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-  ],
-};
+export interface SettingsPatch {
+  provider?: ProviderId;
+  api_keys?: Record<string, string>;
+  models?: Record<string, string>;
+  layout?: Layout;
+  theme?: Theme;
+  max_tool_iterations?: number;
+  max_tokens?: number;
+  // Dotted-path patches: ``"plugins.voitta-enterprise.mcp.url": "http://…"``.
+  // Empty string or null DELETES the key (server-side semantics).
+  dotted?: Record<string, unknown>;
+}
 
-export const DEFAULT_MODEL: Record<ProviderId, string> = {
+const DEFAULT_MODELS: Record<ProviderId, string> = {
   anthropic: "claude-sonnet-4-6",
-  openai: "gpt-5",
-  gemini: "gemini-3.1-pro-preview",
+  openai: "gpt-4o",
+  gemini: "gemini-2.0-flash-exp",
 };
 
-export const DEFAULT_SETTINGS: Settings = {
+const DEFAULT: PublicSettings = {
   provider: "anthropic",
-  anthropicApiKey: "",
-  openaiApiKey: "",
-  geminiApiKey: "",
-  anthropicModel: DEFAULT_MODEL.anthropic,
-  openaiModel: DEFAULT_MODEL.openai,
-  geminiModel: DEFAULT_MODEL.gemini,
-  maxTokens: 16384,
-  maxToolIterations: 25,
-  jsCompute: false,
-  webFetch: true,
-  driveDownloadViaPickup: false,
-  pickupDownloadsDir: "~/Downloads",
+  models: { ...DEFAULT_MODELS },
   layout: "chat-right",
+  theme: "auto",
+  max_tool_iterations: 25,
+  max_tokens: 24576,
+  has_api_keys: {},
+  googleOAuth: {},
   plugins: {},
 };
 
-const listeners = new Set<(s: Settings) => void>();
-let cached: Settings = { ...DEFAULT_SETTINGS };
-let backendOrigin = "";
+let cache: PublicSettings = { ...DEFAULT };
+const subscribers = new Set<(s: PublicSettings) => void>();
 
-/** Synchronous accessor — returns whatever's currently cached. Until
- * `bootstrapSettings` resolves on widget mount this yields defaults;
- * subscribers (`subscribeSettings`) will be notified once the real blob
- * arrives. */
-export function loadSettings(): Settings {
-  return cached;
+export function getSettings(): PublicSettings {
+  return cache;
 }
 
-/** Apply a patch and persist. Updates the cache + notifies subscribers
- * synchronously; PUT to the backend is fire-and-forget (errors logged,
- * not thrown — there's no UX path for "save failed" yet). */
-export function saveSettings(patch: Partial<Settings>): Settings {
-  const next = sanitise({ ...cached, ...patch });
-  cached = next;
-  notify(next);
-  void putToBackend(next);
-  return next;
-}
-
-export function subscribeSettings(fn: (s: Settings) => void): () => void {
-  listeners.add(fn);
+export function subscribeSettings(fn: (s: PublicSettings) => void): () => void {
+  subscribers.add(fn);
   return () => {
-    listeners.delete(fn);
+    subscribers.delete(fn);
   };
 }
 
-/** Called once by the bridge when the widget mounts. Fetches the
- * persisted blob from the backend and updates the cache. Safe to call
- * before, during, or after first render. */
-export async function bootstrapSettings(
-  origin: string,
-  pluginDefaults?: Partial<Settings>,
-): Promise<Settings> {
-  backendOrigin = origin.replace(/\/$/, "");
-  try {
-    const res = await fetch(`${backendOrigin}/api/settings`, {
-      method: "GET",
-      // ``include`` so the auth cookie attaches in non-localhost mode.
-      // GET /api/settings is gated; the chat won't bootstrap without it.
-      credentials: "include",
-    });
-    if (!res.ok) {
-      log.warn("settings", "GET /api/settings failed", { status: res.status });
-      return cached;
-    }
-    const body = await res.json();
-    // Plugin defaults sit between the hardcoded DEFAULT_SETTINGS and the
-    // user's persisted blob — they apply only when the user hasn't saved
-    // an explicit preference.
-    const merged = sanitise({
-      ...DEFAULT_SETTINGS,
-      ...(pluginDefaults ?? {}),
-      ...(body && typeof body === "object" ? body : {}),
-    });
-    cached = merged;
-    notify(merged);
-    return merged;
-  } catch (err) {
-    log.warn("settings", "GET /api/settings threw; keeping defaults", {
-      err: String(err),
-    });
-    return cached;
-  }
+function notify() {
+  for (const fn of subscribers) fn(cache);
 }
 
-function notify(s: Settings) {
-  for (const fn of listeners) {
-    try {
-      fn(s);
-    } catch {
-      /* listeners must not break the producer */
-    }
-  }
-}
-
-async function putToBackend(s: Settings): Promise<void> {
-  if (!backendOrigin) {
-    log.warn("settings", "save before bootstrap; PUT skipped");
-    return;
-  }
-  try {
-    const res = await fetch(`${backendOrigin}/api/settings`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify(s),
-      keepalive: true,
-    });
-    if (!res.ok) {
-      log.warn("settings", "PUT /api/settings failed", { status: res.status });
-    }
-  } catch (err) {
-    log.warn("settings", "PUT /api/settings threw", { err: String(err) });
-  }
-}
-
-function sanitise(s: Settings): Settings {
-  // Coerce + clamp numeric fields; collapse unknown providers to default.
-  const provider: ProviderId = (
-    ["anthropic", "openai", "gemini"] as const
-  ).includes(s.provider)
-    ? s.provider
-    : DEFAULT_SETTINGS.provider;
-  const maxTokens = clampInt(s.maxTokens, 256, 65536, DEFAULT_SETTINGS.maxTokens);
-  const maxToolIterations = clampInt(
-    s.maxToolIterations,
-    1,
-    200,
-    DEFAULT_SETTINGS.maxToolIterations,
-  );
+function normalise(s: Partial<PublicSettings>): PublicSettings {
   return {
-    provider,
-    anthropicApiKey: (s.anthropicApiKey || "").trim(),
-    openaiApiKey: (s.openaiApiKey || "").trim(),
-    geminiApiKey: (s.geminiApiKey || "").trim(),
-    anthropicModel: s.anthropicModel || DEFAULT_MODEL.anthropic,
-    openaiModel: s.openaiModel || DEFAULT_MODEL.openai,
-    geminiModel: s.geminiModel || DEFAULT_MODEL.gemini,
-    maxTokens,
-    maxToolIterations,
-    jsCompute: !!s.jsCompute,
-    // Default-on: an undefined value (older blob) → true. Only an
-    // explicit `false` keeps it off.
-    webFetch: s.webFetch !== false,
-    driveDownloadViaPickup: !!s.driveDownloadViaPickup,
-    pickupDownloadsDir:
-      typeof s.pickupDownloadsDir === "string" && s.pickupDownloadsDir.trim()
-        ? s.pickupDownloadsDir.trim()
-        : DEFAULT_SETTINGS.pickupDownloadsDir,
-    layout: s.layout === "chat-left" ? "chat-left" : "chat-right",
-    // Plugins tree: shallow-copy the object so identity-based listeners
-    // notice changes; per-plugin shape is left opaque because the
-    // schemas are plugin-defined.
-    plugins:
-      s.plugins && typeof s.plugins === "object" && !Array.isArray(s.plugins)
-        ? { ...(s.plugins as Record<string, Record<string, unknown>>) }
-        : {},
+    provider: (s.provider as ProviderId) ?? DEFAULT.provider,
+    models: { ...DEFAULT_MODELS, ...(s.models ?? {}) },
+    layout: (s.layout as Layout) ?? DEFAULT.layout,
+    theme: (s.theme as Theme) ?? DEFAULT.theme,
+    max_tool_iterations:
+      typeof s.max_tool_iterations === "number" && s.max_tool_iterations > 0
+        ? s.max_tool_iterations
+        : DEFAULT.max_tool_iterations,
+    max_tokens:
+      typeof s.max_tokens === "number" && s.max_tokens > 0
+        ? s.max_tokens
+        : DEFAULT.max_tokens,
+    has_api_keys: s.has_api_keys ?? {},
+    googleOAuth: (s.googleOAuth ?? {}) as GoogleOAuthBlob,
+    plugins: (s.plugins ?? {}) as Record<string, Record<string, unknown>>,
   };
 }
 
-/** Walk a dot-path like ``plugins.voitta-enterprise.mcp.url`` through
- * the settings blob. Returns ``undefined`` for any missing segment.
- *
- * Mirror of the backend's ``_dotted_get`` helper in
- * ``app.services.mcp.registry`` — same path syntax, same shape. Plugin
- * settings_schema fields reference dot-paths so the same string works
- * on both sides of the wire. */
-export function getDotted(s: Settings, path: string): unknown {
-  let cur: unknown = s as unknown;
-  for (const part of path.split(".")) {
-    if (cur === null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[part];
-    if (cur === undefined) return undefined;
+/** Apply ``"a.b.c": v`` to the in-memory cache. Empty-string / null
+ * deletes the key (matches BE semantics). Only the redacted slices
+ * (``googleOAuth``, ``plugins``) are touched; typed top-level fields
+ * have their own dedicated patch fields. */
+function applyDottedToCache(
+  next: PublicSettings,
+  path: string,
+  value: unknown,
+): void {
+  const parts = path.split(".");
+  if (parts.length < 1) return;
+  // We only mirror the slices the redacted GET returns. Other dotted
+  // keys (e.g. tokens) live server-side only.
+  if (parts[0] !== "plugins" && parts[0] !== "googleOAuth") return;
+  const root = (next as unknown as Record<string, unknown>)[parts[0]] as
+    | Record<string, unknown>
+    | undefined;
+  if (!root) return;
+  let cur: Record<string, unknown> = root;
+  for (let i = 1; i < parts.length - 1; i++) {
+    const k = parts[i];
+    const nxt = cur[k];
+    if (!nxt || typeof nxt !== "object") {
+      const obj: Record<string, unknown> = {};
+      cur[k] = obj;
+      cur = obj;
+    } else {
+      cur = nxt as Record<string, unknown>;
+    }
+  }
+  const leaf = parts[parts.length - 1];
+  if (value === "" || value === null || value === undefined) {
+    delete cur[leaf];
+  } else {
+    cur[leaf] = value;
+  }
+}
+
+
+/** Walk a dotted path through a nested-object blob. Returns ``undefined``
+ * for any miss. Pure read; doesn't mutate. */
+export function getDotted(
+  blob: Record<string, unknown>,
+  path: string,
+): unknown {
+  const parts = path.split(".");
+  let cur: unknown = blob;
+  for (const p of parts) {
+    if (cur && typeof cur === "object" && p in (cur as object)) {
+      cur = (cur as Record<string, unknown>)[p];
+    } else {
+      return undefined;
+    }
   }
   return cur;
 }
 
-/** Apply a dot-path patch onto a deep-cloned settings blob and return
- * the new value. Intermediate objects are created on demand; existing
- * sibling fields are preserved. Pass via :func:`saveSettings` to persist.
- *
- * Only used for plugin settings today (``plugins.<name>.<key>``). The
- * core top-level fields stay flat and use the regular ``saveSettings``
- * patch shape — no reason to route them through this. */
-export function setDotted(s: Settings, path: string, value: unknown): Settings {
-  // Cheap deep-clone for the path we're touching: walk a copy. We don't
-  // structuredClone the whole settings blob because most of it is
-  // primitives and shallow copies are fine for listener identity.
-  const out: Record<string, unknown> = { ...(s as unknown as Record<string, unknown>) };
-  const parts = path.split(".");
-  let cur: Record<string, unknown> = out;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const k = parts[i];
-    const existing = cur[k];
-    const next: Record<string, unknown> =
-      existing && typeof existing === "object" && !Array.isArray(existing)
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    cur[k] = next;
-    cur = next;
+export async function bootstrapSettings(backendOrigin: string): Promise<PublicSettings> {
+  try {
+    const res = await fetch(`${backendOrigin}/api/settings`, { credentials: "include" });
+    if (res.ok) {
+      cache = normalise((await res.json()) as Partial<PublicSettings>);
+      notify();
+    }
+  } catch (err) {
+    console.warn("[voitta] settings bootstrap failed", err);
   }
-  cur[parts[parts.length - 1]] = value;
-  return out as unknown as Settings;
+  return cache;
 }
 
-function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
-  const n = typeof v === "number" ? v : parseInt(String(v), 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(lo, Math.min(hi, Math.round(n)));
-}
+export async function saveSettings(
+  backendOrigin: string,
+  patch: SettingsPatch,
+): Promise<PublicSettings> {
+  // Optimistic local update so the UI reflects the change before the
+  // round-trip lands. api_keys → has_api_keys (we never cache the
+  // plaintext).
+  const next: PublicSettings = {
+    ...cache,
+    provider: patch.provider ?? cache.provider,
+    layout: patch.layout ?? cache.layout,
+    theme: patch.theme ?? cache.theme,
+    max_tool_iterations: patch.max_tool_iterations ?? cache.max_tool_iterations,
+    max_tokens: patch.max_tokens ?? cache.max_tokens,
+    models: { ...cache.models, ...(patch.models ?? {}) },
+    has_api_keys: { ...cache.has_api_keys },
+    googleOAuth: { ...cache.googleOAuth },
+    plugins: { ...cache.plugins },
+  };
+  if (patch.api_keys) {
+    for (const [p, v] of Object.entries(patch.api_keys)) {
+      if (v === "") delete next.has_api_keys[p];
+      else next.has_api_keys[p] = true;
+    }
+  }
+  // Apply dotted patches to the local cache too so plugin panels
+  // see the optimistic update without a server round-trip.
+  if (patch.dotted) {
+    for (const [path, value] of Object.entries(patch.dotted)) {
+      applyDottedToCache(next, path, value);
+    }
+  }
+  cache = next;
+  notify();
 
-// Convenience accessors used by the chat request layer.
-export function activeApiKey(s: Settings): string {
-  return s.provider === "anthropic"
-    ? s.anthropicApiKey
-    : s.provider === "openai"
-      ? s.openaiApiKey
-      : s.geminiApiKey;
-}
-
-export function activeModel(s: Settings): string {
-  return s.provider === "anthropic"
-    ? s.anthropicModel
-    : s.provider === "openai"
-      ? s.openaiModel
-      : s.geminiModel;
+  const res = await fetch(`${backendOrigin}/api/settings`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch),
+    credentials: "include",
+  });
+  if (res.ok) {
+    cache = normalise((await res.json()) as Partial<PublicSettings>);
+    notify();
+  }
+  return cache;
 }

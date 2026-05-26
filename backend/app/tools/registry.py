@@ -1,28 +1,30 @@
 """Registry of LLM-facing tools.
 
-A ``ToolSpec`` describes one tool: name, description, JSON-schema input
-shape, and an async handler. The handler receives parsed args and a
-``ToolCtx`` carrying request-scoped state (most importantly the bridge
-``session_id``, used by hybrid tools).
+A :class:`ToolSpec` describes one tool: name, description, JSON-schema
+input shape, and an async handler. The handler receives parsed args
+and a :class:`ToolCtx` carrying request-scoped state (most importantly
+``session_id`` and ``host`` — used by hybrid tools that round-trip to
+the browser via :func:`app.tools.browser.call_browser`).
 
-The registry exposes:
+Two ``side`` values, both dispatched identically (the registry just
+calls the handler):
 
-* ``register(spec)`` — add a tool.
-* ``to_anthropic_tools()`` — produce the canonical tool list for any
-  provider (Anthropic shape; the OpenAI / Gemini adapters convert from
-  this in `app.services.llm.*`).
-* ``dispatch(name, args, ctx)`` — invoke a tool, returning a
-  ``ToolResult`` envelope (never raises; exceptions are captured into
-  ``error``).
+* ``"server"`` — handler runs in-process and returns a result.
+* ``"hybrid"`` — handler runs in-process but typically calls
+  ``call_browser(...)`` to delegate work to a browser-side primitive.
+  Same dispatch, different gating semantics for the FE.
+
+The registry singleton is exposed as :data:`registry`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
-
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class ToolCtx:
     """
 
     session_id: str | None = None
+    host: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,17 +61,15 @@ class ToolSpec:
     input_schema: dict[str, Any]
     handler: ToolHandler
     side: Literal["server", "hybrid"] = "server"
-    # Optional gate: if set, the tool is only included in the LLM's tool
-    # list when the bookmarklet session's `page.host` matches one of
-    # these patterns via strict suffix match. ``None`` means no host
-    # gating (visible everywhere). A bare string is normalised to a
-    # one-element list at match time, so existing callers keep working.
-    host_pattern: "str | list[str] | None" = None
-    # Optional runtime gate: if set, the tool is only included when this
-    # callable returns True. Used for tools that depend on external state
-    # the LLM can't manipulate (e.g. "Drive tools only visible when the
-    # user has connected OAuth"). Called at every chat turn — keep cheap.
-    # None = no runtime gating.
+    # Strict-suffix host gate. ``None`` = visible everywhere. The
+    # plugin loader back-fills this from manifest ``host_patterns`` on
+    # plugin-contributed specs that didn't set their own (per-tool
+    # values win over the manifest default).
+    host_pattern: str | list[str] | None = None
+    # Runtime gate: if set, the tool only appears in the LLM's list
+    # when the callable returns True. Used for state the LLM can't
+    # manipulate (e.g. "Drive tools only show when OAuth is connected").
+    # Called on every turn — keep cheap.
     visibility_check: Callable[[], bool] | None = None
 
 
@@ -78,9 +79,9 @@ class ToolRegistry:
 
     def register(self, spec: ToolSpec) -> None:
         # Collision policy: log + skip rather than raise. Raising aborts
-        # the entire plugin's import, so one duplicate tool name would
-        # drop every sibling tool the plugin also wanted to contribute.
-        # Skip-and-keep preserves the rest of the plugin's surface.
+        # the plugin's whole import, dropping every sibling tool the
+        # plugin also wanted to contribute. Skip-and-keep preserves the
+        # rest of the plugin's surface.
         prior = self._tools.get(spec.name)
         if prior is not None:
             logger.warning(
@@ -98,35 +99,28 @@ class ToolRegistry:
     def all(self) -> list[ToolSpec]:
         return list(self._tools.values())
 
+    def names(self) -> list[str]:
+        return sorted(self._tools)
+
+    def get(self, name: str) -> ToolSpec | None:
+        return self._tools.get(name)
+
     def visible_for_host(self, host: str | None) -> list[ToolSpec]:
-        """Return tools whose ``host_pattern`` matches ``host`` (or has none).
+        """Tools whose ``host_pattern`` matches ``host`` and whose
+        ``visibility_check`` (if any) returns True.
 
-        Used by the chat route to hide host-specific tools (e.g.
-        ``drive_*``) from the LLM when the user's bookmarklet isn't
-        running on the matching host. Avoids confusing the model with
-        tools it can't actually use, and avoids leaking the tool's
-        existence on unrelated pages.
-
-        ``host`` is the value of ``page.host`` posted by the browser at
-        ``/tools/register`` (e.g. ``drive.google.com``). ``None`` means
-        the bridge hasn't reported a host yet — in that case we skip
-        host-gated tools entirely.
-
-        Match rule for ``host_pattern``: STRICT suffix match against the
-        host's hostname. ``host_pattern="drive.google.com"`` matches
-        ``drive.google.com`` and ``foo.drive.google.com`` but NOT
-        ``drive.google.com.evil.com`` (which a substring match would
-        accept). A list of patterns is OR'd together — the tool shows
-        when ANY pattern matches. The ``host`` may include a port
-        (``host:port``) — we strip it before comparison.
+        Match rule for ``host_pattern``: STRICT suffix on the bare
+        hostname. ``"ebay.com"`` matches ``ebay.com`` and
+        ``www.ebay.com`` but NOT ``ebay.com.evil.com``. List of
+        patterns is OR'd. ``host`` may include ``:port`` — stripped.
         """
-        out: list[ToolSpec] = []
-        # Strip port for comparison.
         hostname = (host or "").split(":", 1)[0].lower().rstrip(".")
+        out: list[ToolSpec] = []
+        hidden: list[str] = []
         for s in self._tools.values():
-            # Host gate.
             if s.host_pattern is not None:
                 if not hostname:
+                    hidden.append(f"{s.name}(no-host)")
                     continue
                 patterns = (
                     [s.host_pattern]
@@ -142,59 +136,114 @@ class ToolRegistry:
                         matched = True
                         break
                 if not matched:
+                    hidden.append(f"{s.name}(host-mismatch:{patterns}!={hostname!r})")
                     continue
-            # Runtime visibility gate (e.g. "OAuth connected").
             if s.visibility_check is not None:
                 try:
                     if not s.visibility_check():
+                        hidden.append(f"{s.name}(visibility-false)")
                         continue
                 except Exception:
+                    logger.exception("visibility_check for %r raised", s.name)
+                    hidden.append(f"{s.name}(visibility-exc)")
                     continue
             out.append(s)
+        if hidden:
+            logger.debug("visible_for_host(%r): hidden %d tools: %s", host, len(hidden), hidden)
         return out
 
-    def names(self) -> list[str]:
-        return list(self._tools.keys())
-
-    def to_anthropic_tools(self) -> list[dict[str, Any]]:
+    def schemas_for_host(self, host: str | None) -> list[dict[str, Any]]:
+        """Anthropic-shaped tool list filtered by host + visibility."""
         return [
-            {"name": s.name, "description": s.description, "input_schema": s.input_schema}
-            for s in self._tools.values()
+            {
+                "name": s.name,
+                "description": s.description,
+                "input_schema": s.input_schema,
+            }
+            for s in self.visible_for_host(host)
         ]
 
     async def dispatch(
         self, name: str, args: dict[str, Any], ctx: ToolCtx
     ) -> ToolResult:
+        t0 = time.perf_counter()
         spec = self._tools.get(name)
         if spec is None:
             return ToolResult(
                 ok=False,
-                error={"kind": "unknown_tool", "message": f"no tool named {name!r}"},
+                error={"kind": "unknown_tool", "message": f"unknown tool {name!r}"},
+                latency_ms=0,
             )
-        started = time.monotonic()
-
-        # Activity registry — drives the menu bar's color-coded icon.
-        # Begin/end is bracketed around the whole handler, so concurrent
-        # tools all show their state simultaneously (the priority logic
-        # in app.activity picks the most-significant one for display).
-        from app import activity
-        activity_token = activity.begin(activity.classify(name), detail=name)
+        # Activity tracking — feeds the menu-bar status colour. Begin/
+        # end around the handler so the glyph reflects what's running.
+        # Lazy import keeps this module testable in environments without
+        # the desktop layer.
         try:
-            value = await spec.handler(args or {}, ctx)
+            from app import activity as _act
+            token = _act.begin(_act.classify(name), detail=name)
+        except Exception:
+            token = None
+        try:
+            # All handlers are async (args, ctx). Validate up front so a
+            # mis-shaped handler fails loudly at registration-discovery
+            # rather than at call time.
+            result = await spec.handler(args, ctx)
+            return ToolResult(
+                ok=True,
+                result=result,
+                latency_ms=int((time.perf_counter() - t0) * 1000),
+            )
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            logger.exception("tool %s raised", name)
+            # BrowserToolError carries a structured envelope; everything
+            # else gets a generic shape.
+            err: dict[str, Any] = {
+                "kind": getattr(exc, "kind", type(exc).__name__),
+                "message": str(exc),
+            }
+            details = getattr(exc, "details", None)
+            if details is not None:
+                err["details"] = details
+            logger.exception("tool %s dispatch failed", name)
             return ToolResult(
                 ok=False,
-                error={"kind": type(exc).__name__, "message": str(exc)},
-                latency_ms=int((time.monotonic() - started) * 1000),
+                error=err,
+                latency_ms=int((time.perf_counter() - t0) * 1000),
             )
         finally:
-            activity.end(activity_token)
-        return ToolResult(
-            ok=True,
-            result=value,
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
+            if token is not None:
+                try:
+                    from app import activity as _act
+                    _act.end(token)
+                except Exception:
+                    pass
+
+    def reset_for_tests(self) -> None:
+        self._tools.clear()
 
 
+# Module-level singleton — what plugins (and core tools) import.
 registry = ToolRegistry()
+
+
+# Back-compat helpers used by the existing plugin loader (which
+# snapshots the registry's keys before/after a plugin import to
+# back-fill host_pattern on its newly-added specs).
+def _registry_keys() -> set[str]:
+    return set(registry._tools.keys())
+
+
+def _back_fill_host_pattern(
+    new_keys: set[str], pattern: str | list[str]
+) -> int:
+    """For each newly-added spec whose ``host_pattern is None``, set it
+    to the manifest's ``host_patterns``. Returns the number of specs
+    updated."""
+    applied = 0
+    for name in new_keys:
+        spec = registry._tools.get(name)
+        if spec is not None and spec.host_pattern is None:
+            spec.host_pattern = pattern
+            applied += 1
+    return applied

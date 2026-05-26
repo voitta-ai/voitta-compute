@@ -1,0 +1,78 @@
+/* ─── plot cards (Chart.js) ──────────────────────────────────────────────── */
+.plot-card {
+  align-self: stretch;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  margin: 0 0 6px;
+}
+.plot-card .plot-canvas-wrap {
+  position: relative;
+  width: 100%;
+}
+.plot-card.kind-heatmap .plot-canvas-wrap {
+  background: var(--voitta-heatmap-bg);
+  border-radius: 4px;
+}
+
+/* small markdown blocks emitted by buffer_eval draw.text or
+   run_compute's ctx.text() */
+.rich-text {
+  align-self: stretch;
+  background: var(--voitta-rich-text-bg);
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  margin: 0 0 6px;
+}
+
+/* images emitted by run_compute's ctx.image() — backend serves the file
+   from /api/script-output/<run_id>/<file>, MessageList resolves the
+   URL against the bookmarklet's backend origin */
+.rich-image {
+  align-self: stretch;
+  margin: 0 0 6px;
+  padding: 6px;
+  background: var(--voitta-surface);
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+}
+.rich-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.rich-image figcaption {
+  margin: 4px 6px 0;
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+  text-align: center;
+  font-style: italic;
+}
+
+/* log panes from buffer_eval */
+.rich-log {
+  align-self: stretch;
+  background: var(--voitta-log-bg);
+  color: var(--voitta-log-fg);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+  margin: 0 0 6px;
+}
+.rich-log summary {
+  cursor: pointer;
+  color: var(--voitta-log-title-fg);
+  user-select: none;
+  padding: 2px 0;
+}
+.rich-log pre {
+  margin: 4px 0 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+

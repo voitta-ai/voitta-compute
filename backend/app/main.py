@@ -1,64 +1,73 @@
-"""FastAPI application — entrypoint for `uvicorn app.main:app`.
-
-Mounts the chat router under `/api`, the bridge router at the root (so
-URLs match `voitta-bookmarklet`), and serves the built widget bundle from
-`frontend/dist/widget.js` for the bookmarklet to load.
-"""
+"""FastAPI app: Chainlit at /chainlit, built FE at /, /health on the side."""
 
 from __future__ import annotations
 
-import json
+import contextlib
 import logging
-import re
-import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
-
-
-# Configure logging for raw `uvicorn app.main:app` runs (i.e. `./run.sh`).
-# When the .app launches us through ``app.desktop``, a richer queue-based
-# config is installed there and this block is a no-op (we detect an
-# existing handler on the root logger and bail). Without this, INFO-level
-# lines from ``app.*`` modules — including the prompt-cache monitor —
-# get silently dropped on dev runs because uvicorn's default LOGGING_CONFIG
-# only attaches handlers to ``uvicorn.*`` loggers.
-_root_logger = logging.getLogger()
-if not _root_logger.handlers:
-    _root_logger.setLevel(logging.INFO)
-    _stderr = logging.StreamHandler()
-    _stderr.setFormatter(
-        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
-    )
-    _root_logger.addHandler(_stderr)
+from chainlit.utils import mount_chainlit
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-
-from app.config import settings
-from app.routes.chat import router as chat_router
-from app.routes.cli import router as cli_router
-from app.routes.plugins import router as plugins_router
-from app.routes.providers import router as providers_router
-from app.routes.tools import router as tools_router
+from fastapi.responses import FileResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
-# Mirror app.config.PROJECT_ROOT so packaged (.app) and dev modes
-# resolve resources to the same place. config picks up the env-var
-# override `VOITTA_PROJECT_ROOT` set by the desktop launcher.
-from app.config import PROJECT_ROOT  # noqa: E402
-
-FRONTEND_DIST = PROJECT_ROOT / "frontend" / "dist"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
-app = FastAPI(title="Voitta Bookmarklet Backend", version="0.1.0")
+# Build the FastMCP sub-app BEFORE constructing FastAPI so we can hand
+# its lifespan to the parent. FastMCP's streamable-HTTP transport
+# spawns a task group inside its lifespan context — without it the
+# StreamableHTTPSessionManager raises ``Task group is not initialized``
+# on the first request. Per FastMCP's ASGI docs, the parent app must
+# share the sub-app's lifespan.
+try:
+    from app.routes.mcp import build_mcp_asgi
+    _mcp_asgi = build_mcp_asgi()
+except Exception:
+    logging.getLogger(__name__).exception("failed to build /mcp sub-app")
+    _mcp_asgi = None
 
-# CORS. ``allow_credentials=True`` is required so cookies set by
-# /api/auth/login round-trip on subsequent fetches from the host page
-# (drive.google.com etc → 127.0.0.1:12358 is cross-origin). The CORS
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Combined lifespan:
+
+    * Enter the FastMCP sub-app's lifespan so its streamable-HTTP
+      transport's task group is alive for the lifetime of the parent
+      app (without this, /mcp 500s with "Task group is not initialized"
+      on the first request).
+    * Probe every plugin-declared MCP connector once at startup so the
+      Settings panel lands warm. Best-effort — unreachable servers
+      don't abort startup. Plugins themselves load when
+      ``app.chainlit_app`` is imported via ``mount_chainlit`` below,
+      so the connector list is populated by the time this fires.
+    """
+    async def _startup_tasks() -> None:
+        try:
+            from app.services.mcp.registry import refresh_all
+            await refresh_all()
+        except Exception:
+            logging.getLogger(__name__).exception("MCP startup refresh failed")
+
+    if _mcp_asgi is not None and hasattr(_mcp_asgi, "router"):
+        async with _mcp_asgi.router.lifespan_context(_app):
+            await _startup_tasks()
+            yield
+    else:
+        await _startup_tasks()
+        yield
+
+
+app = FastAPI(title="voitta-bookmarklet-chainlit", lifespan=_lifespan)
+
+# CORS. The bookmarklet runs on third-party origins (drive.google.com,
+# enterprise.voitta.ai, ...) and needs to send credentialed requests to
+# the local backend so Chainlit's session cookie round-trips. The CORS
 # spec forbids ``*`` together with credentials, so we echo the request
-# Origin via a regex match instead — semantically equivalent for our
-# threat model since auth is the cookie, not the origin.
+# Origin via a regex match — semantically equivalent for our threat
+# model since auth lives in the cookie, not the origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=".*",
@@ -68,286 +77,1087 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-
-# ---- auth gate -------------------------------------------------------------
+# Chrome Private Network Access gate — raw ASGI middleware so it wraps
+# the entire stack (including CORSMiddleware and exception handlers) and
+# cannot be bypassed by an error response.
 #
-# When LOCALHOST_MODE is on (the default for the .app), every request
-# passes. Otherwise we require the request to carry the auth cookie set
-# by ``POST /api/auth/login``, OR the route to be in the open-allowlist
-# (widget bootstrap + the auth endpoints themselves).
+# Chrome sends a combined CORS+PNA preflight (OPTIONS with
+# Access-Control-Request-Private-Network: true) before any cross-origin
+# request from a public origin to 127.0.0.1. Starlette's CORSMiddleware
+# never echoes Access-Control-Allow-Private-Network, so Chrome blocks the
+# actual request with net::ERR_FAILED.
 #
-# Allowlist routes:
-#   GET /widget.js              bookmarklet has to load before login
-#   GET /widget.js.map          dev-mode source map
-#   POST /api/auth/login        the login endpoint itself
-#   GET  /api/auth/status       cheap "are we authed?" probe
-#   POST /api/auth/logout       not auth-gated by spec (anyone can quit)
-#   GET  /healthz               opt-in liveness check
-#
-# Everything else (chat, tools, RAG, Drive, reports, scripts) is gated.
+# This middleware:
+#  1. Short-circuits PNA preflights before they reach CORSMiddleware,
+#     returning a 204 with all required headers in a single hop.
+#  2. Injects Access-Control-Allow-Private-Network: true into every
+#     non-preflight response at the send() level — immune to exceptions.
+class _PNAMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
 
-_AUTH_OPEN_ROUTES = frozenset({
-    "GET /widget.js",
-    "GET /widget.js.map",
-    "POST /api/auth/login",
-    "GET /api/auth/status",
-    "POST /api/auth/logout",
-    "GET /healthz",
-})
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
 
+        headers_raw: dict[bytes, bytes] = {
+            k.lower(): v for k, v in scope.get("headers", [])
+        }
+        method: str = scope.get("method", "")
 
-@app.middleware("http")
-async def _auth_gate(request: Request, call_next):
-    from app import config as _cfg
+        # ── PNA preflight ────────────────────────────────────────────────
+        if (
+            method == "OPTIONS"
+            and headers_raw.get(b"access-control-request-private-network") == b"true"
+        ):
+            origin = headers_raw.get(b"origin", b"*")
+            response_headers = [
+                (b"access-control-allow-origin",          origin),
+                (b"access-control-allow-methods",         headers_raw.get(b"access-control-request-method",  b"GET, POST, DELETE, OPTIONS")),
+                (b"access-control-allow-headers",         headers_raw.get(b"access-control-request-headers", b"*")),
+                (b"access-control-allow-credentials",     b"true"),
+                (b"access-control-allow-private-network", b"true"),
+                (b"access-control-max-age",               b"86400"),
+            ]
+            await send({"type": "http.response.start", "status": 204, "headers": response_headers})
+            await send({"type": "http.response.body",  "body": b""})
+            return
 
-    # Always pass in localhost mode — current production .app default.
-    if _cfg.LOCALHOST_MODE:
-        return await call_next(request)
+        # ── All other requests: stamp PNA header on every response ───────
+        async def _send_stamped(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                hdrs = list(message.get("headers", []))
+                hdrs.append((b"access-control-allow-private-network", b"true"))
+                message = {**message, "headers": hdrs}
+            await send(message)
 
-    # CORS preflight — the browser hasn't attached cookies yet, and
-    # blocking it kills every cross-origin call. The CORSMiddleware
-    # above answers it; let the request through.
-    if request.method == "OPTIONS":
-        return await call_next(request)
-
-    key = f"{request.method} {request.url.path}"
-    if key in _AUTH_OPEN_ROUTES:
-        return await call_next(request)
-    # Plugin bootstrap routes are open — theme.css served by name (/api/plugin/{name}/theme.css)
-    if request.method == "GET" and request.url.path.startswith("/api/plugin"):
-        return await call_next(request)
-
-    cookie = request.cookies.get(_cfg.AUTH_COOKIE_NAME)
-    if cookie and cookie == _cfg.API_KEY:
-        return await call_next(request)
-
-    # Bearer header for non-browser callers (curl / sdk).
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.lower().startswith("bearer "):
-        if auth_header[7:].strip() == _cfg.API_KEY:
-            return await call_next(request)
-
-    return JSONResponse(
-        status_code=401,
-        content={
-            "error": "unauthenticated",
-            "message": (
-                "This Voitta backend is running in LAN mode and requires "
-                "an API key. POST /api/auth/login with body "
-                "{\"api_key\": \"...\"} to get a session cookie."
-            ),
-        },
-    )
+        await self._app(scope, receive, _send_stamped)
 
 
-# Chrome's Private Network Access (PNA) gate. When a public origin (e.g.
-# drive.google.com) talks to a private/loopback address (e.g. 127.0.0.1),
-# Chrome sends a CORS preflight that includes
-# ``Access-Control-Request-Private-Network: true``. The local server has
-# to consent by echoing ``Access-Control-Allow-Private-Network: true``
-# on the preflight response — otherwise the actual request fails with
-# "Permission was denied for this request to access the `loopback`
-# address space." FastAPI's CORS middleware doesn't emit that header on
-# its own, so we patch every response (preflight or not — extra header
-# on non-preflight responses is harmless).
-@app.middleware("http")
-async def _allow_private_network(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["Access-Control-Allow-Private-Network"] = "true"
-    return response
+app.add_middleware(_PNAMiddleware)
 
 
-app.include_router(chat_router, prefix="/api")
-app.include_router(tools_router)
-app.include_router(providers_router)
-# Plugin diagnostics + MCP refresh control. Routes already carry the
-# /api/plugins prefix internally, so we mount without an extra prefix.
+from app.routes.google import router as google_router
+from app.routes.html_report import router as html_report_router
+from app.routes.plugins import router as plugins_router
+from app.routes.reports import router as reports_router
+from app.routes.settings import router as settings_router
+from app.routes.workspace import router as workspace_router
+
+app.include_router(reports_router)
+app.include_router(html_report_router)
+app.include_router(settings_router)
 app.include_router(plugins_router)
-
-
-@app.on_event("startup")
-async def _bootstrap_plugins_and_mcp() -> None:
-    """One-shot plugin discovery + MCP connector probe at boot.
-
-    Two phases, in order:
-
-    1. ``discover_plugins()`` walks ``plugins/*``, imports each
-       plugin's Python module so its ``ToolSpec`` registrations land
-       on the global registry, AND records ``mcp_servers`` manifest
-       entries as MCP connector declarations. This used to run as a
-       module-load side effect in ``app.tools.providers``; it's
-       deferred to startup now to avoid a circular import (the
-       discovery path needs ``app.services.mcp`` which back-loads
-       ``app.tools.__init__``).
-
-    2. ``refresh_all()`` opens one streamable-http connection per
-       connector, lists remote tools, synthesises ``ToolSpec``s.
-       Per the design contract this is the only automatic probe —
-       further refreshes come from the Settings "Refresh tool list"
-       button.
-
-    Failures are absorbed so a down MCP server doesn't block startup;
-    affected connectors show ``unreachable`` in the Settings panel.
-    """
-    import logging
-
-    log = logging.getLogger(__name__)
-    try:
-        from app.tools.providers import discover_plugins
-
-        discover_plugins()
-    except Exception:
-        # Plugin discovery failing at startup is unusual but shouldn't
-        # take the backend down — core tools still work, just no
-        # plugin-contributed ones.
-        log.exception("plugin discovery raised")
-
-    try:
-        from app.services.mcp import refresh_all as _refresh_mcp
-
-        await _refresh_mcp()
-    except Exception:
-        log.exception("MCP startup refresh raised")
-
-    # Bind the main event loop into ensure_local so that script-side
-    # ``ctx.ensure_local(ref)`` calls — which run in a thread-pool
-    # executor — can dispatch async resolvers back to this loop via
-    # ``run_coroutine_threadsafe``. Scheme resolvers register
-    # themselves as plugin-import side-effects (see e.g.
-    # ``plugins/google/backend/voitta_google/resolver.py``); no
-    # core-side resolver import is needed here.
-    try:
-        import asyncio
-        from app.services import ensure_local as _ensure_local
-
-        _ensure_local.bind_loop(asyncio.get_running_loop())
-    except Exception:
-        log.exception("ensure_local startup wiring raised")
-# Localhost-only back-channel for external automation (Claude Code,
-# scripts). NOT exposed to the in-pane chat LLM. See app/routes/cli.py.
-app.include_router(cli_router)
-
-# Embedded MCP server — same kill switch and loopback guard as /cli.
-# Mounted as an ASGI sub-app so the streamable-HTTP transport's own
-# routes don't fight FastAPI's router. See app/routes/mcp.py.
-from app.routes.mcp import build_mcp_asgi  # noqa: E402
-
-_mcp_app = build_mcp_asgi()
-app.mount("/mcp", _mcp_app)
-# FastMCP's StreamableHTTPSessionManager runs inside an anyio task
-# group that lives for the duration of the sub-app's lifespan context.
-# The parent FastAPI app uses the legacy @on_event API, so we cannot
-# just pass ``lifespan=_mcp_app.lifespan`` to the FastAPI constructor.
-# Instead, we drive the sub-app's lifespan as an async-context-manager
-# from the parent's startup/shutdown — equivalent effect.
-from contextlib import AsyncExitStack as _AsyncExitStack  # noqa: E402
-
-_mcp_lifespan_stack = _AsyncExitStack()
-
-
-@app.on_event("startup")
-async def _mcp_startup() -> None:
-    # _mcp_app.router.lifespan_context is already an @asynccontextmanager
-    # (FastMCP wraps it). Calling it with the app returns a context
-    # manager we can enter via the exit stack.
-    await _mcp_lifespan_stack.enter_async_context(
-        _mcp_app.router.lifespan_context(_mcp_app)
-    )
-
-
-@app.on_event("shutdown")
-async def _mcp_shutdown() -> None:
-    await _mcp_lifespan_stack.aclose()
+app.include_router(google_router)
+app.include_router(workspace_router)
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+# Mount Chainlit at /chainlit. Its socket.io lives at
+# /chainlit/ws/socket.io. MUST be mounted before the static FE catch-all
+# below so it isn't shadowed.
+_chainlit_target = Path(__file__).with_name("chainlit_app.py")
+mount_chainlit(app=app, target=str(_chainlit_target), path="/chainlit")
+
+
+# Embedded FastMCP debugging server at /mcp. Gated by the
+# ``mcpDebugEnabled`` user setting + loopback-only peer + Origin-absent
+# checks — see app.routes.mcp for the middleware. Mounted AFTER
+# chainlit so its routes don't get shadowed; mounted BEFORE the static
+# FE catch-all below so `/mcp/*` paths reach this app. The sub-app
+# itself is built at module load (above) so its lifespan can be merged
+# into FastAPI's.
+if _mcp_asgi is not None:
+    app.mount("/mcp", _mcp_asgi)
+
+
+# Reports are HTML-only. The /api/html-report route serves cached
+# bodies and the /api/_panel_shim.js + /api/_html_to_image.js routes
+# below provide the screenshot infrastructure injected into the
+# LLM's <head> by app.reports.renderers.html.render_html.
+#
+# This shim is loaded into the HTML iframe via the <script src=...>
+# injection above. It fires render-ready / render-error events back
+# to ``/api/report-render-events`` so the awaiting agent-loop
+# call_fn wakes up, and handles measure / reflow / screenshot
+# postMessages from the parent's screenshot_report primitive.
+_PANEL_SHIM_JS = """(function () {
+  // Voitta Panel iframe shim — lean chainlit-build variant.
+  //
+  // Responsibilities:
+  //   1. Signal "ready" once Bokeh's document has finished building.
+  //   2. Capture render errors (window.error, unhandledrejection,
+  //      Bokeh's "Error rendering Bokeh items" console pattern).
+  //   3. Forward nested-iframe (three_scene) errors via the
+  //      ``voitta_nested_error`` postMessage envelope.
+  //   4. Forward render events to the parent via postMessage; the
+  //      parent ReportPane forwards them to /api/report-render-events.
+  //
+  // The shim POSTs DIRECTLY to ``/api/report-render-events`` because
+  // the Panel iframe is same-origin with the backend — no parent
+  // round-trip needed. (Legacy build went through the parent so the
+  // shim could handle the on-prem case; not relevant in chainlit-
+  // local mode.)
+
+  function readQS(name) {
+    try {
+      return new URLSearchParams(location.search).get(name) || "";
+    } catch (_) { return ""; }
+  }
+  var SLUG = readQS("id");
+  var RENDER_ID = readQS("render_id");
+
+  var sentReady = false;
+  var emittedErrors = 0;
+  var ERR_CAP = 50;
+
+  function postEvent(payload) {
+    try {
+      fetch("/api/report-render-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        // Same-origin — credentials not needed, but harmless.
+        credentials: "same-origin",
+      }).catch(function () { /* fire-and-forget */ });
+    } catch (_) { /* swallow */ }
+  }
+
+  function emitReady() {
+    if (sentReady) return;
+    sentReady = true;
+    postEvent({
+      name: SLUG,
+      kind: "ready",
+      render_id: RENDER_ID,
+      message: "panel iframe ready",
+      detail: {},
+    });
+  }
+
+  function emitError(message, detail) {
+    if (emittedErrors >= ERR_CAP) return;
+    emittedErrors++;
+    postEvent({
+      name: SLUG,
+      kind: "error",
+      render_id: RENDER_ID,
+      message: String(message || "").slice(0, 4000),
+      detail: detail || {},
+    });
+  }
+
+  // Window-level error capture.
+  window.addEventListener("error", function (e) {
+    var err = e && e.error;
+    emitError((err && err.message) || e.message || String(e), {
+      source: "window.error",
+      stack: err && err.stack ? String(err.stack).slice(0, 6000) : null,
+      url: e.filename || "",
+      line: e.lineno || null,
+      col: e.colno || null,
+    });
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e && e.reason;
+    emitError((r && (r.message || String(r))) || "unhandled rejection", {
+      source: "unhandledrejection",
+      stack: r && r.stack ? String(r.stack).slice(0, 6000) : null,
+    });
+  });
+  // Bokeh emits "Error rendering Bokeh items" via console.error;
+  // monkey-patch to forward.
+  var _origCE = console.error.bind(console);
+  console.error = function () {
+    try {
+      var parts = [];
+      for (var i = 0; i < arguments.length; i++) {
+        var a = arguments[i];
+        if (a == null) { parts.push(""); continue; }
+        if (typeof a === "string") { parts.push(a); continue; }
+        if (a && a.message) {
+          parts.push((a.name || "Error") + ": " + a.message);
+          continue;
+        }
+        try { parts.push(String(a)); } catch (_) { parts.push("[unstringifiable]"); }
+      }
+      var joined = parts.join(" ");
+      if (/Error rendering Bokeh items|Failed to (render|update)/i.test(joined)) {
+        emitError(joined, { source: "console.error" });
+      }
+    } catch (_) {}
+    return _origCE.apply(null, arguments);
+  };
+
+  // Listen for postMessages from nested srcdoc iframes (ctx.three_scene).
+  // The three_scene viewer doc posts ``voitta_nested_error`` envelopes;
+  // forward them as render errors.
+  window.addEventListener("message", function (e) {
+    var d = e && e.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "voitta_nested_error") {
+      emitError(d.message || "nested iframe error", {
+        source: d.source || "nested",
+        stack: d.stack,
+        url: d.url,
+        line: d.line,
+        col: d.col,
+      });
+    }
+  });
+
+  // ─── multi-strategy content-extent measurement ───────────────────
+  // Different reports need different measurement strategies. We
+  // return all four candidates; the parent decides which to use.
+  //
+  //   body-scroll    — document.body.scrollHeight. Today's behavior.
+  //                    Lies when body itself is stretch-fill (height:100%
+  //                    or sizing_mode='stretch_*') — returns whatever
+  //                    height the iframe was forced to, not content.
+  //   deep-content   — Walk descendants of body, find max bbox.bottom
+  //                    of non-stretch-fill elements. Drills through
+  //                    stretch containers to find real content.
+  //   bokeh-root     — Find Bokeh root containers (.bk-Column, .bk-GridBox,
+  //                    [data-root-id]) and take their max bottom.
+  //                    Cleanest for Panel/Bokeh reports specifically.
+  //   generous       — A fixed large height (5000 px). Trust the
+  //                    background-trim pass to crop the tail. Bulletproof.
+  function _measureExtents() {
+    var docEl = document.documentElement;
+    var body = document.body;
+    var scrollY = window.scrollY || 0;
+    var result = {
+      bodyScroll:  (body && body.scrollHeight) || docEl.scrollHeight,
+      deepContent: 0,
+      bokehRoot:   0,
+      generous:    5000,
+    };
+    if (!body) return result;
+
+    // deep-content: walk body's tree, find the max bottom edge of any
+    // element whose CSS height is NOT 100% (stretch-fill). Stretch
+    // containers' bottoms equal the iframe bottom, useless. We descend
+    // INTO them but don't measure them directly.
+    var maxBottom = 0;
+    function isStretch(el) {
+      try {
+        var s = getComputedStyle(el);
+        var h = s.height;
+        var mh = s.minHeight;
+        return h === "100%" || h === "100vh" || mh === "100%" || mh === "100vh";
+      } catch (_) { return false; }
+    }
+    function walk(el, depth) {
+      if (!el || depth > 32) return;
+      if (el.nodeType !== 1) return;  // ELEMENT_NODE only
+      var tag = el.tagName;
+      if (tag === "SCRIPT" || tag === "STYLE" || tag === "META" || tag === "LINK") return;
+      // Iframes' inner content can't be measured cross-origin, but
+      // their bounding rect IS the right answer (the iframe itself
+      // is a measurable box on the page).
+      var rect;
+      try { rect = el.getBoundingClientRect(); } catch (_) { return; }
+      if (rect.width === 0 || rect.height === 0) {
+        // Either invisible or empty; still walk children (a hidden
+        // wrapper can contain visible descendants).
+        for (var i = 0; i < el.children.length; i++) walk(el.children[i], depth + 1);
+        return;
+      }
+      if (isStretch(el) && el.children.length) {
+        // Stretch-fill container: ignore its bottom, descend.
+        for (var j = 0; j < el.children.length; j++) walk(el.children[j], depth + 1);
+        return;
+      }
+      var bottom = rect.bottom + scrollY;
+      if (bottom > maxBottom) maxBottom = bottom;
+      // Even non-stretch elements can have meaningful descendants
+      // below their reported bbox if they have overflow:visible
+      // children — descend a bit either way.
+      for (var k = 0; k < el.children.length; k++) walk(el.children[k], depth + 1);
+    }
+    walk(body, 0);
+    result.deepContent = Math.round(maxBottom);
+
+    // bokeh-root: target Panel/Bokeh's known structural classes.
+    var bokehMax = 0;
+    var sels = ".bk-Column,.bk-GridBox,.bk-Row,.bk-panel-models-layout-Column," +
+               ".bk-panel-models-layout-Row,[data-root-id]";
+    try {
+      var roots = body.querySelectorAll(sels);
+      for (var r = 0; r < roots.length; r++) {
+        try {
+          var rr = roots[r].getBoundingClientRect();
+          if (rr.height > 0) {
+            var b = rr.bottom + scrollY;
+            if (b > bokehMax) bokehMax = b;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    result.bokehRoot = Math.round(bokehMax);
+
+    return result;
+  }
+
+  // ─── three.js / nested-iframe canvas capture ─────────────────────
+  // ctx.three_scene mounts its WebGL canvas inside a srcdoc iframe.
+  // Cross-origin sandboxing prevents the parent from reading those
+  // pixels, AND html-to-image / dom-to-image-more / modern-screenshot
+  // can't crawl into srcdoc-iframes either — they all see a blank
+  // rectangle where the 3D scene should be. The three_scene viewer
+  // sets `preserveDrawingBuffer: true` on its renderer and answers
+  // `voitta_three_capture` postMessages with `canvas.toDataURL()`.
+  // We ask each nested iframe for its snapshot, then blit them at
+  // their on-page bounding-rect positions onto each technique's
+  // output canvas before re-encoding.
+  function _deepFindIframes(root, acc) {
+    if (!root) return;
+    try {
+      var nodeIframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
+      for (var i = 0; i < nodeIframes.length; i++) acc.push(nodeIframes[i]);
+      var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+      for (var j = 0; j < all.length; j++) {
+        if (all[j].shadowRoot) _deepFindIframes(all[j].shadowRoot, acc);
+      }
+    } catch (_) {}
+  }
+  function _captureNestedScenes() {
+    var iframes = [];
+    _deepFindIframes(document, iframes);
+    if (!iframes.length) return Promise.resolve([]);
+    var pending = iframes.map(function (iframe, idx) {
+      var requestId = "three_cap_" + Date.now() + "_" + idx;
+      return new Promise(function (resolve) {
+        var done = false;
+        function onMsg(ev) {
+          if (!ev || !ev.data) return;
+          if (ev.data.type !== "voitta_three_capture_response") return;
+          if (ev.data.requestId !== requestId) return;
+          if (done) return;
+          done = true;
+          window.removeEventListener("message", onMsg);
+          if (ev.data.ok && ev.data.dataUrl) {
+            var rect = iframe.getBoundingClientRect();
+            resolve({
+              dataUrl: ev.data.dataUrl,
+              x: rect.x + (window.scrollX || 0),
+              y: rect.y + (window.scrollY || 0),
+              w: rect.width, h: rect.height,
+            });
+          } else {
+            resolve(null);
+          }
+        }
+        window.addEventListener("message", onMsg);
+        try {
+          iframe.contentWindow.postMessage(
+            { type: "voitta_three_capture", requestId: requestId }, "*"
+          );
+        } catch (_) {}
+        setTimeout(function () {
+          if (done) return;
+          done = true;
+          window.removeEventListener("message", onMsg);
+          resolve(null);
+        }, 600);
+      });
+    });
+    return Promise.all(pending).then(function (results) {
+      return results.filter(function (r) { return r !== null; });
+    });
+  }
+
+  // Load an Image from a data URL → resolved Image (ready to drawImage).
+  function _loadImage(dataUrl) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error("image decode failed")); };
+      img.src = dataUrl;
+    });
+  }
+
+  // Take a base PNG data URL produced by a technique (which captured
+  // a blank rect where each three.js iframe sits), composite each
+  // nested scene snapshot at its on-page coordinates, return a new
+  // PNG data URL. ``scale`` matches the technique's pixelRatio so
+  // overlay coordinates line up with the technique's output bitmap.
+  async function _compositeScenes(baseDataUrl, scenes, scale, fullW, fullH) {
+    if (!scenes.length) return baseDataUrl;
+    var base = await _loadImage(baseDataUrl);
+    // Use the loaded image's natural pixel dimensions — different
+    // techniques produce different output sizes (pixelRatio, etc.).
+    var outW = base.naturalWidth, outH = base.naturalHeight;
+    var canvas = document.createElement("canvas");
+    canvas.width = outW; canvas.height = outH;
+    var ctx2d = canvas.getContext("2d");
+    ctx2d.drawImage(base, 0, 0);
+    // Compute scale factors from page coordinates to output pixels.
+    // The scene rects are in CSS pixels; the output bitmap is
+    // CSS-pixel-width × scale. Use that ratio rather than the
+    // caller-supplied scale, in case the technique applied its own.
+    var sx = outW / fullW;
+    var sy = outH / fullH;
+    for (var i = 0; i < scenes.length; i++) {
+      var snap = scenes[i];
+      try {
+        var img = await _loadImage(snap.dataUrl);
+        ctx2d.drawImage(img,
+          Math.round(snap.x * sx),
+          Math.round(snap.y * sy),
+          Math.round(snap.w * sx),
+          Math.round(snap.h * sy));
+      } catch (_) {
+        // Individual scene-composite failure shouldn't break the
+        // whole technique result — skip and continue.
+      }
+    }
+    return canvas.toDataURL("image/png");
+  }
+
+  // Upload a data URL to the BE stash via same-origin HTTP. Returns
+  // a stash id the parent can ferry through call_browser without
+  // hitting socket.io's frame-size limit (multi-MB PNGs would silently
+  // drop on the slow path). The stash endpoint is BE-served at the
+  // iframe's own origin so this is a plain same-origin POST.
+  async function _stashUpload(dataUrl, label, meta) {
+    var comma = dataUrl.indexOf(",");
+    var b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    var mime = dataUrl.indexOf("data:image/png") === 0 ? "image/png" : "image/webp";
+    var res = await fetch("/api/screenshot-stash", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: label,
+        media_type: mime,
+        data: b64,
+        meta: meta || {},
+      }),
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      throw new Error("stash POST failed: " + res.status + " " + res.statusText);
+    }
+    var json = await res.json();
+    if (!json || !json.id) {
+      throw new Error("stash POST returned no id");
+    }
     return {
-        "ok": True,
-        # Provider keys live in browser localStorage (set via the in-pane
-        # Settings panel). The backend is intentionally key-less.
-        "providers_supported": ["anthropic", "openai", "gemini"],
-        "max_tool_iterations_ceiling": settings.max_tool_iterations_ceiling,
+      id: json.id,
+      media_type: mime,
+      bytes_b64_len: b64.length,
+    };
+  }
+
+  // Apply a hard timeout to a Promise; rejects with the given
+  // message if it doesn't settle in ``ms``. The libraries we use
+  // don't all bound their own internal CSS-rule probes — without
+  // this, a failing remote-CSS fetch can hang a technique for many
+  // seconds while the others wait. Each technique gets its own
+  // budget so one slow lib doesn't kill the whole batch.
+  function _withTimeout(promise, ms, label) {
+    return new Promise(function (resolve, reject) {
+      var t = setTimeout(function () {
+        reject(new Error(label + " timed out after " + ms + "ms"));
+      }, ms);
+      promise.then(function (v) { clearTimeout(t); resolve(v); },
+                   function (e) { clearTimeout(t); reject(e); });
+    });
+  }
+
+  // Silence the known-noisy cross-origin CSS errors during capture.
+  // Every technique tries to inline @import'd / <link> stylesheets;
+  // when they're cross-origin (fonts.googleapis.com), CSSOM rule
+  // access is blocked → each library logs and falls back to keeping
+  // the <link> reference, which still works in the final SVG. We
+  // restore the original console.error after capture so unrelated
+  // errors keep surfacing.
+  var _CSS_NOISE_RE = /cssRules|SecurityError|Error inlining remote css|Error while reading CSS rules|domtoimage: Error while reading CSS rules/;
+  function _muteCSSNoise() {
+    var orig = console.error;
+    console.error = function () {
+      try {
+        var s = "";
+        for (var i = 0; i < arguments.length; i++) {
+          var a = arguments[i];
+          if (a == null) continue;
+          s += " " + (typeof a === "string" ? a : (a && a.message) || "");
+        }
+        if (_CSS_NOISE_RE.test(s)) return;  // suppress
+      } catch (_) {}
+      return orig.apply(this, arguments);
+    };
+    return function restore() { console.error = orig; };
+  }
+
+  // ─── multi-technique capture ─────────────────────────────────────
+  // Runs every loaded screenshot library against the document body
+  // and returns a list of {label, ok, dataUrl, ...} results. Each
+  // technique is isolated — failures don't cascade. The parent
+  // primitive ships ALL results back to the BE so the LLM can pick.
+  //
+  // Why three? html-to-image, dom-to-image-more, and modern-screenshot
+  // each render CSS differently (drop shadows, backdrop-filter,
+  // mix-blend-mode, custom fonts, mask-image). For a given report
+  // one will look closest to the real thing. html2canvas was dropped
+  // — empirically it truncates pyplot reports vs the SVG-foreignObject
+  // techniques.
+  //
+  // Each technique's output is then composited with three.js scene
+  // snapshots so WebGL canvases show up correctly.
+  async function _captureMulti(opts) {
+    var docEl = document.documentElement;
+    var body = document.body;
+    var fullW = Math.max(docEl.scrollWidth, docEl.clientWidth);
+    var fullH = Math.max(docEl.scrollHeight, docEl.clientHeight);
+
+    // Settle: same as the single-technique path. Wait for late
+    // layout passes (Bokeh runs them after networkidle).
+    await new Promise(function (r) {
+      setTimeout(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(r);
+        });
+      }, opts.settleMs);
+    });
+
+    // Capture nested three.js scenes ONCE up front. Each technique
+    // composites the same scene snapshots into its own bitmap.
+    // Doing this once avoids hammering the nested iframes.
+    var scenes;
+    try { scenes = await _captureNestedScenes(); }
+    catch (_) { scenes = []; }
+
+    // Silence cross-origin CSS-rule warnings for the duration of
+    // the techniques run. They're harmless but each library spams
+    // them; in DevTools you'd see hundreds per screenshot call.
+    var restoreConsole = _muteCSSNoise();
+
+    // Read the document's actual background color so the rasteriser
+    // fills transparent areas with the same colour the user sees.
+    // getComputedStyle returns "rgba(0,0,0,0)" for transparent — in
+    // that case fall back to white to avoid a black canvas.
+    var _computedBg = getComputedStyle(body).backgroundColor;
+    var _bgColor = (_computedBg && _computedBg !== "rgba(0, 0, 0, 0)" && _computedBg !== "transparent")
+      ? _computedBg
+      : (getComputedStyle(docEl).backgroundColor || "#ffffff");
+    if (!_bgColor || _bgColor === "rgba(0, 0, 0, 0)" || _bgColor === "transparent") {
+      _bgColor = "#ffffff";
     }
 
+    // Single capture technique: html-to-image. Empirically the best
+    // for Panel/Bokeh reports vs html2canvas (which truncated tall
+    // pyplot reports) and the dom-to-image-more / modern-screenshot
+    // alternates (which didn't render meaningfully differently).
+    // SVG foreignObject capture, scenes composited separately.
+    var techniques = [
+      {
+        label: "html-to-image",
+        run: function () {
+          if (!window.htmlToImage || typeof window.htmlToImage.toPng !== "function") {
+            throw new Error("html-to-image not loaded");
+          }
+          return window.htmlToImage.toPng(body, {
+            width: fullW, height: fullH,
+            pixelRatio: opts.scale,
+            backgroundColor: _bgColor,
+            cacheBust: true,
+          });
+        },
+      },
+    ];
 
-def _plugin_for_host(host: str) -> dict | None:
-    """First plugin whose host_patterns matches — back-compat shim.
+    // Per-technique hard timeout. 12s is well above the typical
+    // ~500ms each library actually needs; hitting it means the
+    // library is genuinely stuck (usually on a cross-origin fetch
+    // its CSS-inlining path can't bound). Truncates so the other
+    // techniques + the strategy loop still ship a result.
+    var TECHNIQUE_TIMEOUT_MS = 12000;
 
-    Delegates to :func:`plugins_for_host`. Used by the single-plugin
-    endpoints (``GET /api/plugin``, theme-css) where today's data model
-    really is one-to-one. Multi-plugin callers should use
-    :func:`plugins_for_host` directly.
+    var results = [];
+    try {
+      for (var i = 0; i < techniques.length; i++) {
+        var t = techniques[i];
+        var t0 = (performance && performance.now) ? performance.now() : Date.now();
+        try {
+          var dataUrl = await _withTimeout(
+            Promise.resolve().then(t.run),
+            TECHNIQUE_TIMEOUT_MS,
+            t.label,
+          );
+          try {
+            dataUrl = await _compositeScenes(dataUrl, scenes, opts.scale, fullW, fullH);
+          } catch (compErr) {
+            // Composite failure → keep the raw technique output rather
+            // than failing the whole result. The 3D scene will look
+            // blank but the rest of the report is still useful.
+          }
+          // Stash the bytes BE-side over a plain same-origin POST,
+          // then return only the stash id through postMessage. Going
+          // through the parent + the chainlit socket with multi-MB
+          // PNGs silently truncates (frame-size limit), so we
+          // bypass that path entirely for the pixel payload.
+          var stashInfo = await _stashUpload(dataUrl, t.label, {
+            technique: t.label,
+            width: fullW, height: fullH,
+            scenes_composited: scenes.length,
+          });
+          var t1 = (performance && performance.now) ? performance.now() : Date.now();
+          results.push({
+            label: t.label, ok: true,
+            stash_id: stashInfo.id,
+            media_type: stashInfo.media_type,
+            bytes_b64_len: stashInfo.bytes_b64_len,
+            width: fullW, height: fullH,
+            ms: Math.round(t1 - t0),
+            scenes_composited: scenes.length,
+          });
+        } catch (err) {
+          var t1e = (performance && performance.now) ? performance.now() : Date.now();
+          results.push({
+            label: t.label, ok: false,
+            message: String((err && err.message) || err),
+            ms: Math.round(t1e - t0),
+          });
+        }
+      }
+    } finally {
+      // ALWAYS restore the original console.error, even if a
+      // technique threw out from under the timeout. Otherwise the
+      // mute leaks across screenshot calls and unrelated errors
+      // get silently dropped.
+      try { restoreConsole(); } catch (_) {}
+    }
+    return results;
+  }
+
+  // ─── parent → iframe action bridge ───────────────────────────────
+  // The parent's screenshot_report primitive postMessages a
+  // ``voittaAction: measure`` (to learn natural height) then a
+  // ``voittaAction: screenshot`` (to rasterise via html2canvas).
+  // Replies go back as ``type: voitta_report_event``.
+  window.addEventListener("message", function (e) {
+    if (e.source !== window.parent) return;
+    var a = e.data && e.data.voittaAction;
+    if (a === "reflow") {
+      // Force Bokeh/Panel to re-evaluate layout after the parent
+      // resized our iframe. Bokeh apps cache layout from the initial
+      // viewport and won't reflow on iframe resize unless a real
+      // ``resize`` event fires. Dispatching one here + awaiting two
+      // RAFs lets Bokeh's resize handler run and the new DOM settle
+      // before screenshot.
+      var frid = e.data.requestId;
+      var fSettleMs = +e.data.settle_ms || 600;
+      try { window.dispatchEvent(new Event("resize")); } catch (_) {}
+      setTimeout(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            try {
+              window.parent.postMessage({
+                type: "voitta_report_event",
+                kind: "reflow_response",
+                requestId: frid,
+                innerW: window.innerWidth,
+                innerH: window.innerHeight,
+              }, "*");
+            } catch (_) { /* parent gone */ }
+          });
+        });
+      }, fSettleMs);
+      return;
+    }
+    if (a === "measure") {
+      var mrid = e.data.requestId;
+      var mSettleMs = +e.data.settle_ms || 400;
+      setTimeout(function () {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(function () {
+            var docElM = document.documentElement;
+            try {
+              var extents = _measureExtents();
+              window.parent.postMessage({
+                type: "voitta_report_event",
+                kind: "measure_response",
+                requestId: mrid,
+                // Legacy fields — keep so existing callers still work.
+                scrollH: docElM.scrollHeight,
+                clientH: docElM.clientHeight,
+                bodyScrollH: (document.body && document.body.scrollHeight) || 0,
+                innerH: window.innerHeight,
+                // New: per-strategy content-extent candidates.
+                extents: extents,
+              }, "*");
+            } catch (_) { /* parent gone */ }
+          });
+        });
+      }, mSettleMs);
+      return;
+    }
+    if (a === "screenshot_multi") {
+      // Multi-technique capture. Runs four different screenshot
+      // libraries against the same DOM and returns all results as
+      // a single response so the LLM can pick the best-looking
+      // candidate. Each technique is independent — one failing
+      // doesn't affect the others.
+      //
+      // Techniques attempted (in order):
+      //   1. html2canvas       — canvas re-paint (with three_scene compositing)
+      //   2. html-to-image     — SVG foreignObject (toPng)
+      //   3. dom-to-image-more — SVG foreignObject, different impl
+      //   4. modern-screenshot — latest SVG-foreignObject implementation
+      //
+      // Note: techniques 2-4 don't get three_scene compositing
+      // automatically — they use SVG foreignObject which captures
+      // computed CSS rather than re-painting. Embedded canvases
+      // (the 3D scene) WILL render in those technique outputs as
+      // their CSS snapshot, but won't include the WebGL contents.
+      // Only html2canvas + our compositor handles 3D content.
+      var mrid = e.data.requestId;
+      var mScale = +e.data.scale || 1;
+      var mFormat = e.data.format === "png" ? "image/png" : "image/webp";
+      var mQuality = +e.data.quality || 0.85;
+      var mSettleMs = (e.data && +e.data.settle_ms) || 600;
+      function mreply(payload) {
+        try {
+          window.parent.postMessage(Object.assign(
+            { type: "voitta_report_event", kind: "screenshot_multi_response", requestId: mrid },
+            payload
+          ), "*");
+        } catch (_) {}
+      }
+      _captureMulti({
+        scale: mScale, format: mFormat, quality: mQuality, settleMs: mSettleMs,
+      }).then(function (results) {
+        mreply({ ok: true, results: results });
+      }).catch(function (err) {
+        mreply({ ok: false, message: String((err && err.message) || err) });
+      });
+      return;
+    }
+    if (a === "screenshot") {
+      var rid = e.data.requestId;
+      var scale = +e.data.scale || 1;
+      var quality = +e.data.quality || 0.85;
+      var format = e.data.format === "png" ? "image/png" : "image/webp";
+      var settleMs = (e.data && +e.data.settle_ms) || 600;
+      function sreply(payload) {
+        try {
+          window.parent.postMessage(Object.assign(
+            { type: "voitta_report_event", kind: "screenshot_response", requestId: rid },
+            payload
+          ), "*");
+        } catch (_) { /* parent gone */ }
+      }
+      if (typeof html2canvas !== "function") {
+        sreply({ ok: false, message: "html2canvas not loaded" });
+        return;
+      }
+      function _afterSettle(cb) {
+        setTimeout(function () {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(cb);
+          });
+        }, settleMs);
+      }
+      _afterSettle(function () {
+        var docEl = document.documentElement;
+        var fullW = Math.max(docEl.scrollWidth, docEl.clientWidth);
+        var fullH = Math.max(docEl.scrollHeight, docEl.clientHeight);
+        var bodyScrollH = (document.body && document.body.scrollHeight) || 0;
+        var dims = {
+          scrollW: docEl.scrollWidth, scrollH: docEl.scrollHeight,
+          clientW: docEl.clientWidth, clientH: docEl.clientHeight,
+          innerW: window.innerWidth, innerH: window.innerHeight,
+          bodyScrollH: bodyScrollH,
+          chosenW: fullW, chosenH: fullH,
+        };
+
+        // Three_scene nested iframes — their canvases are cross-origin
+        // to us, so html2canvas alone sees a blank rectangle. Ask each
+        // iframe for a canvas.toDataURL() via the voitta_three_capture
+        // protocol, then composite after rasterisation.
+        function _deepFindIframes(root, acc) {
+          if (!root) return;
+          try {
+            var nodeIframes = root.querySelectorAll ? root.querySelectorAll("iframe") : [];
+            for (var i = 0; i < nodeIframes.length; i++) acc.push(nodeIframes[i]);
+            var all = root.querySelectorAll ? root.querySelectorAll("*") : [];
+            for (var j = 0; j < all.length; j++) {
+              if (all[j].shadowRoot) _deepFindIframes(all[j].shadowRoot, acc);
+            }
+          } catch (_) {}
+        }
+        function captureNestedScenes() {
+          var iframes = [];
+          _deepFindIframes(document, iframes);
+          if (!iframes.length) return Promise.resolve([]);
+          var pending = iframes.map(function (iframe, idx) {
+            var requestId = "three_cap_" + Date.now() + "_" + idx;
+            return new Promise(function (resolve) {
+              var done = false;
+              function onMsg(ev) {
+                if (!ev || !ev.data) return;
+                if (ev.data.type !== "voitta_three_capture_response") return;
+                if (ev.data.requestId !== requestId) return;
+                if (done) return;
+                done = true;
+                window.removeEventListener("message", onMsg);
+                if (ev.data.ok && ev.data.dataUrl) {
+                  var rect = iframe.getBoundingClientRect();
+                  resolve({
+                    dataUrl: ev.data.dataUrl,
+                    x: rect.x + (window.scrollX || 0),
+                    y: rect.y + (window.scrollY || 0),
+                    w: rect.width, h: rect.height,
+                  });
+                } else {
+                  resolve(null);
+                }
+              }
+              window.addEventListener("message", onMsg);
+              try {
+                iframe.contentWindow.postMessage(
+                  { type: "voitta_three_capture", requestId: requestId }, "*"
+                );
+              } catch (_) {}
+              setTimeout(function () {
+                if (done) return;
+                done = true;
+                window.removeEventListener("message", onMsg);
+                resolve(null);
+              }, 600);
+            });
+          });
+          return Promise.all(pending).then(function (results) {
+            return results.filter(function (r) { return r !== null; });
+          });
+        }
+
+        try {
+          Promise.all([
+            html2canvas(docEl, {
+              allowTaint: true, useCORS: true, foreignObjectRendering: false,
+              scale: scale, width: fullW, height: fullH,
+              windowWidth: fullW, windowHeight: fullH,
+              backgroundColor: _bgColor,
+              logging: false,
+            }),
+            captureNestedScenes(),
+          ]).then(function (arr) {
+            var canvas = arr[0];
+            var sceneSnaps = arr[1];
+
+            // Trim trailing background-colored rows at the bottom of
+            // the canvas. Stretch-fill reports get force-expanded to a
+            // generous canvas (the parent over-allocates so content has
+            // room to lay out), so the tail ends up filled with the
+            // page's background color. We DON'T assume white — dark
+            // themes paint the bottom black, light themes white.
+            //
+            // Algorithm:
+            //   1. Sample the bottom-right corner — that's almost
+            //      certainly background (the report's title and KPIs
+            //      sit at the top-left).
+            //   2. Scan rows from bottom up, sampling every 8th column.
+            //      A row "has content" if ANY sampled pixel differs
+            //      from the corner reference by > BG_DELTA in any
+            //      channel. 18 is robust to anti-aliasing on solid
+            //      backgrounds without false-firing on subtle gradients.
+            //   3. The last content row defines the crop; we keep a
+            //      40-px margin below it so the bottom edge breathes.
+            //
+            // Tainted-canvas / OOM during getImageData → return as-is.
+            function trimBottomWhitespace(c) {
+              var tw = c.width, th = c.height;
+              if (th < 200) return c;
+              var ctxT = c.getContext("2d");
+              var data;
+              try { data = ctxT.getImageData(0, 0, tw, th).data; }
+              catch (e) {
+                console.warn("[screenshot] trim: getImageData failed (tainted canvas?)", e);
+                return c;
+              }
+              // Sample the background from MULTIPLE corners — if the
+              // bottom-right corner happens to be content (e.g. a
+              // top-aligned diagram is so narrow it doesn't reach the
+              // right edge, but the trim probe sees something else),
+              // we use the most common corner color. All 4 corners
+              // agreeing strongly implies "this is the background".
+              function rgb(idx) { return [data[idx], data[idx+1], data[idx+2]]; }
+              var corners = [
+                rgb(0),                                    // top-left
+                rgb((tw - 1) * 4),                         // top-right
+                rgb(((th - 1) * tw) * 4),                  // bottom-left
+                rgb(((th - 1) * tw + (tw - 1)) * 4),       // bottom-right
+              ];
+              // Take median of corners — robust to one corner being
+              // non-background.
+              corners.sort(function(a, b) {
+                return (a[0] + a[1] + a[2]) - (b[0] + b[1] + b[2]);
+              });
+              var ref = corners[1]; // second-smallest = stable middle
+              var refR = ref[0], refG = ref[1], refB = ref[2];
+
+              var BG_DELTA = 18;
+              function differs(idx) {
+                return (
+                  Math.abs(data[idx]     - refR) > BG_DELTA ||
+                  Math.abs(data[idx + 1] - refG) > BG_DELTA ||
+                  Math.abs(data[idx + 2] - refB) > BG_DELTA
+                );
+              }
+              var step = 8;
+              var lastContent = -1;
+              for (var y = th - 1; y >= 0; y--) {
+                var hit = false;
+                for (var x = 0; x < tw; x += step) {
+                  if (differs((y * tw + x) * 4)) { hit = true; break; }
+                }
+                if (hit) { lastContent = y; break; }
+              }
+              var newH = (lastContent >= 0 ? lastContent + 40 : th);
+              if (newH >= th) {
+                console.info("[screenshot] trim: no background tail found",
+                  { th: th, ref: ref, lastContent: lastContent });
+                return c;
+              }
+              console.info("[screenshot] trim:", th, "->", newH,
+                "(saved", th - newH, "px)", { ref: ref });
+              var trimmed = document.createElement("canvas");
+              trimmed.width = tw;
+              trimmed.height = newH;
+              trimmed.getContext("2d").drawImage(c, 0, 0);
+              return trimmed;
+            }
+
+            function emit() {
+              var finalCanvas = canvas;
+              try { finalCanvas = trimBottomWhitespace(canvas); }
+              catch (_) { finalCanvas = canvas; }
+              var dataUrl;
+              try { dataUrl = finalCanvas.toDataURL(format, quality); }
+              catch (err) {
+                sreply({ ok: false, message: "canvas_tainted: " + (err && err.message) });
+                return;
+              }
+              sreply({
+                ok: true, dataUrl: dataUrl,
+                width: finalCanvas.width, height: finalCanvas.height,
+                full_width: fullW, full_height: fullH,
+                scale: scale, format: format,
+                nested_scenes_captured: sceneSnaps.length,
+                doc_dims: dims,
+                trimmed_from_h: canvas.height,
+              });
+            }
+
+            if (!sceneSnaps.length) { emit(); return; }
+            // Composite-then-emit: chain image loads.
+            var pending = sceneSnaps.map(function (snap) {
+              return new Promise(function (res) {
+                var img = new Image();
+                img.onload = function () {
+                  try {
+                    canvas.getContext("2d").drawImage(img,
+                      snap.x * scale, snap.y * scale,
+                      snap.w * scale, snap.h * scale);
+                  } catch (_) {}
+                  res();
+                };
+                img.onerror = function () { res(); };
+                img.src = snap.dataUrl;
+              });
+            });
+            Promise.all(pending).then(emit);
+          }).catch(function (err) {
+            sreply({ ok: false, message: String((err && err.message) || err) });
+          });
+        } catch (err) {
+          sreply({ ok: false, message: String((err && err.message) || err) });
+        }
+      });
+      return;
+    }
+  });
+
+  // Fire "ready" once Bokeh's document is fully built. Bokeh emits a
+  // ``document_ready`` event on ``Bokeh.documents`` per-doc; we poll
+  // a few times because the global is defined progressively.
+  function pollReady() {
+    var docs = (window.Bokeh && window.Bokeh.documents) || [];
+    if (docs.length > 0 && docs.every(function (d) { return d.is_idle; })) {
+      emitReady();
+      return;
+    }
+    setTimeout(pollReady, 200);
+  }
+  // Also fire on plain ``load`` so a Panel page with no Bokeh doc
+  // (pure pn.pane.HTML / Markdown) still signals ready.
+  window.addEventListener("load", function () {
+    setTimeout(function () {
+      var docs = (window.Bokeh && window.Bokeh.documents) || [];
+      if (docs.length === 0) emitReady();
+    }, 100);
+    pollReady();
+  });
+})();
+"""
+
+
+@app.get("/api/_panel_shim.js")
+async def panel_shim_js() -> "Response":
+    from fastapi.responses import Response
+
+    return Response(content=_PANEL_SHIM_JS, media_type="application/javascript")
+
+
+def _shim_js_for_html_report() -> str:
+    """Expose the shim JS body so the HTML-report renderer can inline it
+    into its base template. The HTML-report iframe is same-origin (it
+    loads from our backend), but inlining avoids an extra GET — and it
+    means the same string is the source of truth for both paths."""
+    return _PANEL_SHIM_JS
+
+
+def _serve_node_module(rel_path: str, package_label: str) -> FileResponse:
+    """Serve a screenshot JS library.
+
+    Resolution order:
+      1. resources/vendor_js/<filename>  — present in the frozen .app
+         (staged by build_app.sh from frontend/node_modules/).
+      2. frontend/node_modules/<rel_path> — dev checkout fallback.
     """
-    from app.tools.providers import plugins_for_host
+    from fastapi import HTTPException
 
-    matches = plugins_for_host(host)
-    return matches[0] if matches else None
+    filename = rel_path.split("/")[-1]
 
+    # 1. Bundle resources (frozen .app)
+    try:
+        import voitta_chainlit
+        bundle = Path(voitta_chainlit.__file__).resolve().parent / "resources" / "vendor_js" / filename
+        if bundle.is_file():
+            return FileResponse(
+                bundle, media_type="application/javascript",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+    except ImportError:
+        pass
 
-@app.get("/api/plugin")
-async def plugin_for_host(host: str) -> JSONResponse:
-    plugin = _plugin_for_host(host)
-    if plugin is None:
-        raise HTTPException(status_code=404, detail="No plugin matched this host")
-    manifest = plugin["manifest"]
-    name = plugin["name"]
-    agent_name = manifest.get("agent_name") or name.title()
-    theme_path = Path(plugin["path"]) / "theme.css"
-    result: dict = {"name": name, "agent_name": agent_name}
-    if theme_path.exists():
-        result["theme_url"] = f"/api/plugin/{name}/theme.css"
-    raw_layout = manifest.get("default_layout", "")
-    if raw_layout in ("chat-left", "chat-right"):
-        result["default_layout"] = raw_layout
-    if manifest.get("hide_brand") is True:
-        result["hide_brand"] = True
-    return JSONResponse(result)
-
-
-@app.get("/api/plugin/{name}/theme.css")
-async def plugin_theme_css(name: str) -> FileResponse:
-    from app.tools.providers import LOADED_PLUGINS
-
-    for plugin in LOADED_PLUGINS:
-        if plugin["name"] == name:
-            path = Path(plugin["path"]) / "theme.css"
-            if path.exists():
-                return FileResponse(
-                    path, media_type="text/css",
-                    headers={"Cache-Control": "public, max-age=3600"},
-                )
-            break
-    # Fall back to the core default theme
-    default = PROJECT_ROOT / "frontend" / "src" / "theme.css"
-    if not default.exists():
-        raise HTTPException(status_code=404, detail="Default theme not found")
-    return FileResponse(
-        default, media_type="text/css",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
-
-
-@app.get("/api/_html2canvas.js")
-async def html2canvas_js() -> FileResponse:
-    """Serve the html2canvas library into the Panel iframe.
-
-    Loaded by ``panel_app.py`` via the same ``js_files`` mechanism used
-    for ``_panel_shim.js`` — the shim then calls ``html2canvas(...)`` to
-    rasterise the report on demand. The file lives in
-    ``frontend/node_modules/`` (installed via ``npm install``); we serve
-    it directly so we don't have to vendor a 200 KB blob in git.
-    """
-    path = (
-        PROJECT_ROOT
-        / "frontend" / "node_modules" / "html2canvas" / "dist" / "html2canvas.min.js"
-    )
+    # 2. Dev: frontend/node_modules/
+    path = Path(__file__).resolve().parents[2] / "frontend" / "node_modules"
+    for part in rel_path.split("/"):
+        path = path / part
     if not path.exists():
         raise HTTPException(
             status_code=503,
             detail=(
-                "html2canvas not installed; run `npm install` in frontend/. "
-                f"Expected {path}"
+                f"{package_label} not installed; run `npm install` in "
+                f"frontend/. Expected {path}"
             ),
         )
     return FileResponse(
@@ -356,1860 +1166,141 @@ async def html2canvas_js() -> FileResponse:
     )
 
 
-@app.get("/api/_panel_shim.js")
-async def panel_shim_js():
-    """Shim injected into the editable Panel iframe.
+@app.get("/api/_html2canvas.js")
+async def html2canvas_js():
+    """Serve the html2canvas library into the Panel iframe.
 
-    Loaded via Panel's ``js_files`` mechanism (see ``panel_app.py``). Runs
-    in the iframe before EditableTemplate's inline grid-setup script.
-
-    Four responsibilities:
-
-    1. **postMessage bridge** — parent (our ReportPane on the host site)
-       posts ``{voittaAction: 'undo' | 'reset'}`` when the user clicks the
-       toolbar buttons in our outer dark header; this script clicks the
-       (hidden) Panel toolbar buttons by id.
-    2. **Render-error pump** — capture ``window.error``,
-       ``unhandledrejection``, and Bokeh's ``console.error("Error
-       rendering Bokeh items")`` pattern, plus a ``ready`` signal once
-       Bokeh's document is fully built. Each event is posted up to the
-       parent ChatPane, which forwards it to
-       ``/api/report-render-events`` so the awaiting ``show_holoviz_report``
-       call (and the persisted log) get to see it.
-    3. **Workaround for upstream Panel bug** — EditableTemplate's
-       ``dragEnd`` / ``move`` handlers do ``undo_stack.pop().action``
-       without guarding for ``undefined``. Muuri fires ``move`` outside
-       drag flows (during initial sort, on subsequent edits etc.), so the
-       stack is empty and a ``TypeError: reading 'action'`` floods the
-       console. We intercept the ``window.muuriGrid`` assignment and wrap
-       the emitter to swallow only this specific TypeError. Won't survive
-       a Panel upgrade that fixes the bug — at which point the regex
-       won't match and the wrapper simply re-throws like normal.
-    4. **Edit-control polish** (only when ``editable=true``) — bump
-       drag/delete/resize handle opacity so they're visible without
-       hover, beef up the resize corner so it survives painting on top
-       of a Bokeh canvas, and add a click-to-select outline ring on
-       cards (``Esc`` to clear). Selection is purely visual; no event
-       leaves the iframe.
+    Loaded by ``panel_app.py`` via the ``js_files`` mechanism. The
+    shim calls ``window.html2canvas(...)`` for the canonical capture
+    path. ~200 KB.
     """
-
-    from fastapi.responses import Response
-
-    js = """(function(){
-  // ============================================================
-  // TEMPORARY: ResizeObserver loop-break diagnostic
-  // ============================================================
-  // Goal: when the browser dispatches a "ResizeObserver loop completed
-  // with undelivered notifications" synthetic error event (stack=null,
-  // because the browser generated it, not a JS throw), figure out
-  // WHICH ResizeObserver — Panel's? Bokeh's? Tabulator's? Ours? — was
-  // active so we can tell benign-recurring from pathological-runaway
-  // without filtering blindly.
-  //
-  // How: monkey-patch ResizeObserver before Panel/Bokeh load (js_files
-  // inject into <head>, this shim runs first). Wrap construction to
-  // capture creator stack; wrap .observe(target) to record target
-  // info; wrap the callback to count fires + timestamp. Expose state
-  // on window.__voittaRO so the window.error hook below can attach a
-  // diagnostic payload to the next "loop completed" event we emit.
-  //
-  // **TEMPORARY** — remove this whole block once we've collected
-  // enough real-world traces to either:
-  //   (a) confirm benign + filter by stable signature, or
-  //   (b) identify pathological cases worth fixing upstream.
-  //
-  // Removal checklist:
-  //   - Delete this <TEMPORARY> block
-  //   - Delete the _attachResizeDiagnostic helper below
-  //   - Stop reading window.__voittaRO inside _emitError
-  // ============================================================
-  (function instrumentResizeObserver(){
-    if (!window.ResizeObserver) return;
-    var orig = window.ResizeObserver;
-    var observers = []; var nextId = 0;
-    function Wrapped(cb){
-      var id = ++nextId;
-      var ctorStack = ''; try { ctorStack = (new Error()).stack || ''; } catch(_){}
-      var rec = {
-        id: id, ctor_stack: ctorStack.slice(0, 1600),
-        targets: [], fire_count: 0, last_fire_ts: 0,
-        recent_fires: [],   // ring buffer of last 32 fire timestamps
-      };
-      observers.push(rec);
-      var wrappedCb = function(entries, observer){
-        rec.fire_count++;
-        var now = (performance && performance.now) ? performance.now() : Date.now();
-        rec.last_fire_ts = now;
-        rec.recent_fires.push(now);
-        if (rec.recent_fires.length > 32) rec.recent_fires.shift();
-        return cb.call(this, entries, observer);
-      };
-      var inst = new orig(wrappedCb);
-      // Wrap .observe to capture targets. Keep a hard cap so a
-      // long-running session doesn't grow rec.targets without bound.
-      var origObs = inst.observe.bind(inst);
-      inst.observe = function(target, options){
-        try {
-          if (rec.targets.length < 16) {
-            var r = (target && target.getBoundingClientRect) ? target.getBoundingClientRect() : {};
-            rec.targets.push({
-              tag: (target && target.tagName) || '?',
-              id:  (target && target.id) || '',
-              cls: ((target && target.className) || '').toString().slice(0, 120),
-              w: Math.round(r.width || 0), h: Math.round(r.height || 0),
-            });
-          }
-        } catch(_){}
-        return origObs(target, options);
-      };
-      return inst;
-    }
-    Wrapped.prototype = orig.prototype;
-    try { window.ResizeObserver = Wrapped; } catch(_){}
-    window.__voittaRO = {observers: observers, started_at: Date.now()};
-  })();
-
-  // Build a compact diagnostic snapshot for the next "ResizeObserver
-  // loop" error. Picks observers whose `last_fire_ts` is within
-  // ``windowMs`` of "now"; that's the set the browser was busy
-  // notifying when it gave up. **TEMPORARY** — see top of shim.
-  function _attachResizeDiagnostic(windowMs) {
-    try {
-      var state = window.__voittaRO; if (!state) return null;
-      var now = (performance && performance.now) ? performance.now() : Date.now();
-      var cutoff = now - (windowMs || 200);
-      var hot = state.observers
-        .filter(function(o){ return o.last_fire_ts >= cutoff; })
-        .map(function(o){
-          // Count fires within the last 200ms (loop-break signal: many fires fast).
-          var fast = 0;
-          for (var i = 0; i < o.recent_fires.length; i++) {
-            if (o.recent_fires[i] >= cutoff) fast++;
-          }
-          return {
-            id: o.id, fire_count: o.fire_count,
-            fires_in_last_200ms: fast,
-            last_fire_age_ms: Math.round(now - o.last_fire_ts),
-            targets: o.targets,
-            // Keep the ctor stack short; one frame is usually enough.
-            ctor_stack_head: o.ctor_stack.split('\\n').slice(0, 6).join('\\n'),
-          };
-        });
-      return {
-        total_observers: state.observers.length,
-        hot_observers: hot,
-        elapsed_since_load_ms: Date.now() - state.started_at,
-      };
-    } catch (e) { return {error: String((e && e.message) || e)}; }
-  }
-
-  // ---- 1. parent → iframe action bridge (undo/reset/screenshot) -----------
-  window.addEventListener('message', function(e){
-    // Errors forwarded from a NESTED srcdoc iframe (e.g. ctx.three_scene's
-    // sandboxed viewer). e.source is the child iframe's window, not
-    // window.parent — so the parent-only filter below would drop them.
-    // Promote into the standard render-error stream so
-    // get_report_render_errors picks them up.
-    if (e.data && e.data.type === 'voitta_nested_error' && e.source !== window.parent) {
-      _emitError({
-        message: e.data.message,
-        stack: e.data.stack,
-        source: 'nested:' + (e.data.source || 'unknown'),
-        url: e.data.url,
-        line: e.data.line,
-        col: e.data.col
-      });
-      return;
-    }
-    if (e.source !== window.parent) return;
-    var a = e.data && e.data.voittaAction;
-    if (a === 'measure') {
-      // Cheap probe: parent has just resized us; settle briefly so
-      // Panel/Bokeh's resize callbacks fire, then report scrollHeight.
-      // Used by the parent's screenshot path to discriminate natural
-      // vs stretch-fill layouts before deciding capture height.
-      var mrid = e.data.requestId;
-      var mSettleMs = +e.data.settle_ms || 400;
-      setTimeout(function(){
-        requestAnimationFrame(function(){
-          requestAnimationFrame(function(){
-            var docElM = document.documentElement;
-            try {
-              window.parent.postMessage({
-                type: 'voitta_report_event',
-                kind: 'measure_response',
-                requestId: mrid,
-                scrollH: docElM.scrollHeight,
-                clientH: docElM.clientHeight,
-                bodyScrollH: (document.body && document.body.scrollHeight) || 0,
-                innerH: window.innerHeight,
-              }, '*');
-            } catch (_) { /* parent gone */ }
-          });
-        });
-      }, mSettleMs);
-      return;
-    }
-    if (a === 'screenshot') {
-      // html2canvas is loaded as a sibling js_files entry; if it's not
-      // ready yet we fail fast so the LLM gets a real error instead of
-      // a silent hang. Capture the entire documentElement (scrollWidth
-      // x scrollHeight) regardless of viewport size, then ship a webp
-      // data URL back to the parent. Parent handles cropping.
-      var rid = e.data.requestId;
-      var scale = +e.data.scale || 1;
-      var quality = +e.data.quality || 0.85;
-      var format = e.data.format === 'png' ? 'image/png' : 'image/webp';
-      // Async-paint settle delay. _emitReady fires once Bokeh has
-      // documents[0].roots().length > 0, but matplotlib PNG panes
-      // (Blob → <img>), Tabulator (dynamic JS+CSS), and Card content
-      // expansion all complete AFTER that. Without this wait, the
-      // screenshot captures empty Card headers. 600ms is enough for
-      // every report we've seen; allow override via msg.settle_ms.
-      var settleMs = (e.data && +e.data.settle_ms) || 600;
-      function reply(payload) {
-        try { window.parent.postMessage(Object.assign(
-          {type: 'voitta_report_event', kind: 'screenshot_response', requestId: rid},
-          payload
-        ), '*'); } catch (e2) { /* parent gone */ }
-      }
-      if (typeof html2canvas !== 'function') {
-        reply({ok: false, message: 'html2canvas not loaded'});
-        return;
-      }
-      // Wait for the settle window, then for two animation frames to
-      // ensure the browser has actually painted after any layout
-      // changes induced by async widget hydration.
-      function _afterSettle(cb) {
-        setTimeout(function(){
-          requestAnimationFrame(function(){
-            requestAnimationFrame(cb);
-          });
-        }, settleMs);
-      }
-      _afterSettle(function(){
-      var docEl = document.documentElement;
-      var fullW = Math.max(docEl.scrollWidth, docEl.clientWidth);
-      var fullH = Math.max(docEl.scrollHeight, docEl.clientHeight);
-      // Debug telemetry: dimensions used for html2canvas vs. what the
-      // viewport actually shows. If the captured screenshot is
-      // visible-only, fullW/H ≈ innerW/H (or some inner scrollable
-      // container is masking content); if it's full-doc, fullH should
-      // be ≥ innerH and equal to scrollH. Echoed back to the parent
-      // primitive in the response payload so the backend logs it too
-      // — search voitta.log for "screenshot_dims".
-      var bodyScrollH = (document.body && document.body.scrollHeight) || 0;
-      var dims = {
-        scrollW: docEl.scrollWidth, scrollH: docEl.scrollHeight,
-        clientW: docEl.clientWidth, clientH: docEl.clientHeight,
-        innerW: window.innerWidth, innerH: window.innerHeight,
-        bodyScrollH: bodyScrollH,
-        chosenW: fullW, chosenH: fullH,
-      };
-      try { console.log('[voitta-screenshot] doc_dims', dims); } catch (_) {}
-
-      // Stage 4.3 — collect pixel data from any nested three_scene
-      // iframes via postMessage (their canvas is cross-origin to us,
-      // so html2canvas alone sees a blank rectangle). Each iframe
-      // responds with a PNG dataUrl from canvas.toDataURL(). We
-      // composite them into the html2canvas output AFTER rasterisation.
-      // Find iframes anywhere in the report's DOM tree, including
-      // those mounted inside Bokeh's per-component shadow roots
-      // (pn.pane.HTML wraps content in a MarkupView shadow root, and
-      // ctx.three_scene's iframe lives inside it). A shallow
-      // document.querySelectorAll('iframe') misses them entirely,
-      // which is why nested_scenes_captured kept reporting 0.
-      function _deepFindIframes(root, acc){
-        if (!root) return;
-        try {
-          var nodeIframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
-          for (var i = 0; i < nodeIframes.length; i++) acc.push(nodeIframes[i]);
-          var all = root.querySelectorAll ? root.querySelectorAll('*') : [];
-          for (var j = 0; j < all.length; j++) {
-            var el = all[j];
-            if (el.shadowRoot) _deepFindIframes(el.shadowRoot, acc);
-          }
-        } catch (_) {}
-      }
-      function captureNestedScenes(){
-        var iframes = [];
-        _deepFindIframes(document, iframes);
-        if (!iframes.length) return Promise.resolve([]);
-        var pending = iframes.map(function(iframe, idx){
-          var requestId = 'three_cap_' + Date.now() + '_' + idx;
-          return new Promise(function(resolve){
-            var done = false;
-            function onMsg(ev){
-              if (!ev || !ev.data) return;
-              if (ev.data.type !== 'voitta_three_capture_response') return;
-              if (ev.data.requestId !== requestId) return;
-              if (done) return;
-              done = true;
-              window.removeEventListener('message', onMsg);
-              if (ev.data.ok && ev.data.dataUrl) {
-                var rect = iframe.getBoundingClientRect();
-                resolve({
-                  dataUrl: ev.data.dataUrl,
-                  x: rect.x + (window.scrollX || 0),
-                  y: rect.y + (window.scrollY || 0),
-                  w: rect.width, h: rect.height
-                });
-              } else {
-                resolve(null);
-              }
-            }
-            window.addEventListener('message', onMsg);
-            try {
-              iframe.contentWindow.postMessage(
-                {type: 'voitta_three_capture', requestId: requestId}, '*'
-              );
-            } catch (_) {}
-            // Bounded wait — non-three iframes don't respond, so we
-            // can't block on them.
-            setTimeout(function(){
-              if (done) return;
-              done = true;
-              window.removeEventListener('message', onMsg);
-              resolve(null);
-            }, 600);
-          });
-        });
-        return Promise.all(pending).then(function(results){
-          return results.filter(function(r){ return r !== null; });
-        });
-      }
-
-      try {
-        Promise.all([
-          html2canvas(docEl, {
-            allowTaint: true, useCORS: true, foreignObjectRendering: false,
-            scale: scale, width: fullW, height: fullH,
-            windowWidth: fullW, windowHeight: fullH,
-            backgroundColor: '#ffffff',
-            logging: false,
-          }),
-          captureNestedScenes()
-        ]).then(function(arr){
-          var canvas = arr[0];
-          var sceneSnaps = arr[1];
-
-          // Composite each three_scene snapshot over the html2canvas
-          // output (which has a blank rectangle where the iframe was).
-          if (sceneSnaps.length) {
-            var ctx2d = canvas.getContext('2d');
-            sceneSnaps.forEach(function(snap){
-              var img = new Image();
-              // Synchronous load via createImageBitmap would be cleaner
-              // but isn't universally supported; chain awaits below.
-              return new Promise(function(res){
-                img.onload = function(){
-                  try {
-                    ctx2d.drawImage(img,
-                      snap.x * scale, snap.y * scale,
-                      snap.w * scale, snap.h * scale);
-                  } catch (_) {}
-                  res();
-                };
-                img.onerror = function(){ res(); };
-                img.src = snap.dataUrl;
-              });
-            });
-            // Wait one tick for image loads — for synchronously-decoded
-            // data URLs, this is enough; for larger PNGs we'd need a real
-            // await chain. Keep it simple: bounded retry.
-          }
-
-          // Trim trailing whitespace at the bottom of the canvas.
-          // Saves a lot of pixels when responsive Panel layouts get
-          // their iframe force-expanded but don't actually fill it
-          // (fixed-size scenes leave the background color showing
-          // below the last component). Scan rows from the bottom up,
-          // sampling every 8th column to keep it cheap, looking for
-          // the first row containing a non-background pixel.
-          // Threshold: any channel < 250 counts as "content"
-          // (matches the #ffffff backgroundColor we passed to
-          // html2canvas).
-          function trimBottomWhitespace(c){
-            var tw = c.width, th = c.height;
-            if (th < 200) return c;  // too short to be worth trimming
-            var ctxT = c.getContext('2d');
-            var data;
-            try {
-              data = ctxT.getImageData(0, 0, tw, th).data;
-            } catch (_) {
-              return c;  // canvas tainted or OOM — skip the trim
-            }
-            var step = 8;  // sample every 8 columns
-            var lastContent = -1;
-            for (var y = th - 1; y >= 0; y--) {
-              var hit = false;
-              for (var x = 0; x < tw; x += step) {
-                var idx = (y * tw + x) * 4;
-                if (
-                  data[idx]     < 250 ||
-                  data[idx + 1] < 250 ||
-                  data[idx + 2] < 250
-                ) { hit = true; break; }
-              }
-              if (hit) { lastContent = y; break; }
-            }
-            // Keep a 40px padding below the last content pixel for
-            // visual breathing room.
-            var newH = (lastContent >= 0 ? lastContent + 40 : th);
-            if (newH >= th) return c;
-            var trimmed = document.createElement('canvas');
-            trimmed.width = tw;
-            trimmed.height = newH;
-            trimmed.getContext('2d').drawImage(c, 0, 0);
-            return trimmed;
-          }
-
-          function emit(){
-            var finalCanvas = canvas;
-            try { finalCanvas = trimBottomWhitespace(canvas); }
-            catch (_) { finalCanvas = canvas; }
-            var dataUrl;
-            try { dataUrl = finalCanvas.toDataURL(format, quality); }
-            catch (err) {
-              reply({ok: false, message: 'canvas_tainted: ' + (err && err.message)});
-              return;
-            }
-            reply({
-              ok: true, dataUrl: dataUrl,
-              width: finalCanvas.width, height: finalCanvas.height,
-              full_width: fullW, full_height: fullH,
-              scale: scale, format: format,
-              nested_scenes_captured: sceneSnaps.length,
-              doc_dims: dims,
-              trimmed_from_h: canvas.height,
-            });
-          }
-
-          if (!sceneSnaps.length) { emit(); return; }
-          // Composite-then-emit: chain image loads as a proper promise.
-          var pending = sceneSnaps.map(function(snap){
-            return new Promise(function(res){
-              var img = new Image();
-              img.onload = function(){
-                try {
-                  canvas.getContext('2d').drawImage(img,
-                    snap.x * scale, snap.y * scale,
-                    snap.w * scale, snap.h * scale);
-                } catch (_) {}
-                res();
-              };
-              img.onerror = function(){ res(); };
-              img.src = snap.dataUrl;
-            });
-          });
-          Promise.all(pending).then(emit);
-        }).catch(function(err){
-          reply({ok: false, message: String((err && err.message) || err)});
-        });
-      } catch (err) {
-        reply({ok: false, message: String((err && err.message) || err)});
-      }
-      });  // end _afterSettle
-      return;
-    }
-    if (a === 'getEdits') {
-      // Read current layout state out of the live Muuri grid + Bokeh
-      // document, augmented with selection from our shim. The frontend
-      // primitive ``get_report_edits`` is the only caller; it classifies
-      // the response into no_active_report / active_no_edits / active.
-      var rid = e.data.requestId;
-      function replyEdits(payload) {
-        try { window.parent.postMessage(Object.assign(
-          {type: 'voitta_report_event', kind: 'edits_response', requestId: rid},
-          payload
-        ), '*'); } catch (e2) { /* parent gone */ }
-      }
-      try {
-        var grid = window.muuriGrid;
-        if (!grid) { replyEdits({ok: false, message: 'grid not ready'}); return; }
-        var bk = window.Bokeh;
-        var doc = (bk && bk.documents && bk.documents[0]) || null;
-        var items = grid.getItems();
-        var elements = items.map(function(item, idx){
-          var el = item.getElement();
-          var dataId = el.getAttribute('data-id');
-          // Inline width is set by resize_item to ``calc( N% - 30px)``;
-          // empty string means default (full row, 100%).
-          var widthPct = 100;
-          if (el.style.width) {
-            var m = /\(\s*([\d.]+)%/.exec(el.style.width);
-            if (m) widthPct = parseFloat(m[1]);
-          }
-          // Inline height is set by resize_item to ``Npx``; empty means
-          // Bokeh-natural / stretch_both — represent as null so the LLM
-          // can distinguish "user picked a height" from "default".
-          var heightPx = null;
-          if (el.style.height) {
-            var hm = /^([\d.]+)px$/.exec(el.style.height);
-            if (hm) heightPx = parseFloat(hm[1]);
-          }
-          // Resolve the Bokeh root by data-id — that's the model id the
-          // template wrote into the DOM. ``model.name`` flows from the
-          // Python ``name=`` argument, which is the identifier the LLM
-          // can match against the script's source.
-          var name = null, title = null;
-          if (doc) {
-            try {
-              var model = doc.get_model_by_id(dataId);
-              if (model) {
-                name = model.name || null;
-                if (model.title && typeof model.title.text === 'string') {
-                  title = model.title.text || null;
-                }
-              }
-            } catch (mErr) { /* model lookup is best-effort */ }
-          }
-          return {
-            index: idx,
-            id: dataId,
-            name: name,
-            title: title,
-            width_pct: widthPct,
-            height_px: heightPx,
-            visible: item.isVisible(),
-            selected: dataId === voittaSelectedId
-          };
-        });
-        // Order-change detection vs the order we captured the first time
-        // muuriGrid was assigned (see section 3 below). The LLM treats
-        // any True here as "the user reordered cards" without having to
-        // diff itself.
-        var orderChanged = false;
-        var initial = window.voittaInitialOrder;
-        if (initial && initial.length === items.length) {
-          for (var i = 0; i < items.length; i++) {
-            if (items[i].getElement().getAttribute('data-id') !== initial[i]) {
-              orderChanged = true;
-              break;
-            }
-          }
-        }
-        replyEdits({
-          ok: true,
-          elements: elements,
-          selected_id: voittaSelectedId,
-          order_changed: orderChanged
-        });
-      } catch (err) {
-        replyEdits({ok: false, message: String((err && err.message) || err)});
-      }
-      return;
-    }
-    var el = null;
-    if (a === 'undo') el = document.getElementById('grid-undo');
-    else if (a === 'reset') el = document.getElementById('grid-reset');
-    if (el) el.click();
-  });
-
-  // voittaSelectedId / voittaInitialOrder are referenced by the getEdits
-  // handler above. Initial declaration here means they exist even when
-  // editable=false (handler returns ok:false in that case anyway).
-  var voittaSelectedId = null;
-
-  // ---- 2. iframe → parent render-error pump ------------------------------
-  // Read render_id + report_id from the URL the parent built. If absent,
-  // we still capture errors but they won't correlate with an awaiting
-  // show_holoviz_report — they'll just land in the persisted log (if
-  // report_id is known) or be dropped (if not).
-  function _qs(name){
-    try {
-      var v = new URLSearchParams(window.location.search).get(name);
-      return v == null ? '' : v;
-    } catch (e) { return ''; }
-  }
-  var voittaRenderId = _qs('render_id');
-  var voittaReportId = _qs('id');
-  var voittaSentReady = false;
-  var voittaErrorCount = 0;
-  var VOITTA_MAX_ERRORS = 10;
-
-  function _post(payload){
-    try {
-      window.parent.postMessage(
-        Object.assign({type: 'voitta_report_event'}, payload), '*'
-      );
-    } catch (e) { /* parent gone — give up */ }
-  }
-  function _emitError(payload){
-    if (!voittaRenderId && !voittaReportId) return;
-    var msg = String(payload.message || '').slice(0, 4000);
-    var stack = payload.stack ? String(payload.stack).slice(0, 6000) : null;
-    // ResizeObserver loop-break filter. The browser dispatches this
-    // advisory ErrorEvent (stack=null, synthetic) when a single tick of
-    // ResizeObserver callbacks doesn't converge within one frame — see
-    // https://www.w3.org/TR/resize-observer/#the-loop-break-event. The
-    // spec defines it as non-fatal: the browser redelivers on the next
-    // frame and rendering proceeds. We trust the event only when the
-    // diagnostic snapshot confirms (a) no observer is firing rapidly
-    // (would indicate a real runaway loop) AND (b) every firing
-    // observer was constructed by Bokeh/Panel internals (no user code
-    // involved). Anything else still surfaces.
-    if (/^ResizeObserver loop/i.test(msg)) {
-      var diag = null;
-      try { diag = _attachResizeDiagnostic(200); } catch(_){}
-      // Per-observer verdict + summary; lets us see what made the
-      // filter fail even when the full diagnostic gets truncated.
-      //
-      // Benign-rate threshold:
-      //   - Real W3C "loop break event": dozens of fires in tens of ms
-      //     from a single runaway observer.
-      //   - This app's initial layout cascade: typically 1–5 fires per
-      //     observer, spread across many observers. Empirically seen:
-      //     Bokeh layout (4), Tabulator (3), Panel root (2), unknowns
-      //     (1–2). All within one animation frame.
-      //
-      // So: declare benign when EVERY hot observer fires <= 10 times
-      // in 200ms. Anything firing more than 10× is genuinely worth
-      // looking at. Source/ctor-stack is no longer part of the check —
-      // it was too fragile (Tabulator's stack lacks bokeh/panel names
-      // even though it's framework code).
-      var verdicts = [];
-      var benign = false;
-      var BENIGN_FIRE_MAX = 10;
-      if (diag && Array.isArray(diag.hot_observers) && diag.hot_observers.length > 0) {
-        verdicts = diag.hot_observers.map(function(o){
-          var stack_head = String(o.ctor_stack_head || '');
-          return {
-            id: o.id, fires: o.fires_in_last_200ms,
-            slow: (o.fires_in_last_200ms <= BENIGN_FIRE_MAX),
-            bokeh: stack_head.indexOf('bokeh.min.js') !== -1,
-            panel: stack_head.indexOf('panel.min.js') !== -1,
-            target_tag: (o.targets && o.targets[0] && o.targets[0].tag) || null,
-            target_cls: (o.targets && o.targets[0] && o.targets[0].cls) || '',
-          };
-        });
-        benign = verdicts.every(function(v){ return v.slow; });
-      }
-      if (benign) {
-        // Drop the event entirely. Don't count against VOITTA_MAX_ERRORS.
-        // **TEMPORARY** — when the diagnostic block at the top of the
-        // shim is removed, replace this with a plain substring filter.
-        return;
-      }
-      // Non-benign: attach a compact verdict summary (fits in 4KB even
-      // with many observers) plus the full diag.
-      try {
-        var summary = '\\n\\n[voitta-RO-verdicts] ' + JSON.stringify({
-          benign: benign,
-          total_hot: verdicts.length,
-          verdicts: verdicts,
-        });
-        var full = diag ? ('\\n[voitta-RO-diagnostic] ' + JSON.stringify(diag)) : '';
-        msg = (msg + summary + full).slice(0, 4000);
-      } catch(_){}
-    }
-    if (++voittaErrorCount > VOITTA_MAX_ERRORS) return;
-    _post({
-      kind: 'error',
-      render_id: voittaRenderId,
-      report_id: voittaReportId,
-      message: msg,
-      stack: stack,
-      source: payload.source || 'unknown',
-      url: payload.url || null,
-      line: payload.line || null,
-      col: payload.col || null
-    });
-  }
-  var _readyGateTries = 0;
-  function _emitReady(){
-    if (voittaSentReady) return;
-    // Stage 4.2: gate ready on html2canvas being available. With html2canvas
-    // now inlined into this shim (Stage 4.1) it should always be defined by
-    // the time we reach this branch — but check anyway so the screenshot
-    // contract holds: "status: ready" guarantees screenshotability.
-    if (typeof html2canvas !== 'function' && _readyGateTries < 20) {
-      // Give the inlined bundle one more tick to evaluate. 20 * 50ms = 1s
-      // cap — if html2canvas STILL isn't there after that, something
-      // upstream is broken; surface the report anyway rather than time out.
-      _readyGateTries++;
-      setTimeout(_emitReady, 50);
-      return;
-    }
-    voittaSentReady = true;
-    if (!voittaRenderId && !voittaReportId) return;
-    _post({
-      kind: 'ready',
-      render_id: voittaRenderId,
-      report_id: voittaReportId,
-      source: 'ready'
-    });
-    // Right after ready, post a one-shot structural inventory so the
-    // LLM's verify_report tool can check "did I get the panes I asked
-    // for?" without screenshotting. Best-effort — failures here must
-    // not block ready signalling.
-    try {
-      var bk = window.Bokeh;
-      if (bk && bk.documents && bk.documents.length > 0) {
-        var doc = bk.documents[0];
-        var roots = (doc.roots && doc.roots()) || [];
-        var inv = [];
-        for (var i = 0; i < roots.length; i++) {
-          var root = roots[i];
-          var type = (root && root.type) || (root && root.constructor && root.constructor.name) || '?';
-          var bbox = null;
-          try {
-            // Find the rendered view's element by Bokeh's view registry.
-            var view = doc.get_model_by_id && root.id ? null : null;
-            // Fallback: scan DOM for any rendered Bokeh root container.
-            var el = document.querySelector('[data-root-id="' + (root.id || '') + '"]') ||
-                     document.querySelector('.bk-root');
-            if (el && el.getBoundingClientRect) {
-              var r = el.getBoundingClientRect();
-              bbox = {x: Math.round(r.x), y: Math.round(r.y),
-                      w: Math.round(r.width), h: Math.round(r.height)};
-            }
-          } catch (bbe) { /* bbox is optional */ }
-          inv.push({root_index: i, type: String(type), bbox: bbox});
-        }
-        _post({
-          kind: 'inventory',
-          render_id: voittaRenderId,
-          report_id: voittaReportId,
-          source: 'inventory',
-          inventory: inv,
-          viewport: {
-            w: Math.round(window.innerWidth || 0),
-            h: Math.round(window.innerHeight || 0)
-          }
-        });
-      }
-    } catch (e) { /* inventory is best-effort */ }
-  }
-
-  window.addEventListener('error', function(e){
-    var err = e && e.error;
-    _emitError({
-      message: (err && err.message) || e.message || String(e),
-      stack: err && err.stack,
-      source: 'window.error',
-      url: e.filename, line: e.lineno, col: e.colno
-    });
-  }, true);
-  window.addEventListener('unhandledrejection', function(e){
-    var r = e && e.reason;
-    _emitError({
-      message: (r && (r.message || String(r))) || 'unhandled rejection',
-      stack: r && r.stack,
-      source: 'unhandledrejection'
-    });
-  });
-  // Hook console.error so we catch Bokeh's swallowed "Error rendering
-  // Bokeh items" — it logs the inner error there but does not re-throw,
-  // so window.error never sees it. Bokeh typically calls
-  // ``console.error("Error rendering Bokeh items:", innerErr)`` — we
-  // concat both the label AND the inner err.message so the LLM sees
-  // the actionable string ("SlickGrid Cannot find stylesheet") even
-  // though it's in arg[1].
-  var _origConsoleError = console.error.bind(console);
-  function _stringifyArg(a){
-    if (a == null) return '';
-    if (typeof a === 'string') return a;
-    if (a.message) {
-      // Error / DOMException / Bokeh error.
-      var name = a.name || (a.constructor && a.constructor.name) || 'Error';
-      return name + ': ' + a.message;
-    }
-    try { return String(a); } catch (e) { return '[unstringifiable]'; }
-  }
-  console.error = function(){
-    try {
-      var parts = [];
-      var stack = null;
-      for (var i = 0; i < arguments.length; i++) {
-        var a = arguments[i];
-        parts.push(_stringifyArg(a));
-        if (!stack && a && a.stack) stack = a.stack;
-      }
-      var msg = parts.join(' ');
-      // Be permissive — better one false positive than missing a real one.
-      // Match anything Bokeh-shaped, anything table/SlickGrid-shaped, or
-      // any plain "Error rendering …" Panel emits.
-      if (/error rendering|slickgrid|bokeh|tabulator|panel\.error/i.test(msg)) {
-        _emitError({message: msg.slice(0, 4000), stack: stack, source: 'bokeh'});
-      }
-    } catch (e) { /* don't break console.error */ }
-    return _origConsoleError.apply(null, arguments);
-  };
-
-  // Detect "document ready" by polling for Bokeh.documents being non-empty
-  // and all roots layout-stable. Simpler than wiring into Bokeh's events
-  // (the API surface differs across versions). Fires at most once.
-  var _readyTries = 0;
-  var _readyTimer = setInterval(function(){
-    _readyTries++;
-    var bk = window.Bokeh;
-    if (bk && bk.documents && bk.documents.length > 0) {
-      var doc = bk.documents[0];
-      // Heuristic: at least one root has been added AND the embedder
-      // rendered the corresponding view. We don't have a robust API,
-      // so consider "1+ root" ready after a short stabilisation delay.
-      var roots = (doc.roots && doc.roots()) || [];
-      if (roots.length > 0) {
-        clearInterval(_readyTimer);
-        setTimeout(_emitReady, 250);
-        return;
-      }
-    }
-    if (_readyTries > 80) { // 80 * 100ms = 8s; long-tail fallback
-      clearInterval(_readyTimer);
-      _emitReady(); // tell parent we never saw a doc — close the await
-    }
-  }, 100);
-
-  // ---- 3. EditableTemplate / Muuri empty-stack bug suppression -----------
-  // Intercept window.muuriGrid assignment to wrap the emitter before any
-  // drag events fire. The buggy handlers throw inside grid._emitter.emit;
-  // try/catching there is enough to neutralise the noise.
-  var actualGrid;
-  Object.defineProperty(window, 'muuriGrid', {
-    configurable: true,
-    get: function(){ return actualGrid; },
-    set: function(g){
-      actualGrid = g;
-      // Snapshot initial card order so getEdits can flag user-reorder.
-      // Captured once, on first assignment — subsequent reassignments
-      // (rare; only on full template re-render) keep the original.
-      if (g && !window.voittaInitialOrder) {
-        try {
-          window.voittaInitialOrder = g.getItems().map(function(it){
-            return it.getElement().getAttribute('data-id');
-          });
-        } catch (oErr) { /* best-effort */ }
-      }
-      if (g && g._emitter && !g._emitter._voittaPatched) {
-        var origEmit = g._emitter.emit;
-        g._emitter.emit = function(){
-          try {
-            return origEmit.apply(this, arguments);
-          } catch (err) {
-            if (err instanceof TypeError &&
-                /reading [\"']?action[\"']?/.test(String(err && err.message))) {
-              return; // known Panel EditableTemplate empty-undo-stack bug
-            }
-            throw err;
-          }
-        };
-        g._emitter._voittaPatched = true;
-      }
-    }
-  });
-
-  // ---- 4. Visual edit controls: handle visibility + element selection ----
-  // Only meaningful when ?editable=true. Three things:
-  //   a) Bump default handle opacity (0.2 → 0.6) so drag/delete/resize are
-  //      discoverable without hovering.
-  //   b) Beef up the resize handle (size + opaque background) so it stays
-  //      legible when a Bokeh canvas paints under it.
-  //   c) Click-to-select: card click adds .voitta-selected (outline ring),
-  //      click outside any card or Esc clears it. Selection is purely
-  //      visual — no postMessage out, no preventDefault, so Bokeh tools
-  //      keep working.
-  if (_qs('editable') === 'true') {
-    var voittaStyle = document.createElement('style');
-    voittaStyle.textContent = `
-      /* Disable per-card scroll. Panel's scroll() in editable.html flips
-         overflow-y:auto when content > card; that turns the card into a
-         scroll container, which makes absolutely-positioned handles
-         anchor to scrollHeight (the bottom of the *content*) instead of
-         the visible card edge. Result: handles drift mid-card as you
-         scroll. With our server-side stretch_both promotion, content
-         already adapts to card size, so scroll is rarely needed — and
-         when content really doesn't fit, the user can resize the card. */
-      .muuri-grid-item { overflow: hidden !important; }
-      .muuri-handle { opacity: 0.6 !important; }
-      .muuri-handle:hover, .muuri-handle:focus { opacity: 1 !important; }
-      .muuri-handle.resize {
-        width: 22px !important; height: 22px !important;
-        background-size: 18px !important;
-        background-color: rgba(255,255,255,0.78);
-        border-radius: 4px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
-      }
-      .muuri-handle.resize:hover { cursor: nwse-resize; }
-      .muuri-grid-item.voitta-selected {
-        outline: 2px solid #3b82f6;
-        outline-offset: -2px;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(voittaStyle);
-
-    // voittaSelectedId is hoisted to outer scope (declared up by the
-    // postMessage listener) so getEdits can read it.
-    function voittaSetSelected(id){
-      if (voittaSelectedId === id) return;
-      if (voittaSelectedId) {
-        var prev = document.querySelector(
-          '.muuri-grid-item[data-id="' + CSS.escape(voittaSelectedId) + '"]'
-        );
-        if (prev) prev.classList.remove('voitta-selected');
-      }
-      voittaSelectedId = id;
-      if (id) {
-        var next = document.querySelector(
-          '.muuri-grid-item[data-id="' + CSS.escape(id) + '"]'
-        );
-        if (next) next.classList.add('voitta-selected');
-      }
-    }
-
-    // Capture phase so we see clicks even if Bokeh stops propagation.
-    // Never preventDefault — plot interactivity must keep working.
-    document.addEventListener('click', function(e){
-      var node = e.target;
-      while (node && node.nodeType === 1) {
-        if (node.classList && node.classList.contains('muuri-grid-item')) {
-          var id = node.getAttribute('data-id');
-          if (id) voittaSetSelected(id);
-          return;
-        }
-        node = node.parentNode;
-      }
-      voittaSetSelected(null);
-    }, true);
-
-    document.addEventListener('keydown', function(e){
-      if (e.key === 'Escape') voittaSetSelected(null);
-    });
-  }
-})();"""
-    # Inline html2canvas directly into the shim response so screenshot
-    # support is available from the same async load tick — no separate
-    # js_files entry, no race where _emitReady() fires before
-    # html2canvas finishes loading (Stage 4.1).
-    h2c_path = (
-        PROJECT_ROOT
-        / "frontend" / "node_modules" / "html2canvas" / "dist" / "html2canvas.min.js"
-    )
-    h2c_src = ""
-    if h2c_path.exists():
-        try:
-            h2c_src = h2c_path.read_text(encoding="utf-8")
-        except OSError:
-            h2c_src = ""
-    combined = h2c_src + "\n;" + js if h2c_src else js
-    return Response(
-        content=combined,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-store"},
+    return _serve_node_module(
+        "html2canvas/dist/html2canvas.min.js", "html2canvas",
     )
 
 
-@app.get("/api/settings")
-async def get_user_settings() -> dict:
-    """Return the persisted user settings blob (LLM keys, provider, model,
-    caps). Empty object if the user hasn't saved anything yet.
+@app.get("/api/_html_to_image.js")
+async def html_to_image_js():
+    """Serve the html-to-image library into the Panel iframe.
 
-    Bound to localhost-only via uvicorn host=127.0.0.1; no auth beyond
-    that. The blob is intentionally opaque to the server — see
-    app/services/user_settings.py.
+    Alternate capture technique that uses SVG foreignObject snapshots
+    instead of canvas re-paint. Often handles CSS features
+    (mix-blend, complex shadows) better than html2canvas; sometimes
+    worse for foreign-fonts. Exposes ``window.htmlToImage``. ~36 KB.
     """
-    from app import config as _cfg
-    from app.services import user_settings
-
-    try:
-        blob = user_settings.read()
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"settings file is corrupt: {exc}",
-        )
-    # Inject server-side defaults for fields the blob doesn't yet have.
-    # The frontend's coerceSettings re-validates on read; we only provide
-    # the value so it beats DEFAULT_SETTINGS ("chat-right") when the
-    # operator has overridden VOITTA_DEFAULT_LAYOUT.
-    if "layout" not in blob:
-        blob = {**blob, "layout": _cfg.DEFAULT_LAYOUT}
-    return blob
-
-
-@app.put("/api/settings")
-async def put_user_settings(request: Request) -> dict:
-    """Merge a partial settings update into the persisted blob.
-
-    Top-level keys present in the request body OVERWRITE the
-    corresponding stored keys; keys absent from the request are
-    PRESERVED. This matters because backend-only state lives in the
-    same file (e.g. ``googleOAuth.clientId`` / ``…clientSecret`` /
-    ``…tokens``); a wholesale replacement from the frontend would
-    blow them away every time the user clicks Save.
-
-    Nested merge is intentionally NOT done — keep the contract
-    simple. The frontend is expected to send a flat payload of only
-    the fields it owns (provider, *ApiKey, *Model, maxTokens,
-    maxToolIterations).
-    """
-    from app.services import user_settings
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="body must be an object")
-    existing = user_settings.read()
-    existing.update(body)
-    user_settings.write(existing)
-    return {"ok": True}
-
-
-@app.get("/api/google/status")
-async def google_oauth_status() -> dict:
-    """Connection status for the Settings UI."""
-    from app.services import google_oauth
-
-    return google_oauth.status()
-
-
-@app.get("/api/google/oauth/start")
-async def google_oauth_start():
-    """Begin the OAuth flow — redirect the browser to Google's consent
-    screen. The widget opens this URL in a popup; on completion the
-    callback below closes the popup."""
-    from fastapi.responses import RedirectResponse, HTMLResponse
-    from app.services import google_oauth
-
-    if not google_oauth.is_configured():
-        return HTMLResponse(
-            "<h2>Google OAuth not configured</h2>"
-            "<p>Add <code>googleOAuth.clientId</code> and "
-            "<code>googleOAuth.clientSecret</code> to "
-            "<code>~/.config/voitta-bookmarklet/settings.json</code>, "
-            "then retry.</p>",
-            status_code=400,
-        )
-    url, _state = google_oauth.build_authorize_url()
-    return RedirectResponse(url, status_code=302)
-
-
-@app.get("/api/google/oauth/callback")
-async def google_oauth_callback(
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-):
-    """Receive the authorization code from Google, exchange it for
-    tokens, persist to settings.json, and self-close the popup so
-    the user lands back in the chat pane."""
-    from fastapi.responses import HTMLResponse
-    from app.services import google_oauth
-
-    def _close_html(title: str, body: str, ok: bool) -> HTMLResponse:
-        # Tiny self-closing page. The chat pane is polling
-        # /api/google/status after it opened the popup, so it picks
-        # up the new state on its own — no need to postMessage back.
-        color = "#0a8a3a" if ok else "#b00020"
-        return HTMLResponse(
-            f"""<!doctype html><html><head><title>{title}</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>
-  body {{ font: 14px/1.5 -apple-system, system-ui, sans-serif;
-         color: #222; background: #fafafa;
-         display: flex; align-items: center; justify-content: center;
-         min-height: 100vh; margin: 0; }}
-  .card {{ background: white; padding: 28px 32px; border-radius: 8px;
-         box-shadow: 0 1px 3px rgba(0,0,0,0.08); max-width: 420px;
-         text-align: center; }}
-  h2 {{ margin: 0 0 8px; font-size: 18px; color: {color}; }}
-</style></head>
-<body><div class="card"><h2>{title}</h2><p>{body}</p>
-<p style="color:#888;font-size:12px;">You can close this window.</p>
-</div>
-<script>setTimeout(function(){{ try {{ window.close(); }} catch(e){{}} }}, 1500);</script>
-</body></html>"""
-        )
-
-    if error:
-        return _close_html("Connection cancelled", f"Google returned: <code>{error}</code>.", ok=False)
-    if not code or not state:
-        return _close_html("Bad callback", "Missing code/state.", ok=False)
-    if not google_oauth.consume_state(state):
-        return _close_html(
-            "Invalid state",
-            "The state token didn't match a pending OAuth request.",
-            ok=False,
-        )
-    try:
-        tok = await google_oauth.exchange_code(code)
-    except Exception as exc:
-        return _close_html("Token exchange failed", str(exc)[:300], ok=False)
-
-    email = tok.get("account_email") or "(unknown)"
-    return _close_html(
-        "Google Drive connected",
-        f"Signed in as <b>{email}</b>. The Drive tools are now available to the LLM.",
-        ok=True,
+    return _serve_node_module(
+        "html-to-image/dist/html-to-image.js", "html-to-image",
     )
 
 
-@app.get("/api/google/config")
-async def google_oauth_get_config() -> dict:
-    """Return the saved OAuth client_id/client_secret for the Settings
-    UI to prefill its Configure form. Localhost-only, same trust
-    boundary as GET /api/settings."""
-    from app.services import google_oauth
-
-    return google_oauth.get_client_config()
 
 
-@app.post("/api/google/configure")
-async def google_oauth_set_config(request: Request) -> dict:
-    """Persist a new clientId/clientSecret pair. If the user was
-    connected, the existing tokens get revoked + cleared (they belong
-    to the old client). Body: ``{"clientId": "...", "clientSecret": "..."}``."""
-    from app.services import google_oauth
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="body must be an object")
-    cid = body.get("clientId")
-    csec = body.get("clientSecret")
-    try:
-        await google_oauth.set_client_credentials(cid or "", csec or "")
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"ok": True, **google_oauth.status()}
-
-
-@app.post("/api/drive-pickup/cancel")
-async def drive_pickup_cancel(request: Request) -> dict:
-    """User clicked × on the Drive download modal — flip the cancel flag.
-
-    The pickup tool's watcher polls ``drive_pickup.is_cancelled(modal_id)``
-    on every tick and returns immediately when this is set. Body shape:
-    ``{"modal_id": "<16-hex>"}``. Idempotent — repeated POSTs for the
-    same id return ``{ok: true, was_pending: false}``.
-    """
-    from app.services import drive_pickup
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    modal_id = (body or {}).get("modal_id")
-    if not isinstance(modal_id, str) or not modal_id:
-        raise HTTPException(status_code=400, detail="modal_id required")
-    flipped = drive_pickup.set_cancelled(modal_id)
-    return {"ok": True, "modal_id": modal_id, "was_pending": flipped}
-
-
-# ---- auth routes ----------------------------------------------------------
-
-
-@app.get("/api/auth/status")
-async def auth_status(request: Request) -> dict:
-    """Tell the bookmarklet whether it needs to show the login screen.
-
-    ``localhost_mode`` is True when the backend is running in
-    "skip auth" mode — frontend should mount the chat directly.
-    Otherwise ``authenticated`` reflects the cookie state.
-    """
-    from app import config as _cfg
-
-    cookie = request.cookies.get(_cfg.AUTH_COOKIE_NAME)
-    return {
-        "localhost_mode": _cfg.LOCALHOST_MODE,
-        "authenticated": (cookie is not None and cookie == _cfg.API_KEY),
-    }
-
-
-_screenshot_dims_log = logging.getLogger("app.screenshot_dims")
-
-
-@app.post("/api/log/screenshot_dims")
-async def log_screenshot_dims(payload: dict) -> dict:
-    """Sink for the FE screenshot primitive's doc-dim telemetry.
-
-    The iframe shim measures ``document.documentElement.scroll{W,H}`` /
-    ``client{W,H}`` / ``window.inner{W,H}`` and pipes them through the
-    screenshot response. The FE then POSTs them here so they land in
-    voitta.log next to chat-stream / cache_monitor lines for
-    diagnosing "screenshot is visible-only" reports. No auth — same
-    posture as the rest of the loopback-bound backend.
-    """
-    _screenshot_dims_log.info(
-        "screenshot.doc_dims %s",
-        json.dumps(payload, default=str)[:1024],
-    )
-    return {"ok": True}
-
-
-@app.post("/api/auth/login")
-async def auth_login(request: Request) -> JSONResponse:
-    """Validate an API key and set the session cookie.
-
-    Body: ``{"api_key": "..."}``. Wrong key → 401. Right key → 200 with
-    ``Set-Cookie`` header. Cookie is HttpOnly + SameSite=None so it
-    rides on cross-origin fetches and EventSource and iframe loads
-    from any host page the bookmarklet runs on.
-    """
-    from app import config as _cfg
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="body must be an object")
-    submitted = (body.get("api_key") or "").strip()
-    if not submitted:
-        raise HTTPException(status_code=400, detail="api_key required")
-
-    if submitted != _cfg.API_KEY:
-        return JSONResponse(
-            status_code=401,
-            content={"ok": False, "error": "invalid_api_key"},
-        )
-
-    response = JSONResponse({"ok": True, "authenticated": True})
-    # SameSite=None requires Secure (TLS). The .app and run.sh both
-    # serve HTTPS by default. ``--http`` mode is loopback-only so
-    # SameSite=Lax is fine there; we fall back when the request is
-    # http://. ``HttpOnly`` blocks document.cookie reads — the
-    # widget instead checks /api/auth/status for the auth bit.
-    is_https = request.url.scheme == "https"
-    response.set_cookie(
-        _cfg.AUTH_COOKIE_NAME,
-        _cfg.API_KEY,
-        httponly=True,
-        secure=is_https,
-        samesite="none" if is_https else "lax",
-        max_age=60 * 60 * 24 * 30,  # 30 days
-        path="/",
-    )
-    return response
-
-
-@app.post("/api/auth/logout")
-async def auth_logout() -> JSONResponse:
-    """Clear the session cookie. Idempotent; always returns 200."""
-    from app import config as _cfg
-
-    response = JSONResponse({"ok": True})
-    response.delete_cookie(_cfg.AUTH_COOKIE_NAME, path="/")
-    return response
-
-
-@app.post("/api/google/disconnect")
-async def google_oauth_disconnect() -> dict:
-    """Revoke + clear stored tokens. Drive tools become hidden from
-    the LLM again immediately."""
-    from app.services import google_oauth
-
-    await google_oauth.disconnect()
-    return {"ok": True, "connected": False}
-
-
-@app.post("/api/report-render-events")
-async def report_render_events(request: Request) -> dict:
-    """Receive a render-lifecycle event from a report iframe.
-
-    The shim in ``/api/_panel_shim.js`` postMessages ready/error events
-    up to the parent ChatPane, which forwards them here. ``record()``
-    persists to the per-script render log and signals any
-    ``show_holoviz_report`` await on this ``render_id``.
-
-    Body shape (all strings except ``line``/``col``)::
-
-        {
-          "render_id": "...",        # required
-          "report_id": "...",        # required (slug)
-          "kind": "ready" | "error", # required
-          "message": "...",          # error only
-          "stack": "...",            # error only
-          "source": "window.error" | "unhandledrejection" |
-                    "console.error" | "bokeh" | "ready",
-          "url": "...",              # script url where the error fired
-          "line": 123,
-          "col": 45
-        }
-    """
-    from app.services import render_events
-
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="body must be an object")
-
-    render_id = str(body.get("render_id") or "").strip()
-    report_id = str(body.get("report_id") or "").strip()
-    kind = str(body.get("kind") or "").strip()
-    if not render_id or not report_id or kind not in ("ready", "error", "inventory"):
-        raise HTTPException(
-            status_code=400,
-            detail="render_id, report_id, and kind in {ready, error, inventory} required",
-        )
-
-    # Inventory events: structural snapshot of rendered Bokeh roots.
-    # Latest-wins per report — overwrites inventory.json. Not part of
-    # the render_events ready/error stream; read by the verify_report
-    # tool.
-    if kind == "inventory":
-        from app.services import render_events as _re
-        inv = body.get("inventory")
-        viewport = body.get("viewport")
-        if not isinstance(inv, list):
-            inv = []
-        log_dir = _re.SCRIPTS_REPORTS / report_id
-        if log_dir.parent.exists():
-            log_dir.mkdir(parents=True, exist_ok=True)
-            (log_dir / "inventory.json").write_text(json.dumps({
-                "ts": time.time(),
-                "render_id": render_id,
-                "viewport": viewport if isinstance(viewport, dict) else None,
-                "roots": inv,
-            }))
-        return {"ok": True}
-
-    def _maybe_int(v: object) -> int | None:
-        try:
-            return int(v) if v is not None else None
-        except Exception:
-            return None
-
-    ev = render_events.record(
-        render_id=render_id,
-        report_id=report_id,
-        kind=kind,  # type: ignore[arg-type]
-        message=body.get("message") if isinstance(body.get("message"), str) else None,
-        stack=body.get("stack") if isinstance(body.get("stack"), str) else None,
-        source=body.get("source") if isinstance(body.get("source"), str) else None,
-        url=body.get("url") if isinstance(body.get("url"), str) else None,
-        line=_maybe_int(body.get("line")),
-        col=_maybe_int(body.get("col")),
-    )
-    return {"ok": True, "ts": ev.ts}
-
-
-@app.get("/widget.js")
-async def widget_js() -> FileResponse:
-    bundle = FRONTEND_DIST / "widget.js"
-    if not bundle.exists():
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "frontend bundle missing",
-                "hint": "build the frontend into frontend/dist/widget.js (see docs/02-frontend.md)",
-            },
-        )
-    return FileResponse(
-        bundle,
-        media_type="application/javascript",
-        headers={"Cache-Control": "no-store"},
-    )
-
-
-# ── Panel-served reports ────────────────────────────────────────────────────
-# Reports run as live Panel apps mounted at /panel/reports. Each browser
-# session opens a websocket back to this process; drag/resize on
-# EditableTemplate commits via the Bokeh comm round-trip (which static
-# .save() can't do). See app/services/panel_app.py for the factory.
-from app.services.panel_app import panel_factory  # noqa: E402
-from panel.io.fastapi import add_applications  # noqa: E402
-
-add_applications({"/panel/reports": panel_factory}, app=app)
-
-# Workaround for a bokeh_fastapi bug: WSHandler.send_message catches
-# WebSocketDisconnect but not the RuntimeError uvicorn raises when the
-# socket closes mid-push (e.g. iframe re-shown with a cache-bust URL).
-# See app/services/_bokeh_ws_patch.py.
-from app.services._bokeh_ws_patch import patch_send_message  # noqa: E402
-
-patch_send_message()
-
-
-@app.get("/api/artifacts")
-async def list_artifacts() -> dict:
-    """Return a tree of server-side artifacts for the in-pane file browser.
-
-    Walks the four buckets under ``python_storage/``:
-
-      * ``cache/`` — snapshot dirs from downloads + their files
-        (plus ``script_output/<run_id>/`` image runs).
-      * ``compute/`` — LLM-authored compute scripts (code.py +
-        meta.json) and their ``runs/<run_id>/`` outputs.
-      * ``reports/`` — HoloViz report scripts.
-      * ``flows/`` — flow report scripts.
-
-    Paths in the response are relative to PROJECT_ROOT so the browser
-    never sees absolute filesystem paths.
-    """
-
-    def _enrich_snapshot_dir(path: Path) -> dict | None:
-        """If this is a python_storage snapshot dir, return its
-        ``meta.json``-derived display fields. Otherwise None."""
-        if not path.name.startswith("snapshot_"):
-            return None
-        meta_path = path / "meta.json"
-        if not meta_path.exists():
-            return None
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            return None
-        if not isinstance(meta, dict):
-            return None
-        origin = meta.get("origin") or {}
-        # Best-known display name: stored_name (drive_file) →
-        # original_name → first file → handle.
-        display_name = (
-            meta.get("stored_name")
-            or meta.get("original_name")
-        )
-        if not display_name and isinstance(meta.get("files"), list) and meta["files"]:
-            display_name = meta["files"][0].get("name")
-        return {
-            "handle": meta.get("handle"),
-            "kind": meta.get("kind"),
-            "display_name": display_name,
-            "origin": {
-                "source": origin.get("source"),
-                "account": origin.get("account"),
-                "path": origin.get("path"),
-                "url": origin.get("url"),
-            } if origin else None,
-        }
-
-    def _node(path, root):
-        rel = str(path.relative_to(root))
-        try:
-            st = path.stat()
-            mtime = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
-        except OSError:
-            mtime = None
-        if path.is_dir():
-            children = []
-            try:
-                entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
-            except OSError:
-                entries = []
-            for child in entries:
-                if child.name.startswith("."):
-                    continue
-                children.append(_node(child, root))
-            size = sum(c.get("size") or 0 for c in children)
-            node: dict = {
-                "name": path.name,
-                "path": rel,
-                "kind": "dir",
-                "size": size,
-                "mtime": mtime,
-                "child_count": len(children),
-                "children": children,
-            }
-            snap = _enrich_snapshot_dir(path)
-            if snap:
-                node["snapshot"] = snap
-            return node
-        try:
-            size = path.stat().st_size
-        except OSError:
-            size = 0
-        return {
-            "name": path.name,
-            "path": rel,
-            "kind": "file",
-            "size": size,
-            "mtime": mtime,
-        }
-
-    roots: list[dict] = []
-    for sub in (
-        "python_storage/cache",
-        "python_storage/compute",
-        "python_storage/reports",
-        "python_storage/flows",
-    ):
-        p = PROJECT_ROOT / sub
-        if p.exists() and p.is_dir():
-            roots.append(_node(p, PROJECT_ROOT))
-        else:
-            roots.append(
-                {"name": sub.split("/")[-1], "path": sub, "kind": "dir",
-                 "size": 0, "mtime": None,
-                 "child_count": 0, "children": [], "missing": True}
-            )
-
-    return {"roots": roots, "total_size": sum(r.get("size") or 0 for r in roots)}
-
-
-# ---------------------------------------------------------------------------
-# Artifact mutation — delete / rename / run.
+# ─────────────────────────────────────────────────────────────────────
+# Screenshot stash — in-memory cache for screenshot bytes too large to
+# round-trip through the Chainlit socket.
 #
-# The in-pane Finder-style browser (ArtifactsView) writes through these
-# endpoints. Each one enforces a strict allow-list: only the four "unit"
-# shapes are mutable, and never the namespace roots above them. Mutating
-# a derived file (a meta.json, a single run output image) is impossible
-# by design — the unit is the snapshot dir, the slug dir, or the run
-# dir. This keeps the LLM's data model coherent with what the user can
-# do by hand: the same things `delete_python_storage(handle)` cleans up.
-# ---------------------------------------------------------------------------
+# When ``screenshot_report`` runs in multi-strategy/multi-technique
+# mode it produces 9+ PNGs (each 1-5 MB). Sending them all through
+# ``CopilotFunction.acall()`` exceeds socket.io's default frame size
+# and the response silently drops. So the FE POSTs each PNG here
+# directly (same-origin HTTP, no frame limit), and only sends the
+# resulting stash IDs through the slow path. The agent loop fetches
+# the bytes back via :func:`_screenshot_stash_get`, attaches them to
+# the Chainlit step as elements, then evicts.
+#
+# Memory bound: ``_STASH_MAX`` entries, FIFO eviction. Each entry
+# survives ``_STASH_TTL_S`` seconds — long enough for the agent loop
+# to consume but short enough that a stuck call doesn't leak.
+# ─────────────────────────────────────────────────────────────────────
+
+import time
+import uuid
+from collections import OrderedDict
+from threading import Lock
+
+_STASH_MAX = 64
+_STASH_TTL_S = 300
+
+_screenshot_stash: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+_screenshot_stash_lock = Lock()
 
 
-_ARTIFACT_SNAPSHOT_RE = re.compile(r"^python_storage/cache/snapshot_[A-Za-z0-9_-]+$")
-_ARTIFACT_SLUG_RE = re.compile(r"^python_storage/(compute|reports|flows)/[a-z0-9_-]{1,64}$")
-_ARTIFACT_RUN_RE = re.compile(
-    r"^python_storage/compute/[a-z0-9_-]{1,64}/runs/[A-Za-z0-9_-]{4,64}$"
-)
-_SLUG_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+def _screenshot_stash_evict_expired() -> None:
+    """Drop entries past TTL. Called opportunistically on each put/get."""
+    now = time.time()
+    with _screenshot_stash_lock:
+        stale = [k for k, v in _screenshot_stash.items()
+                 if now - v["created_at"] > _STASH_TTL_S]
+        for k in stale:
+            _screenshot_stash.pop(k, None)
 
 
-def _classify_artifact_path(rel: str) -> str | None:
-    """Return the unit kind for ``rel`` or ``None`` if it's not mutable.
+def _screenshot_stash_put(media_type: str, data_b64: str, meta: dict[str, Any]) -> str:
+    """Stash a base64 PNG/WebP. Returns a stash id the FE pipes through."""
+    _screenshot_stash_evict_expired()
+    sid = uuid.uuid4().hex
+    with _screenshot_stash_lock:
+        # FIFO cap
+        while len(_screenshot_stash) >= _STASH_MAX:
+            _screenshot_stash.popitem(last=False)
+        _screenshot_stash[sid] = {
+            "media_type": media_type,
+            "data": data_b64,
+            "meta": meta,
+            "created_at": time.time(),
+        }
+    return sid
 
-    Kinds:
-      * ``"snapshot"`` — a python_storage snapshot dir (handle is canonical;
-        rename adjusts ``meta.json::display_name``).
-      * ``"compute"`` / ``"reports"`` / ``"flows"`` — a script slug dir
-        (the dir name IS the slug; rename = real dir rename).
-      * ``"run"`` — a compute run dir under ``runs/<run_id>`` (canonical;
-        not renameable).
 
-    The check is path-shape only; existence is verified by the caller
-    after the regex matches.
+def _screenshot_stash_pop(sid: str) -> dict[str, Any] | None:
+    """Consume and remove a stashed image. Returns None if missing."""
+    with _screenshot_stash_lock:
+        return _screenshot_stash.pop(sid, None)
+
+
+@app.post("/api/screenshot-stash")
+async def screenshot_stash_put(request: Request) -> dict[str, Any]:
+    """Accept one screenshot PNG/WebP from the FE.
+
+    Body: ``{label, media_type, data, meta?}`` where ``data`` is a
+    base64-encoded image (NOT the full data URL — just the bytes).
+
+    Returns: ``{id}``. The FE includes these IDs in its tool result
+    via the ``_images_stash`` sentinel; the agent loop unpacks them
+    by calling :func:`_screenshot_stash_pop` for each.
+
+    Same-origin only (the bookmarklet's iframe is BE-served).
     """
-    if _ARTIFACT_SNAPSHOT_RE.match(rel):
-        return "snapshot"
-    if _ARTIFACT_RUN_RE.match(rel):
-        return "run"
-    m = _ARTIFACT_SLUG_RE.match(rel)
-    if m:
-        return m.group(1)  # "compute" | "reports" | "flows"
-    return None
-
-
-def _resolve_artifact_path(rel: str) -> tuple[Path, str]:
-    """Validate ``rel`` against the allow-list and resolve to an absolute
-    path under PROJECT_ROOT. Raises HTTPException on any rule violation.
-
-    Returns ``(absolute_path, unit_kind)``. The absolute path is guaranteed
-    to live under PROJECT_ROOT (no traversal escape).
-    """
-    if not rel or rel.startswith("/") or ".." in rel.split("/"):
-        raise HTTPException(status_code=400, detail="invalid path")
-    kind = _classify_artifact_path(rel)
-    if kind is None:
-        raise HTTPException(
-            status_code=400, detail="not_a_unit (path is a namespace or derived item)"
-        )
-    abs_path = (PROJECT_ROOT / rel).resolve()
-    root = PROJECT_ROOT.resolve()
-    if not (abs_path == root or str(abs_path).startswith(str(root) + "/")):
-        raise HTTPException(status_code=400, detail="path escapes project root")
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail="not found")
-    return abs_path, kind
-
-
-@app.delete("/api/artifacts/{rel_path:path}")
-async def delete_artifact(rel_path: str) -> dict:
-    """Remove one artifact unit. Allow-list enforced.
-
-    Snapshots route through ``python_storage.delete(handle)`` so handle-
-    aware bookkeeping fires (mirrors the LLM-callable
-    ``delete_python_storage`` tool). Slug + run units use ``shutil.rmtree``
-    after the allow-list check — there's no handle bookkeeping for those.
-    """
-    import shutil
-
-    abs_path, kind = _resolve_artifact_path(rel_path)
-
-    if kind == "snapshot":
-        # ``rel_path = python_storage/cache/snapshot_<handle>`` — recover the
-        # handle from meta.json (canonical) rather than parsing the dir
-        # name, in case anything ever drifts.
-        from app.services import python_storage
-
-        meta_path = abs_path / "meta.json"
-        handle: str | None = None
-        if meta_path.exists():
-            try:
-                handle = json.loads(meta_path.read_text()).get("handle")
-            except Exception:
-                handle = None
-        if not handle:
-            # Fall back to dir-name suffix; still validate against the
-            # canonical regex shape so a hand-mangled dir can't sneak in
-            # an unsafe handle string.
-            handle = abs_path.name.removeprefix("snapshot_")
-        if not python_storage.delete(handle):
-            # delete() returns False when the handle wasn't found, but
-            # the dir clearly exists — rmtree as fallback so the user
-            # isn't stuck staring at a zombie row.
-            shutil.rmtree(abs_path, ignore_errors=False)
-        return {"ok": True, "deleted": rel_path, "kind": kind}
-
-    # Plain script-tree directory: rmtree.
-    shutil.rmtree(abs_path, ignore_errors=False)
-    return {"ok": True, "deleted": rel_path, "kind": kind}
-
-
-@app.patch("/api/artifacts/{rel_path:path}")
-async def patch_artifact(rel_path: str, body: dict) -> dict:
-    """Rename one artifact unit. Allow-list enforced.
-
-    Body shape depends on the unit:
-
-      * snapshot: ``{"display_name": "..."}`` — edits ``meta.json``,
-        does NOT rename the dir (the handle is canonical and used by
-        the LLM and python_storage internals).
-      * compute / reports / flows slug: ``{"slug": "new-slug"}`` —
-        renames the dir on disk. New slug must match ``[a-z0-9_-]{1,64}``
-        and must not collide with an existing sibling.
-      * run: never renameable (canonical id).
-    """
-    abs_path, kind = _resolve_artifact_path(rel_path)
+    from fastapi import HTTPException
+    body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
-
-    if kind == "snapshot":
-        new_name = body.get("display_name")
-        if not isinstance(new_name, str):
-            raise HTTPException(
-                status_code=400, detail="display_name (string) required for snapshots"
-            )
-        new_name = new_name.strip()
-        if not new_name:
-            raise HTTPException(status_code=400, detail="display_name cannot be empty")
-        meta_path = abs_path / "meta.json"
-        if not meta_path.exists():
-            raise HTTPException(status_code=404, detail="meta.json missing for snapshot")
-        try:
-            meta = json.loads(meta_path.read_text())
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"meta.json unreadable: {exc}")
-        if not isinstance(meta, dict):
-            raise HTTPException(status_code=500, detail="meta.json malformed")
-        # ``display_name`` is computed from ``stored_name`` /
-        # ``original_name`` / ``files[0].name`` (see _enrich_snapshot_dir
-        # in /api/artifacts). Writing ``stored_name`` is the most
-        # specific override and what the browser then surfaces.
-        meta["stored_name"] = new_name
-        meta_path.write_text(json.dumps(meta, indent=2))
-        return {"ok": True, "path": rel_path, "display_name": new_name, "kind": kind}
-
-    if kind in ("compute", "reports", "flows"):
-        new_slug = body.get("slug")
-        if not isinstance(new_slug, str) or not _SLUG_RE.match(new_slug):
-            raise HTTPException(
-                status_code=400, detail="slug must match [a-z0-9_-]{1,64}"
-            )
-        new_path = abs_path.parent / new_slug
-        if new_path.exists():
-            raise HTTPException(status_code=409, detail=f"slug {new_slug!r} already exists")
-        abs_path.rename(new_path)
-        new_rel = f"python_storage/{kind}/{new_slug}"
-        return {"ok": True, "path": new_rel, "kind": kind}
-
-    raise HTTPException(status_code=400, detail=f"unit {kind!r} is not renameable")
-
-
-@app.get("/api/artifacts/{rel_path:path}/refs")
-async def artifact_refs(rel_path: str) -> dict:
-    """Return the canonical upstream-artefact refs the slug's last run
-    resolved through ``ctx.ensure_local``.
-
-    The report-pane title-click popover reads this to show the user
-    which data sources fed the report. The sidecar
-    (``last_refs.json``) is written by the script runner after every
-    run (success or failure) — see
-    ``services/scripts.py::_write_refs_sidecar``.
-
-    Returns ``{"refs": [...], "at": <iso>}`` on success. ``{"refs":
-    []}`` with no ``at`` when the slug exists but hasn't been run, or
-    the run didn't call ensure_local. 404 only when the slug itself
-    doesn't exist.
-    """
-    abs_path, kind = _resolve_artifact_path(rel_path)
-    if kind not in ("compute", "reports", "flows"):
+    media_type = body.get("media_type")
+    data = body.get("data")
+    if not isinstance(media_type, str) or not isinstance(data, str):
         raise HTTPException(
             status_code=400,
-            detail=f"unit {kind!r} doesn't have an associated refs sidecar",
+            detail="missing required string fields: media_type, data",
         )
-    sidecar = abs_path / "last_refs.json"
-    if not sidecar.exists():
-        return {"refs": [], "kind": kind, "path": rel_path}
-    try:
-        payload = json.loads(sidecar.read_text())
-    except Exception:
-        return {"refs": [], "kind": kind, "path": rel_path}
-    refs = payload.get("refs")
-    return {
-        "refs": refs if isinstance(refs, list) else [],
-        "at": payload.get("at"),
-        "kind": kind,
-        "path": rel_path,
-    }
+    meta = body.get("meta") if isinstance(body.get("meta"), dict) else {}
+    label = body.get("label")
+    if isinstance(label, str):
+        meta = {**meta, "label": label}
+    sid = _screenshot_stash_put(media_type, data, meta)
+    return {"ok": True, "id": sid}
 
 
-@app.post("/api/artifacts/{rel_path:path}/run")
-async def run_artifact(rel_path: str) -> dict:
-    """Re-execute a report slug and return what the frontend needs to
-    mount the iframe / flow pane.
-
-    Two flavours, distinguished by the slug's parent dir:
-
-      * ``python_storage/reports/<slug>`` — HoloViz Panel iframe. We
-        mint a ``render_id``, register an awaiter so render-time
-        errors are captured the same way ``show_holoviz_report`` does,
-        and return the iframe URL the frontend should hand to
-        ``show_report``.
-      * ``python_storage/flows/<slug>`` — server-side build of the
-        flow definition (same path ``show_flow_report`` uses),
-        returned in the response body. The frontend hands it to
-        ``show_flow_report``.
-
-    Compute slugs and run dirs are not runnable: those are LLM-only
-    flows that need a ToolCtx.
-    """
-    abs_path, kind = _resolve_artifact_path(rel_path)
-    if kind not in ("reports", "flows"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"unit {kind!r} is not runnable (only reports/ and flows/)",
-        )
-    code_path = abs_path / "code.py"
-    if not code_path.exists():
-        raise HTTPException(status_code=404, detail="code.py missing")
-    slug = abs_path.name
-    title = f"Report {slug}" if kind == "reports" else f"Flow {slug}"
-
-    from app.services import render_events
-
-    render_id = render_events.new_render_id()
-    render_events.begin_await(render_id, slug)
-
-    if kind == "reports":
-        from urllib.parse import quote
-
-        cache_t = int(time.time() * 1000)
-        path = (
-            f"/panel/reports?id={quote(slug, safe='')}"
-            f"&render_id={quote(render_id, safe='')}"
-            f"&_t={cache_t}"
-        )
-        return {
-            "ok": True,
-            "kind": "holoviz",
-            "report_id": slug,
-            "render_id": render_id,
-            "title": title,
-            "path": path,
-        }
-
-    # kind == "flows"
-    from app.services import flows
-    from app.services.scripts import ScriptError
-
-    try:
-        definition, _log_lines = flows.build_flow_definition(slug)
-    except ScriptError as exc:
-        render_events.end_await(render_id)
-        raise HTTPException(status_code=400, detail=f"build error: {exc}")
-    return {
-        "ok": True,
-        "kind": "flow",
-        "report_id": slug,
-        "render_id": render_id,
-        "title": title,
-        "definition": definition,
-    }
+from app.config import FRONTEND_DIST as _FE_DIST
 
 
-@app.get("/api/script-output/{slug}/{run_id}/{filename}")
-async def get_script_output(slug: str, run_id: str, filename: str) -> FileResponse:
-    """Serve files written by ``ctx.image()`` from a compute script run.
-    Files live under ``python_storage/compute/<slug>/runs/<run_id>/<file>``;
-    the slug+run_id+filename are tightly validated and the resolved
-    path must stay inside the compute root."""
-
-    if not re.match(r"^[a-z0-9_-]{1,64}$", slug):
-        raise HTTPException(status_code=400, detail="invalid slug")
-    if not re.match(r"^[a-f0-9]{6,32}$", run_id):
-        raise HTTPException(status_code=400, detail="invalid run_id")
-    if not re.match(r"^[a-zA-Z0-9._-]{1,64}$", filename):
-        raise HTTPException(status_code=400, detail="invalid filename")
-
-    from app.services.scripts import SCRIPTS_COMPUTE
-
-    candidate = (SCRIPTS_COMPUTE / slug / "runs" / run_id / filename).resolve()
-    root = SCRIPTS_COMPUTE.resolve()
-    if not str(candidate).startswith(str(root) + "/"):
-        raise HTTPException(status_code=400, detail="path escapes compute root")
-    if not candidate.exists() or not candidate.is_file():
-        raise HTTPException(status_code=404, detail="not found")
-
-    suffix = candidate.suffix.lower()
-    media = (
-        "image/png"
-        if suffix == ".png"
-        else "image/jpeg"
-        if suffix in (".jpg", ".jpeg")
-        else "image/svg+xml"
-        if suffix == ".svg"
-        else "application/octet-stream"
-    )
-    return FileResponse(candidate, media_type=media)
-
-
-@app.get("/api/python-storage/{handle}/{filename}")
-async def get_python_storage_file(handle: str, filename: str) -> FileResponse:
-    """Serve a single file out of a ``python_storage`` snapshot directory.
-
-    Used by tools that produce browser-displayable artefacts (e.g.
-    ``screenshot_report``) and want the chat pane to render them via a
-    plain ``<img src=…>`` rather than a ``data:`` URL — host pages
-    typically have a CSP that blocks ``data:`` in ``img-src``, so
-    backend HTTPS URLs are the only path that consistently renders.
-
-    Path: ``python_storage/cache/snapshot_<handle>/<filename>``. Both
-    segments are tightly validated and the resolved path must stay
-    inside the cache root.
-    """
-    # Handle shape per python_storage._new_handle: ``py_<8 hex>``. Allow
-    # a small range around that to stay forward-compatible if the
-    # handle generator changes.
-    if not re.match(r"^[A-Za-z0-9_-]{3,64}$", handle):
-        raise HTTPException(status_code=400, detail="invalid handle")
-    if not re.match(r"^[A-Za-z0-9._-]{1,200}$", filename):
-        raise HTTPException(status_code=400, detail="invalid filename")
-    if filename in {".", ".."}:
-        raise HTTPException(status_code=400, detail="invalid filename")
-
-    from app.services.python_storage import STORAGE_ROOT
-
-    candidate = (STORAGE_ROOT / f"snapshot_{handle}" / filename).resolve()
-    root = STORAGE_ROOT.resolve()
-    if not str(candidate).startswith(str(root) + "/"):
-        raise HTTPException(status_code=400, detail="path escapes python_storage root")
-    if not candidate.exists() or not candidate.is_file():
-        raise HTTPException(status_code=404, detail="not found")
-
-    suffix = candidate.suffix.lower()
-    media = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".svg": "image/svg+xml",
-        ".gif": "image/gif",
-        ".pdf": "application/pdf",
-        ".json": "application/json",
-        ".csv": "text/csv",
-        ".txt": "text/plain",
-    }.get(suffix, "application/octet-stream")
-    return FileResponse(candidate, media_type=media)
-
-
-if FRONTEND_DIST.exists():
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIST), name="static")
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_frontend(full_path: str) -> FileResponse:
+    if not _FE_DIST.is_dir():
+        return FileResponse(str(Path(__file__).with_name("missing_frontend.html")))
+    target = _FE_DIST / full_path
+    if full_path and target.is_file():
+        return FileResponse(str(target))
+    index = _FE_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(str(index))
+    return FileResponse(str(_FE_DIST / "widget.js"))

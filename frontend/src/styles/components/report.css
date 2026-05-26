@@ -1,0 +1,246 @@
+/* Report pane chrome.
+ *
+ * Lives on the opposite edge of the drawer. The Drawer's
+ * `data-layout` attribute on `.root` decides which side; default
+ * (`chat-right`) puts the report on the left.
+ */
+
+.report-pane {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(100vw - var(--voitta-pane-width));
+  max-width: 100vw;
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  border-right: 1px solid var(--voitta-border);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  z-index: 2147483646;
+}
+
+.root[data-layout="chat-left"] .report-pane {
+  left: auto;
+  right: 0;
+  border-right: 0;
+  border-left: 1px solid var(--voitta-border);
+}
+
+.root[data-open="false"] .report-pane {
+  width: 100vw;
+}
+
+/* ─── Tab bar ───────────────────────────────────────────────────────────── */
+
+.report-header {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 10px 0 0;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border-bottom: 1px solid var(--voitta-header-rule);
+  flex-shrink: 0;
+  min-height: 40px;
+}
+
+.report-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 1;
+  height: 100%;
+}
+
+.report-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 18px;
+  height: 40px;
+  font: 13px/1 var(--voitta-font-sans);
+  font-weight: 500;
+  color: var(--voitta-header-muted, rgba(255,255,255,0.55));
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms, border-color 120ms, background 120ms;
+  flex-shrink: 0;
+}
+.report-tab:hover:not(:disabled) {
+  color: var(--voitta-header-fg);
+  background: rgba(255,255,255,0.06);
+}
+.report-tab.active {
+  color: var(--voitta-header-fg);
+  border-bottom-color: var(--voitta-accent);
+  background: rgba(255,255,255,0.04);
+}
+.report-tab.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.tab-label {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--voitta-header-muted, rgba(255,255,255,0.45));
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 100ms, color 100ms;
+}
+.tab-close:hover {
+  background: rgba(255,255,255,0.15);
+  color: var(--voitta-header-fg);
+}
+
+/* ─── Tab panels ─────────────────────────────────────────────────────────── */
+
+.report-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.report-tab-panel {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.report-tab-panel.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Report tab content: centre the renderer */
+.report-tab-panel.active:has(> .report-renderer),
+.report-tab-panel.active:has(> iframe),
+.report-tab-panel.active:has(> .report-empty) {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.report-empty {
+  color: var(--voitta-text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 16px;
+}
+
+/* Loading overlay inside report tab panel */
+.report-loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+/* ─── Embedded workspace ─────────────────────────────────────────────────── */
+
+.ws-embedded {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ws-embedded-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--voitta-border);
+  flex-shrink: 0;
+  background: var(--voitta-surface);
+}
+
+.ws-embedded-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  max-height: none !important; /* override the floating panel's max-height */
+  padding: 4px 0;
+}
+
+/* ─── Misc ───────────────────────────────────────────────────────────────── */
+
+.report-loading {
+  color: var(--voitta-text-muted);
+  font-size: 13px;
+  padding: 12px;
+}
+
+.report-unsupported {
+  color: var(--voitta-error-fg);
+  background: var(--voitta-error-bg);
+  border: 1px solid var(--voitta-error-border);
+  padding: 12px;
+  border-radius: 6px;
+  font-family: var(--voitta-font-mono);
+  font-size: 12px;
+}
+
+.report-spinner {
+  animation: report-spin 1s linear infinite;
+}
+@keyframes report-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Collapsed handle */
+.report-handle {
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 60px;
+  background: var(--voitta-header-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-bg);
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--voitta-shadow-handle);
+  padding: 0;
+  z-index: 2147483646;
+}
+.root[data-layout="chat-left"] .report-handle {
+  left: auto;
+  right: 0;
+  border: 1px solid var(--voitta-header-bg);
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+}

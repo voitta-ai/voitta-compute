@@ -1,0 +1,5 @@
+{
+  "name": "default",
+  "host_patterns": ["*"],
+  "system_prompt": "system.md"
+}

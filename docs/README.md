@@ -1,31 +1,27 @@
-# Documentation
+# Voitta Bookmarklet (Chainlit) — Docs
 
-This folder is the agent's authoritative reference. The chat backend
-exposes it via the local hybrid (dense + BM25) RAG index built by
-`rag/build_rag.py`.
+Project-wide prose docs. Each markdown file gets chunked and indexed
+by `scripts/build_rag.py` into the `docs` RAG corpus alongside every
+plugin's `docs/` tree; the LLM queries them via `rag_query`.
 
-## Index
+| File | Topic |
+|---|---|
+| `00-overview.md` | What this project is and what it isn't |
+| `01-architecture.md` | Chainlit BE shape, agent loop, plugin layer |
+| `02-frontend.md` | Bookmarklet widget, Chainlit-client, shadow DOM |
+| `03-providers.md` | LLM provider abstraction (Anthropic / OpenAI / Gemini) |
+| `04-tool-catalog.md` | Server + browser tools shipped today |
+| `05-plugins.md` | Top-level `plugins/` tree, manifest fields, FE glob |
+| `06-reports.md` | User-authored Python scripts → mountable panes |
+| `07-panel-reports.md` | HoloViz / Panel reports, `ctx.three_scene`, theming, layout footguns |
 
-| File | What it covers |
-| ---- | -------------- |
-| [00-overview.md](00-overview.md) | What this project is, the four-layer architecture in one picture |
-| [01-architecture.md](01-architecture.md) | Backend layout, request flow, tool dispatch, host gating, cancellation |
-| [02-frontend.md](02-frontend.md) | Bookmarklet, Preact widget, Shadow DOM, browser primitives, theme |
-| [03-providers.md](03-providers.md) | LLM provider abstraction (Anthropic / OpenAI / Gemini) |
-| [04-tool-catalog.md](04-tool-catalog.md) | Tool catalogue + the "Adding a provider" recipe |
-| [05-bridge-protocol.md](05-bridge-protocol.md) | Wire protocol for `/tools/inbox` / `/tools/result` / `/tools/register` |
-| [07-report-scripts.md](07-report-scripts.md) | Authoring `compute` and `report` Python scripts |
-| [09-panel-threejs-reports.md](09-panel-threejs-reports.md) | Interactive 3D / WebGL reports — iframe layout, postMessage relay, geometry pipeline |
-| [10-a4db-files.md](10-a4db-files.md) | `.a4db` (ANSA / Animator crash database) — HDF5 schema, topology gotchas, rogue-element culling, animation pipeline |
-| [12-dat-files.md](12-dat-files.md) | SoundCheck `.dat` / `.wfm` / `.res` (Listen, Inc.) — version dispatch, title parsing, end-to-end curves pipeline |
-| [13-plugins.md](13-plugins.md) | Plugin authoring — manifest shape, autodiscovery, hybrid tools, distribution model |
-| [14-dmg-build-notes.md](14-dmg-build-notes.md) | Building the signed `.dmg` — known briefcase failure modes (empty DMG, App Management gate), manual repackage recipe |
+## Conventions
 
-Plugin-specific docs live next to each plugin under `plugins/<name>/docs/` and are auto-indexed into the same RAG corpus.
-
-## How the agent uses these files
-
-The chat backend ships two RAG tools — `rag_query` (hybrid search) and
-`rag_get_chunk_range` (stitch contiguous chunks of one file). To add
-new content, drop markdown in this folder and re-run
-`rag/build_rag.py`.
+- Files use a `NN-topic.md` numeric prefix so they sort predictably.
+- One H1 per file (the title). Use H2/H3 for sections — the RAG
+  chunker splits on those boundaries.
+- Keep paragraphs short. The chunker merges greedily up to ~800 chars
+  with ~150 char overlap; a 2000-char paragraph forces a split mid-text.
+- Don't write content you haven't verified against the code. Wrong docs
+  poison RAG more than missing docs do. Stub + TODO is the right move
+  when in doubt.

@@ -1,112 +1,57 @@
 [project]
-name = "voitta-bookmarklet-backend"
+name = "voitta-bookmarklet-chainlit-backend"
 version = "0.1.0"
-description = "FastAPI backend for the Voitta bookmarklet chat pane (Anthropic + OpenAI + Gemini)."
+description = "Bookmarklet backend — Chainlit-driven chat with agent-loop tool-use."
+license = {text = "GNU Affero General Public License v3 or later (AGPLv3+)"}
 requires-python = ">=3.11"
 dependencies = [
-  "fastapi>=0.115",
-  "uvicorn[standard]>=0.30",
-  "pydantic>=2.7",
-  "sse-starlette>=2.1",
-  # Outbound HTTP from backend tools (provider downloads, web_fetch).
-  "httpx>=0.28",
-  # LLM providers
-  "anthropic>=0.40",
+  "chainlit>=2.0.0",
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic>=2",
+  "anthropic>=0.39",
   "openai>=1.50",
   "google-genai>=0.3",
-  # RAG
+  "python-multipart",
+  "matplotlib>=3.8",
+  "plotly>=5.20",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  # RAG: hybrid dense (Chroma + sentence-transformers) + sparse (BM25).
   "chromadb>=0.5.20",
   "bm25s>=0.2.6",
   "PyStemmer>=2.2.0; platform_system != 'Windows'",
-  # HoloViz stack — Panel renders the in-pane report iframe; HoloViews
-  # and hvplot are the canonical chart libraries in user report scripts
-  # (Panel pulls Bokeh in transitively, but not HoloViews).
-  "panel>=1.5",
-  # Mounts Panel apps into FastAPI (websocket + Bokeh session machinery).
-  # Required for live drag/drop on EditableTemplate; static .save() can't
-  # commit drag positions without the Bokeh comm round-trip.
-  "bokeh-fastapi>=0.0.5",
-  "holoviews>=1.20",
-  "hvplot>=0.10",
-  # User compute / report scripts: ctx.image() accepts matplotlib Figures
-  # and PIL Images; both must be importable from the script body.
-  "matplotlib>=3.8",
-  "pillow>=10.0",
-  # df.to_markdown() (frequent in LLM-authored compute scripts) requires
-  # tabulate as an optional pandas extra. Without it, scripts crash with
-  # ModuleNotFoundError mid-run.
-  "tabulate>=0.9",
-  # web_fetch tool: PDF text extraction for arbitrary web PDFs. Pure
-  # Python, no system deps.
-  "pypdf>=5.0",
-  # MCP client. Plugins declare ``mcp_servers`` entries in manifest.json
-  # and the core opens a streamable-http connection to each, calls
-  # ``list_tools()`` once at startup, and synthesises a ToolSpec per
-  # remote tool. Same package the voitta-rag-enterprise server uses, so
-  # wire types stay in lockstep.
+  # MCP (plugin-declared remote tool servers).
   "fastmcp>=2.0",
-  # Scientific data formats — needed by user compute scripts that pull
-  # HDF5 / netCDF artefacts out of python_storage. All ship binary
-  # wheels for macOS/arm64 + Linux/x86_64 so no system-level HDF5 is
-  # required at install time (the bundled libhdf5 inside the wheels is
-  # used). hdf5plugin registers the compression filters (Blosc, LZ4,
-  # BZIP2, ZSTD, etc.) that h5py / tables / netCDF4 / h5netcdf / xarray
-  # need to read filter-using files; importing it once is enough.
-  "h5py>=3.10",
-  "tables>=3.9",
-  "netCDF4>=1.6",
-  "hdf5plugin>=4.3",
-  "h5netcdf>=1.3",
-  "xarray>=2024.1",
-  "scipy>=1.11",
+  # Google OAuth requests.
+  "httpx>=0.27",
+  # Menu-bar tray (macOS).
+  "rumps>=0.4; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+  # Pillow — used by the agent loop to downsize captured screenshots
+  # to webp before sending them to the LLM as inline images.
+  "Pillow>=10",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.0",
+  "pytest>=8",
   "pytest-asyncio>=0.23",
 ]
-# `pip install -e ".[desktop]"` enables the menu-bar / .app build flow.
-# rumps gives us NSStatusBar without writing PyObjC by hand; pyobjc-*
-# frameworks are pulled in transitively but listed explicitly so the
-# py2app collector sees them. py2app itself is the bundler.
 desktop = [
-  "rumps>=0.4.0",
-  "pyobjc-framework-Cocoa>=10.0",
-  # briefcase replaces py2app as the .app builder. Picked it over py2app
-  # because py2app's macholib step fails on macOS 15 Sequoia with a
-  # kernel-level "Operation not permitted" on dylib rewrites that no
-  # userspace shim could lift. Briefcase builds via a different path
-  # (pre-relocated CPython support package + bundled deps) that
-  # sidesteps the install_name_tool problem entirely.
+  # Desktop packaging via briefcase (macOS .app / .dmg)
   "briefcase>=0.4.1",
+  # Needed to pre-build the rumps sdist wheel before briefcase runs
+  "build>=1.0",
 ]
-
-[project.scripts]
-voitta-desktop = "app.desktop:main"
 
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["app*"]
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-# `-m "not live"` excludes Tier 2 live-API tests from the default run.
-# Run them explicitly with `-m live` and the appropriate
-# {ANTHROPIC,OPENAI,GEMINI}_API_KEY env vars set. See
-# streaming-migration.md §13.2.
-addopts = "-q --strict-markers -m 'not live'"
 asyncio_mode = "auto"
-markers = [
-  "live: tests that hit real provider APIs; require API keys via env",
-]
-
-# Briefcase config (project_name, bundle, sources, requires, …) lives at
-# the repo root in `pyproject.toml`. That's intentional: briefcase writes
-# `build/` and `dist/` next to its manifest, so we keep the redistributable
-# artefacts at the top of the repo instead of buried in backend/.
-# See `pyproject.toml` and `build_app.sh` at the repo root.
+testpaths = ["tests"]

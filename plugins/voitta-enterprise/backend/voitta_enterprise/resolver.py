@@ -1,32 +1,34 @@
 """``vre://`` resolver — owned by the voitta-enterprise plugin.
 
 Refs reach this resolver as already-parsed :class:`refs.Ref` objects.
-The canonical key set:
 
-  • ``file_id``  — required, integer.
-  • ``asset``    — required (e.g. ``original``, ``cad_mesh``,
-                   ``cad_projection``).
-  • ``slug``     — required for per-component asset variants.
-  • ``export``   — for ``cad_projection``, picks one view; without it
-                   we materialise a directory of all variants.
+URI grammar::
 
-Two-step flow on cache miss:
+    vre://<folder_display_name>/<relative/path/to/file.ext>[?params]
 
-  1. Call the remote MCP tool ``request_asset(file_id, asset_type,
-     slug=…)`` via the VRE connector. The response carries either a
-     single URL (``original``, whole-file ``cad_mesh``, per-slug
-     ``cad_mesh``) or a dict of named URLs (``cad_projection`` →
-     front/top/side/iso).
-  2. Stream each URL into a fresh snapshot dir under
+Query params:
+  • ``asset``  — asset type (``original``, ``cad_mesh``, ``cad_projection``).
+                 Defaults to ``original``.
+  • ``slug``   — required for per-component CAD asset variants.
+  • ``export`` — for ``cad_projection``, pick one view; omit for all views.
+
+Examples::
+
+    vre://Stella NFS/stella_park_prepared/docs/report.pdf
+    vre://Stella NFS/parts/base-frame.glb?asset=cad_mesh
+    vre://Stella NFS/parts/rail-l.glb?asset=cad_projection&export=iso
+
+Resolution flow:
+
+  1. Resolve folder display_name → folder id via ``list_indexed_folders``
+     (cached in module-level ``_FOLDER_CACHE``; refreshed on miss).
+  2. Resolve folder_id + rel_path → file_id via
+     ``list_indexed_folders(prefix="<display_name>/<rel_path_parent>")``,
+     matching the leaf filename.
+  3. Call ``request_asset(file_id, asset_type, slug=…)`` → signed URLs.
+  4. Stream each URL into a fresh snapshot dir under
      ``python_storage/cache/snapshot_<handle>/``. ``meta.json::origin``
-     is stamped with the canonical ``ref`` so future lookups hit.
-
-Auth + connector resolution:
-  The VRE connector is registered by the ``voitta-enterprise`` plugin
-  (``plugin_name=voitta-enterprise``, ``connector_id=vre``). We pull
-  its URL + bearer token via the same helpers the synthesised
-  ``vre_request_asset`` tool uses — so a manual call and an
-  ensure_local hit go over the exact same wire path.
+     is stamped with the canonical ``ref`` so future lookups can cache.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ import json
 import logging
 import secrets
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
@@ -46,94 +48,144 @@ from app.services.mcp import registry as mcp_registry
 
 _logger = logging.getLogger(__name__)
 
-# Single-component refs map to a single-file snapshot. Multi-component
-# refs (cad_projection without &export=…) map to a directory snapshot
-# containing one file per variant. The chunk size + max bytes mirror
-# fetch_to_python_storage so a misbehaving signed URL can't fill the
-# disk.
 _CHUNK = 64 * 1024
-_MAX_BYTES = 512 * 1024 * 1024  # 512 MiB — same as fetch_to_python_storage
-
+_MAX_BYTES = 512 * 1024 * 1024  # 512 MiB
 
 _VRE_CONNECTOR_KEY = "voitta-enterprise:vre"
 
+# Module-level cache: display_name (lowered) → folder id.
+# Populated lazily; cleared on miss so new folders appear after a
+# server-side re-index without a restart.
+_FOLDER_CACHE: dict[str, int] = {}
+
+
+# ---------------------------------------------------------------------------
+# Connector helpers
+# ---------------------------------------------------------------------------
+
 
 def _connector_endpoint() -> tuple[str, str | None]:
-    """Resolve the (url, bearer) for the VRE connector.
-
-    Raises if the plugin isn't loaded or its URL setting hasn't been
-    configured. The bearer is optional (single-user / dev modes).
-    """
     plugin, _, cid = _VRE_CONNECTOR_KEY.partition(":")
     conn = mcp_registry.get_connector(plugin, cid)
     if conn is None:
         raise RuntimeError(
             f"VRE MCP connector not registered "
-            f"(plugin {plugin!r}, id {cid!r}) — is the voitta-enterprise "
-            "plugin loaded?"
+            f"(plugin {plugin!r}, id {cid!r}) — is voitta-enterprise loaded?"
         )
-    # Reuse the private read helpers from the registry. They handle
-    # the dotted settings path, missing fields, and the dev-mode empty
-    # token case in one place — duplicating the logic here would drift.
-    url = mcp_registry._read_url(conn.decl)        # noqa: SLF001
+    url = mcp_registry._read_url(conn.decl)      # noqa: SLF001
     if not url:
         raise RuntimeError(
-            "VRE MCP url not configured — fill in the Server URL field "
-            "under Settings → voitta-enterprise."
+            "VRE MCP url not configured — fill in Settings → voitta-enterprise."
         )
-    token = mcp_registry._read_token(conn.decl)    # noqa: SLF001
+    token = mcp_registry._read_token(conn.decl)  # noqa: SLF001
     return url, token
+
+
+async def _mcp_call(tool: str, args: dict[str, Any]) -> Any:
+    """Call a VRE MCP tool and return the parsed structured payload."""
+    url, bearer = _connector_endpoint()
+    result = await mcp_client.call_tool(url, bearer, tool, args)
+    if result.is_error:
+        text = "; ".join(
+            getattr(b, "text", "") for b in (result.content or []) if getattr(b, "text", "")
+        )
+        raise RuntimeError(f"{tool} error: {text or 'unknown'}")
+    structured = getattr(result, "structured_content", None)
+    if isinstance(structured, dict):
+        return structured
+    # Some fastmcp versions return text; parse it.
+    text_blob = "\n".join(
+        getattr(b, "text", "") for b in (result.content or []) if getattr(b, "text", "")
+    )
+    try:
+        return json.loads(text_blob)
+    except Exception as exc:
+        raise RuntimeError(f"{tool} returned unparseable payload: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Folder / file resolution
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_folder_cache() -> dict[str, int]:
+    """Fetch all top-level folders and return display_name.lower() → id."""
+    payload = await _mcp_call("list_indexed_folders", {})
+    folders = payload.get("result") or payload if isinstance(payload, list) else payload.get("result", [])
+    if isinstance(payload, list):
+        folders = payload
+    return {
+        entry["display_name"].lower(): entry["id"]
+        for entry in (folders if isinstance(folders, list) else [])
+        if "display_name" in entry and "id" in entry
+    }
+
+
+async def _resolve_folder_id(display_name: str) -> int:
+    """Return the folder id for ``display_name``. Refreshes cache on miss."""
+    key = display_name.lower()
+    if key in _FOLDER_CACHE:
+        return _FOLDER_CACHE[key]
+    fresh = await _fetch_folder_cache()
+    _FOLDER_CACHE.clear()
+    _FOLDER_CACHE.update(fresh)
+    if key not in _FOLDER_CACHE:
+        raise RuntimeError(
+            f"VRE folder {display_name!r} not found. "
+            f"Available: {sorted(_FOLDER_CACHE)}"
+        )
+    return _FOLDER_CACHE[key]
+
+
+async def _resolve_file_id(display_name: str, rel_path: str) -> int:
+    """Return the file_id for ``display_name/rel_path``.
+
+    Strategy: list the parent directory (one level up from the target
+    filename) and match by name. The ``path`` field from VRE is
+    ``"display_name/rel/path"`` so we match by the leaf name.
+    """
+    ppath = PurePosixPath(rel_path)
+    parent_rel = str(ppath.parent) if ppath.parent != PurePosixPath(".") else ""
+    leaf = ppath.name
+
+    prefix = f"{display_name}/{parent_rel}" if parent_rel else display_name
+    payload = await _mcp_call("list_indexed_folders", {"prefix": prefix})
+    entries = payload.get("result") or (payload if isinstance(payload, list) else [])
+    if isinstance(payload, list):
+        entries = payload
+
+    for entry in (entries if isinstance(entries, list) else []):
+        if entry.get("kind") == "file" and entry.get("name") == leaf:
+            fid = entry.get("file_id")
+            if fid is not None:
+                return int(fid)
+
+    raise RuntimeError(
+        f"VRE file not found: {display_name}/{rel_path}. "
+        f"Listed {len(entries) if isinstance(entries, list) else '?'} entries "
+        f"under {prefix!r}."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Asset download helpers  (unchanged from prior implementation)
+# ---------------------------------------------------------------------------
 
 
 async def _call_request_asset(
     file_id: int, asset_type: str, slug: str | None, params: dict[str, Any] | None
 ) -> dict[str, Any]:
-    """Invoke the remote ``request_asset`` tool and return its
-    structured payload. Raises on transport/tool errors."""
-    url, bearer = _connector_endpoint()
     arguments: dict[str, Any] = {"file_id": file_id, "asset_type": asset_type}
     if slug is not None:
         arguments["slug"] = slug
     if params:
         arguments["params"] = params
-    result = await mcp_client.call_tool(url, bearer, "request_asset", arguments)
-    if result.is_error:
-        text = "; ".join(
-            getattr(b, "text", "") for b in (result.content or []) if getattr(b, "text", "")
-        )
-        raise RuntimeError(f"request_asset error: {text or 'unknown'}")
-    # fastmcp's CallToolResult has ``structured_content`` (wire dict)
-    # plus ``data`` (parsed). We want the dict; ``data`` may contain
-    # pydantic models that aren't trivially indexable.
-    structured = getattr(result, "structured_content", None)
-    if not isinstance(structured, dict):
-        # Some fastmcp versions wrap the payload under a top-level
-        # ``result`` key. Try that first; otherwise fall back to
-        # parsing the concatenated text content.
-        if isinstance(structured, dict) and "result" in structured:
-            return structured["result"]  # type: ignore[index]
-        # Fall back to text:
-        text_blob = "\n".join(
-            getattr(b, "text", "") for b in (result.content or []) if getattr(b, "text", "")
-        )
-        try:
-            return json.loads(text_blob)
-        except Exception as exc:
-            raise RuntimeError(
-                f"request_asset returned unparseable payload: {exc}"
-            )
-    return structured
+    return await _mcp_call("request_asset", arguments)
 
 
 async def _download_to(
     url: str, bearer: str | None, dst: Path, max_bytes: int = _MAX_BYTES
 ) -> int:
-    """Stream ``url`` to ``dst`` with the same byte cap as
-    fetch_to_python_storage. Returns the byte count.
-
-    Signed URLs from VRE embed the credential, so no auth header is
-    needed — ``bearer`` is reserved for future per-asset auth modes.
-    """
     headers: dict[str, str] = {}
     if bearer:
         headers["Authorization"] = f"Bearer {bearer}"
@@ -141,7 +193,7 @@ async def _download_to(
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0),
         follow_redirects=True,
-        verify=False,                # local dev: VRE often uses a self-signed cert
+        verify=False,
     ) as client:
         async with client.stream("GET", url, headers=headers) as resp:
             resp.raise_for_status()
@@ -157,71 +209,92 @@ async def _download_to(
 
 
 def _derive_filename(url: str, fallback: str) -> str:
-    """Pick a friendly filename for a signed URL.
-
-    VRE's signed URLs end in an HMAC token (no extension), so URL
-    parsing is mostly useless — we use the caller-supplied fallback
-    (built from the canonical ref keys). The fallback always wins
-    when the URL doesn't surface a recognisable suffix.
-    """
     tail = url.rsplit("/", 1)[-1].split("?", 1)[0]
     if "." in tail and len(tail) < 200:
         return tail
     return fallback
 
 
+def _suffix_for(asset: str) -> str:
+    return {
+        "cad_mesh": ".glb",
+        "cad_projection": ".png",
+        "original": "",
+    }.get(asset, "")
+
+
+# ---------------------------------------------------------------------------
+# Main resolver
+# ---------------------------------------------------------------------------
+
+
 async def resolve(ref: refs.Ref) -> Path:
-    """Materialise ``ref`` into a fresh snapshot dir and return its path.
+    """Materialise ``ref`` into a snapshot dir and return the local path.
 
-    Dispatch by ``asset``:
+    ``ref.authority`` is the VRE folder display_name; ``ref.path`` is the
+    relative path within that folder. We look up ``file_id`` from the live
+    index — no integer IDs in the ref itself.
 
-      • ``cad_projection`` without ``&export=`` → directory of four PNGs
-        (one per view). Returned path IS the snapshot dir; the report
-        picks ``front.png``/``iso.png`` from it.
-      • ``cad_projection`` with ``&export=front`` → single PNG;
-        returned path is the file.
-      • ``cad_mesh`` (whole-file or per-slug) → single GLB.
-      • ``original`` → single file (source bytes).
-
-    For single-file modes the returned ``Path`` is the *file*, not its
-    parent dir — that's what report scripts want (`pathlib.Path(p).
-    read_bytes()` Just Works). Multi-variant directory mode returns
-    the dir; the script enumerates its contents.
+    Returned path:
+      • Single-file assets (``original``, single-variant) → the file path.
+      • Multi-variant ``cad_projection`` (no ``&export=``) → snapshot dir.
     """
-    file_id_s = ref.get("file_id")
-    asset = ref.get("asset")
-    if not file_id_s or not asset:
-        raise RuntimeError(f"vre ref missing file_id/asset: {ref.canonical}")
-    try:
-        file_id = int(file_id_s)
-    except ValueError as exc:
-        raise RuntimeError(f"vre file_id not an int: {file_id_s!r}") from exc
+    display_name = ref.authority
+    rel_path = ref.path
+    asset = ref.get("asset", "original") or "original"
     slug = ref.get("slug")
-    export = ref.get("export")  # cad_projection variant name, optional
+    export = ref.get("export")
 
-    # ---- 1. Request asset, get URLs --------------------------------------
-    params: dict[str, Any] = {}
-    payload = await _call_request_asset(file_id, asset, slug, params or None)
+    if not rel_path:
+        raise RuntimeError(
+            f"vre ref has no file path (authority={display_name!r}): {ref.canonical}"
+        )
 
-    # Response: either {"inline": {...}} (rare; not what reports want
-    # — they want bytes), or {"urls": {<variant>: <url>}}. We only
-    # handle the URL flavour here.
+    # Disk-based dedup: reuse an existing snapshot if it was resolved from
+    # the same canonical ref (survives process restarts).
+    python_storage._ensure_root()  # noqa: SLF001
+    for snap_dir in sorted(python_storage.STORAGE_ROOT.glob("snapshot_*"), reverse=True):
+        meta_path = snap_dir / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            existing = json.loads(meta_path.read_text())
+            if existing.get("origin", {}).get("ref") == ref.canonical:
+                stored = existing.get("stored_name")
+                candidate = snap_dir / stored if stored else snap_dir
+                if candidate.exists():
+                    _logger.info(
+                        "vre resolve: reusing existing snapshot %s for %r",
+                        snap_dir.name, ref.canonical,
+                    )
+                    return candidate
+        except Exception:
+            pass
+
+    # Step 1+2: name → id → file_id
+    await _resolve_folder_id(display_name)   # warms cache + validates folder
+    file_id = await _resolve_file_id(display_name, rel_path)
+
+    _logger.info(
+        "vre resolve: folder=%r path=%r → file_id=%d asset=%r slug=%r export=%r",
+        display_name, rel_path, file_id, asset, slug, export,
+    )
+
+    # Step 3: request signed URLs
+    payload = await _call_request_asset(file_id, asset, slug, None)
     urls = payload.get("urls")
     if not isinstance(urls, dict) or not urls:
         raise RuntimeError(
             f"request_asset({asset}) returned no urls: {payload!r}"
         )
 
-    # ---- 2. Stream URL(s) into a fresh snapshot --------------------------
-    python_storage._ensure_root()  # noqa: SLF001
+    # Step 4: stream into snapshot
     handle = f"py_{secrets.token_hex(4)}"
     snap_dir = python_storage.STORAGE_ROOT / f"snapshot_{handle}"
     snap_dir.mkdir()
 
-    # Build the friendly filename base from the canonical ref so files
-    # are recognisable in the artefact browser ("vre_42_cad_mesh.glb"
-    # is more useful than the signed-URL token).
-    fname_base = f"vre_{file_id}_{asset}"
+    leaf_name = PurePosixPath(rel_path).name
+    fname_base = f"vre_{leaf_name}_{asset}"
     if slug:
         fname_base += "_" + slug.replace("/", "-")
     if export:
@@ -229,35 +302,36 @@ async def resolve(ref: refs.Ref) -> Path:
 
     files: list[dict] = []
     total_bytes = 0
-
     multi = len(urls) > 1
+
+    leaf_stem = PurePosixPath(rel_path).stem
+
     if multi:
-        # Multi-variant (cad_projection without &export=…). One file
-        # per variant; returned path IS the dir.
         for variant, url in urls.items():
             if export and variant != export:
-                continue                # &export= acts as a filter
-            ext = _derive_filename(url, "").rsplit(".", 1)[-1]
-            ext = ext if (1 <= len(ext) <= 5 and ext.isalnum()) else "bin"
-            fname = f"{variant}.{ext}"
+                continue
+            # Use readable names: "<leaf>_<variant>.png" not JWT tokens
+            fname = f"{leaf_stem}_{variant}.png"
             n = await _download_to(url, None, snap_dir / fname)
             files.append({"name": fname, "bytes": n, "variant": variant})
             total_bytes += n
     else:
-        # Single-variant. Returned path is the file.
         (variant, url), = urls.items()
-        fname = _derive_filename(url, fname_base + _suffix_for(asset))
-        # Avoid clobbering meta.json
-        if fname == "meta.json":
-            fname = "file_" + fname
+        # Prefer the original filename + suffix; fall back to URL only if
+        # it carries a genuine extension (not a JWT token like "eyJ...")
+        url_tail = url.rsplit("/", 1)[-1].split("?", 1)[0]
+        url_has_ext = "." in url_tail and len(url_tail) < 120 and not url_tail.startswith("ey")
+        fname = url_tail if url_has_ext else (leaf_stem + _suffix_for(asset))
+        if not fname or fname == "meta.json":
+            fname = fname_base + _suffix_for(asset)
         n = await _download_to(url, None, snap_dir / fname)
         files.append({"name": fname, "bytes": n, "variant": variant})
         total_bytes += n
 
-    # ---- 3. Write meta.json with canonical ref --------------------------
     meta = {
         "handle": handle,
         "kind": "vre_asset",
+        "label": f"{display_name}/{rel_path}",
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "files": files,
         "stored_name": files[0]["name"] if len(files) == 1 else None,
@@ -265,7 +339,7 @@ async def resolve(ref: refs.Ref) -> Path:
         "origin": python_storage.make_origin(
             source="vre",
             account=None,
-            path=None,
+            path=f"{display_name}/{rel_path}",
             file_id=str(file_id),
             host=None,
             url=None,
@@ -275,18 +349,8 @@ async def resolve(ref: refs.Ref) -> Path:
     (snap_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
     if not multi or export:
-        # Single-file: return the file path itself.
         return snap_dir / files[0]["name"]
     return snap_dir
-
-
-def _suffix_for(asset: str) -> str:
-    """Best-guess extension when the signed URL doesn't carry one."""
-    return {
-        "cad_mesh": ".glb",
-        "cad_projection": ".png",
-        "original": "",
-    }.get(asset, "")
 
 
 # Side-effect: register on import.

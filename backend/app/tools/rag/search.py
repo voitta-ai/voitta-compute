@@ -6,13 +6,10 @@ Score fusion:
 
 where each score set is normalised to [0, 1] via min-max before fusion.
 Defaults to ``dense_weight = 0.9`` (semantic-leaning); drop to ~0.2 to
-prefer exact-token matches (e.g. an exact symbol name in the panel
-corpus).
+prefer exact-token matches.
 
-Two corpora are addressable via the ``corpus`` argument:
-
-* ``"docs"``  (default) — this project's own docs/ markdown.
-* ``"panel"`` — the holoviz/panel source tree (Python + .md/.rst).
+One corpus is shipped today, ``"docs"``, indexing this project's
+``docs/`` and every plugin's ``plugins/<name>/docs/`` tree.
 """
 
 from __future__ import annotations
@@ -62,12 +59,14 @@ def query(
                 "char_start": chunk["char_start"],
                 "char_end": chunk["char_end"],
             }
-        # Carry through symbol/kind metadata if present (panel corpus).
+        # Carry through any extra metadata the chunk recorded — code-
+        # corpus chunks add repo/path/folder/lang/kind/symbol.
         chunk = st.chunk_index.get((file, chunk_id), {})
         extra = {}
-        for k in ("kind", "symbol"):
-            if k in chunk:
-                extra[k] = chunk[k]
+        for k in ("kind", "symbol", "repo", "path", "folder", "lang"):
+            v = chunk.get(k)
+            if v not in (None, "", []):
+                extra[k] = v
         out.append(
             {
                 **rec,

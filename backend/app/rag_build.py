@@ -1,229 +1,277 @@
-"""Build the RAG indexes (BM25 + Chroma) into the user data dir at
-first launch.
+"""RAG index builder with code-corpus hash protection.
 
-The dev-side ``rag/build_rag.py`` script pulls heavy deps (chromadb +
-sentence-transformers) and walks ``docs/`` to produce both indexes. In
-the packaged .app this can't happen at build time — the bundle is
-signed and read-only — so the indexer runs on the user's machine after
-the heavy-package installer finishes. Outputs land in
-``<PROJECT_ROOT>/rag/`` (writable user data dir).
+Wraps ``scripts/build_rag.py`` and adds a stamp-based skip: if the
+lib-sources submodule SHAs haven't changed since the last successful
+build, the (slow) code corpus reindex is skipped.
 
-Streams a per-phase progress callback so the install window can show
-the user what's happening (file chunking, the Chroma embedding phase,
-the BM25 phase). The rebuild *itself* runs out-of-process inside the
-caller's thread; this module just delegates to the dev script's
-already-tested helpers after re-pointing its module-level path
-globals at the user data dir.
+Stamp resolution:
+  - Frozen .app: reads ``voitta_chainlit/resources/code_sources_version.txt``
+    (written by ``build_app.sh`` via ``git submodule status lib-sources``).
+  - Dev checkout:  runs ``git submodule status lib-sources`` live.
 
-Idempotent: if both indexes already exist with the expected manifest
-fields, this is a no-op.
+Deployed stamp lives at ``<user_data>/rag/.code_source_hash``.
+If current stamp == deployed stamp AND code chroma dir exists → skip.
 """
 
 from __future__ import annotations
 
-import shutil
+import hashlib
+import os
 import sys
-import traceback
 from pathlib import Path
 from typing import Callable
 
-from app.config import PROJECT_ROOT
+ProgressCb = Callable[[str], None]
+
+last_failure_detail: str = ""
 
 
-# Same callback shape as installer.install_all so the install window's
-# set_progress(current, total, label, log) works without adapter code.
-ProgressCb = Callable[[int, int, str, "str | None"], None]
+# ---------------------------------------------------------------------------
+# Stamp helpers
+# ---------------------------------------------------------------------------
+
+def _bundle_resources() -> Path | None:
+    try:
+        import voitta_chainlit
+        return Path(voitta_chainlit.__file__).resolve().parent / "resources"
+    except ImportError:
+        return None
 
 
-def output_dirs() -> tuple[Path, Path]:
-    rag_root = PROJECT_ROOT / "rag"
-    return rag_root / ".chroma", rag_root / ".bm25"
+def _current_code_stamp() -> str:
+    """Return the canonical submodule-SHA fingerprint for the current build."""
+    resources = _bundle_resources()
+    if resources:
+        stamp_file = resources / "code_sources_version.txt"
+        if stamp_file.is_file():
+            return stamp_file.read_text(encoding="utf-8").strip()
+
+    # Dev fallback: ask git
+    from app.config import PROJECT_ROOT
+    repo_root = PROJECT_ROOT.parent
+    try:
+        result = subprocess.run(
+            ["git", "submodule", "status", "lib-sources"],
+            cwd=str(repo_root),
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
-def _error_log_path() -> Path:
-    """Persistent record of the last RAG-build failure. Written by
-    :func:`build`, read by :func:`status_summary`. Cleared on success."""
-    return PROJECT_ROOT / "rag" / "last_build_error.txt"
+def _deployed_stamp_path() -> Path:
+    from app.config import USER_CONFIG_DIR
+    return USER_CONFIG_DIR / ".code_source_hash"
+
+
+def _docs_stamp_path() -> Path:
+    from app.config import USER_CONFIG_DIR
+    return USER_CONFIG_DIR / ".docs_content_hash"
+
+
+def _docs_content_hash() -> str:
+    """SHA-256 over the sorted (relative-path, content) of every file fed to the docs corpus.
+
+    Mirrors the file selection in ``assemble_docs_chunks()``:
+    - all .md files under DOCS_DIR
+    - all .md files under PLUGINS_DIR/<plugin>/docs/
+    """
+    from app.config import DOCS_DIR, PLUGINS_DIR
+
+    h = hashlib.sha256()
+    pairs: list[tuple[str, Path]] = []
+
+    if DOCS_DIR.is_dir():
+        for f in sorted(DOCS_DIR.rglob("*.md")):
+            if f.is_file():
+                pairs.append((str(f.relative_to(DOCS_DIR.parent)), f))
+
+    if PLUGINS_DIR.is_dir():
+        for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
+            docs_dir = plugin_dir / "docs"
+            if docs_dir.is_dir():
+                for f in sorted(docs_dir.rglob("*.md")):
+                    if f.is_file():
+                        pairs.append((str(f.relative_to(PLUGINS_DIR.parent)), f))
+
+    for rel, f in pairs:
+        h.update(rel.encode())
+        h.update(f.read_bytes())
+
+    return h.hexdigest() if pairs else ""
+
+
+def _code_index_current() -> bool:
+    """True when the code corpus exists AND its stamp matches the current build."""
+    from app.config import RAG_DIR
+    if not (RAG_DIR / ".chroma_code").is_dir():
+        return False
+    stamp_path = _deployed_stamp_path()
+    if not stamp_path.is_file():
+        return False
+    current = _current_code_stamp()
+    return bool(current) and stamp_path.read_text(encoding="utf-8").strip() == current
+
+
+def _docs_index_current() -> bool:
+    """True when docs chroma+bm25 exist AND content hash matches."""
+    from app.config import RAG_DIR
+    if not (RAG_DIR / ".chroma").is_dir() or not (RAG_DIR / ".bm25").is_dir():
+        return False
+    stamp = _docs_stamp_path()
+    if not stamp.is_file():
+        return False  # no stored hash → cold start → rebuild
+    current = _docs_content_hash()
+    # Empty hash means no source docs exist; treat as up-to-date so we don't
+    # loop on machines with no docs directory.
+    if not current:
+        return True
+    return stamp.read_text(encoding="utf-8").strip() == current
 
 
 def is_built() -> bool:
-    """Cheap structural check — true when both index dirs and the BM25
-    manifest are on disk. Doesn't import chromadb / bm25s, so the
-    first-launch fast path stays fast."""
-    chroma_dir, bm25_dir = output_dirs()
-    if not chroma_dir.is_dir() or not bm25_dir.is_dir():
-        return False
-    if not (bm25_dir / "manifest.json").is_file():
-        return False
-    return True
+    """Both corpora present and code stamp up to date."""
+    return _docs_index_current() and _code_index_current()
 
 
-def status_summary() -> dict:
-    """Snapshot for the Settings menu.
+# ---------------------------------------------------------------------------
+# Build helpers
+# ---------------------------------------------------------------------------
 
-    Returns ``{built, chunk_count, files_count, last_error}``. Chunk
-    counts come from the BM25 manifest (already on disk; reading it
-    is a cheap JSON parse, no chromadb / bm25s imports needed).
-    """
-    chroma_dir, bm25_dir = output_dirs()
-    out: dict = {
-        "built": is_built(),
-        "chunk_count": None,
-        "files_count": None,
-        "chroma_dir": str(chroma_dir),
-        "bm25_dir": str(bm25_dir),
-        "last_error": None,
-    }
-    err_path = _error_log_path()
-    if err_path.is_file():
-        try:
-            out["last_error"] = err_path.read_text(encoding="utf-8")
-        except OSError:
-            pass
-    if out["built"]:
-        try:
-            import json
-            manifest = json.loads((bm25_dir / "manifest.json").read_text())
-            out["chunk_count"] = manifest.get("chunk_count")
-            out["files_count"] = len(manifest.get("files") or [])
-        except Exception:
-            pass
-    return out
+def _find_build_rag_script() -> Path:
+    """Locate scripts/build_rag.py whether running from repo or bundle."""
+    from app.config import PROJECT_ROOT
 
+    # Dev: <repo>/scripts/build_rag.py
+    dev = PROJECT_ROOT.parent / "scripts" / "build_rag.py"
+    if dev.is_file():
+        return dev
 
-def _bundle_resources_dir() -> Path | None:
-    """Resolve the ``src/voitta/resources/`` directory in either layout.
+    # Frozen: briefcase includes scripts/ alongside app/ under Resources/app/
+    bundle = Path(__file__).resolve().parent.parent / "scripts" / "build_rag.py"
+    if bundle.is_file():
+        return bundle
 
-    In a source checkout it's ``<repo>/src/voitta/resources/``. In a
-    packaged .app the same files end up under
-    ``<app>/Contents/Resources/app_packages/voitta/resources/`` —
-    importing ``voitta`` and inspecting its ``__file__`` gets us there
-    without hard-coding paths.
-    """
-    try:
-        import voitta
-    except ImportError:
-        return None
-    pkg_dir = Path(voitta.__file__).resolve().parent
-    res = pkg_dir / "resources"
-    return res if res.is_dir() else None
-
-
-def _docs_source_dir() -> Path:
-    """The read-only docs/ tree to feed the indexer.
-
-    Source-checkout: ``<repo>/docs/``. Packaged: bundle resources copy
-    staged by ``build_app.sh`` under
-    ``src/voitta/resources/docs/``.
-    """
-    repo_candidate = PROJECT_ROOT / "docs"
-    if repo_candidate.is_dir():
-        return repo_candidate
-    res = _bundle_resources_dir()
-    if res is not None:
-        bundled = res / "docs"
-        if bundled.is_dir():
-            return bundled
-    # Last-resort fallback: walk up four levels from this file (the
-    # source-checkout layout when this file is loaded as a script).
-    return Path(__file__).resolve().parents[2] / "docs"
-
-
-def _find_rag_script_dir() -> Path | None:
-    """Locate the directory containing ``build_rag.py``.
-
-    Source-checkout: ``<repo>/rag/``. Packaged: bundle resources copy
-    at ``src/voitta/resources/rag_scripts/``.
-    """
-    repo_candidate = PROJECT_ROOT / "rag"
-    if (repo_candidate / "build_rag.py").is_file():
-        return repo_candidate
-    res = _bundle_resources_dir()
-    if res is not None:
-        bundled = res / "rag_scripts"
-        if (bundled / "build_rag.py").is_file():
-            return bundled
-    last_resort = Path(__file__).resolve().parents[2] / "rag"
-    if (last_resort / "build_rag.py").is_file():
-        return last_resort
-    return None
-
-
-def build(progress_cb: ProgressCb) -> bool:
-    """Build the docs corpus into ``PROJECT_ROOT/rag/``.
-
-    Drives ``scripts/build_rag.py``'s ``main()`` (the same script
-    developers run locally) with overridden output paths so the index
-    lands in the user-writable data dir instead of next to the script
-    in the read-only bundle.
-
-    progress_cb is invoked once at start, once at end. build_rag.py
-    prints its own per-phase status to stdout — that lands in
-    voitta.log via desktop_launcher's stdout/stderr redirect.
-
-    Returns True on success. On failure, index dirs are wiped so a
-    retry on next launch starts fresh.
-    """
-    docs_dir = _docs_source_dir()
-    if not docs_dir.is_dir():
-        progress_cb(0, 1, "RAG: docs/ not found, skipping", f"!!! {docs_dir}")
-        return False
-
-    chroma_dir, bm25_dir = output_dirs()
-
-    rag_script_dir = _find_rag_script_dir()
-    if rag_script_dir is None:
-        progress_cb(0, 1, "RAG: build_rag.py not in bundle, skipping", "!!!")
-        return False
-
-    if str(rag_script_dir) not in sys.path:
-        sys.path.insert(0, str(rag_script_dir))
-
-    # Wipe partial output so the indexer starts clean.
-    for d in (chroma_dir, bm25_dir):
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
-    chroma_dir.parent.mkdir(parents=True, exist_ok=True)
-
-    progress_cb(
-        0, 1,
-        "RAG: building (chromadb downloads ~80 MB on first run; may take ~30 s)…",
-        ">>> rag build start",
+    raise FileNotFoundError(
+        f"scripts/build_rag.py not found (looked in {dev} and {bundle})"
     )
 
+
+def _run_build(corpus: str, progress_cb: ProgressCb) -> bool:
+    """Run build_rag.py inline via runpy (no subprocess).
+
+    briefcase macOS bundles have no standalone python3 binary — only the
+    Python.framework dylib. Spawning sys.executable would relaunch the app.
+    Instead we run the script in-process using runpy.run_path with
+    __name__="__main__", which honours the if-__name__-guard correctly
+    and uses the real sys.argv for argparse.
+    """
+    import io
+    import runpy
+
+    from app.config import PROJECT_ROOT, DOCS_DIR, PLUGINS_DIR, RAG_DIR
+
+    libs_dir = PROJECT_ROOT.parent / "lib-sources"
+    script = _find_build_rag_script()
+
+    os.environ.update({
+        "VOITTA_DOCS_DIR":    str(DOCS_DIR),
+        "VOITTA_PLUGINS_DIR": str(PLUGINS_DIR),
+        "VOITTA_LIBS_DIR":    str(libs_dir),
+        "VOITTA_RAG_DIR":     str(RAG_DIR),
+    })
+
+    class _Capture(io.RawIOBase):
+        """Minimal writable stream that routes lines to progress_cb."""
+        def write(self, b) -> int:  # type: ignore[override]
+            text = b.decode("utf-8", errors="replace") if isinstance(b, (bytes, bytearray)) else b
+            if text and text.strip():
+                for ln in text.splitlines():
+                    if ln.strip():
+                        progress_cb(ln)
+            return len(b)
+        def writable(self) -> bool:
+            return True
+
+    cap = io.TextIOWrapper(_Capture(), encoding="utf-8", line_buffering=True)
+
+    old_argv = sys.argv[:]
+    old_out, old_err = sys.stdout, sys.stderr
+    sys.argv = [str(script), "--corpus", corpus]
+    sys.stdout = sys.stderr = cap
     try:
-        import build_rag  # type: ignore[import-not-found]
+        runpy.run_path(str(script), run_name="__main__")
+        return True
+    except SystemExit as exc:
+        return (exc.code or 0) == 0
+    except Exception as exc:  # noqa: BLE001
+        global last_failure_detail
+        last_failure_detail = str(exc)
+        import traceback
+        progress_cb(f"!!! error in build_rag ({corpus}): {exc}")
+        for ln in traceback.format_exc().splitlines():
+            if ln.strip():
+                progress_cb(ln)
+        return False
+    finally:
+        sys.stdout = old_out
+        sys.stderr = old_err
+        sys.argv = old_argv
 
-        # Redirect the script's module-level path constants so the
-        # index lands in the user data dir. DOCS_DIR for input, the
-        # DOCS_CFG corpus config for output.
-        build_rag.DOCS_DIR = docs_dir
-        build_rag.RAG_DIR = chroma_dir.parent
-        build_rag.DOCS_CFG.chroma_dir = chroma_dir
-        build_rag.DOCS_CFG.bm25_dir = bm25_dir
 
-        rc = build_rag.main(["--corpus", "docs"])
-        if rc != 0:
-            raise RuntimeError(f"build_rag.main returned exit code {rc}")
-    except Exception as exc:
-        tb = traceback.format_exc()
-        progress_cb(
-            0, 1,
-            f"RAG: build failed — {type(exc).__name__} (rag_query will be unavailable)",
-            tb[-2000:],
-        )
-        err_path = _error_log_path()
-        try:
-            err_path.parent.mkdir(parents=True, exist_ok=True)
-            err_path.write_text(tb, encoding="utf-8")
-        except OSError:
-            pass
-        for d in (chroma_dir, bm25_dir):
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def build_all(progress_cb: ProgressCb) -> bool:
+    """Build docs + code corpora, skipping code if stamp matches.
+
+    ``progress_cb(line)`` is called on the worker thread with log lines.
+    Returns True on full success, False if any corpus build fails.
+    """
+    from app.config import RAG_DIR
+
+    global last_failure_detail
+    last_failure_detail = ""
+
+    from app.config import USER_CONFIG_DIR
+    RAG_DIR.mkdir(parents=True, exist_ok=True)
+    USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Docs corpus — skip if content hash matches.
+    current_docs_hash = _docs_content_hash()
+    if _docs_index_current():
+        progress_cb("Docs corpus unchanged — skipping re-index.")
+    else:
+        progress_cb("Building docs corpus…")
+        if not _run_build("docs", progress_cb):
+            return False
+        if current_docs_hash:
+            _docs_stamp_path().write_text(current_docs_hash, encoding="utf-8")
+        progress_cb("Docs corpus ready.")
+
+    # Code corpus — skip if stamp matches.
+    current_stamp = _current_code_stamp()
+    if _code_index_current():
+        progress_cb("Code corpus unchanged — skipping re-index.")
+        return True
+
+    from app.config import PROJECT_ROOT
+    libs_dir = PROJECT_ROOT.parent / "lib-sources"
+    if not libs_dir.is_dir():
+        progress_cb("lib-sources/ not found — skipping code corpus.")
+        return True
+
+    progress_cb("Building code corpus (this takes a few minutes)…")
+    if not _run_build("code", progress_cb):
         return False
 
-    progress_cb(1, 1, "RAG: build complete", "<<< rag build complete")
-    # Clear any stale error from a previous failed run.
-    _error_log_path().unlink(missing_ok=True)
+    # Write stamp so next launch skips this.
+    if current_stamp:
+        _deployed_stamp_path().write_text(current_stamp, encoding="utf-8")
+        progress_cb(f"Code stamp written: {current_stamp[:40]}…")
+
     return True

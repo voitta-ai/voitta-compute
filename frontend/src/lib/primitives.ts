@@ -1,131 +1,49 @@
-// Generic browser primitives the server can dispatch via the bridge.
-// Provider-agnostic; provider-specific primitives live with their
-// provider in `app.tools.providers`.
+// Browser-side tool implementations. Each entry is a function the BE
+// can invoke via `call_fn`. Pure callbacks live here; tools that need
+// to drive React state (show_report, close_report) live inside
+// CallFnRouter.tsx where Recoil setters are in scope.
 
-import { getBackendOrigin, PrimitiveError, registerPrimitive } from "./bridge";
-import { log } from "./logger";
-import { getActiveReportIframe, getActiveReportInfo } from "./report-iframe";
+export type Primitive = (args: Record<string, unknown>) => Promise<unknown> | unknown;
 
-const DOM_CAP = 200_000;
-
-// ---- inject_chat_message --------------------------------------------------
-// Driven by the CLI ``/cli/chat_inject`` endpoint. The CLI hands us a
-// piece of text; we forward it into ChatPane's ``sendText`` callback
-// (exposed on ``window.__voittaInjectChatMessage`` by ChatPane). The
-// chat then runs through the regular /chat/stream pipeline — message
-// + streamed response appear in the pane exactly as if the user had
-// typed it. Returns ``{ok: true}`` once the send has been kicked off;
-// the LLM's response is delivered asynchronously into the UI, not
-// awaited here. Errors when the chat pane isn't mounted.
-
-interface InjectArgs {
-  text?: unknown;
+interface VoittaApi {
+  getShadowRoot: () => ShadowRoot;
 }
 
-// ---- read_chat_state ------------------------------------------------------
-// Returns a snapshot of the chat pane state — full messages array, the
-// streaming flag, in-flight streaming items, and the current draft.
-// Used by /cli/chat_state so an external operator can read what the LLM
-// said in the live chat without going through the SSE stream.
+function shadowRoot(): ShadowRoot | null {
+  const api = (window as unknown as { VoittaBookmarklet?: VoittaApi }).VoittaBookmarklet;
+  return api ? api.getShadowRoot() : null;
+}
 
-registerPrimitive("read_chat_state", async () => {
-  const reader = (window as unknown as {
-    __voittaReadChatState?: () => unknown;
-  }).__voittaReadChatState;
-  if (typeof reader !== "function") {
-    throw new PrimitiveError(
-      "chat_not_mounted",
-      "chat pane is not open",
-    );
-  }
-  return reader() as Record<string, unknown>;
-});
-
-registerPrimitive("inject_chat_message", async (rawArgs) => {
-  const args = (rawArgs || {}) as InjectArgs;
-  const text = typeof args.text === "string" ? args.text : "";
-  if (!text.trim()) {
-    throw new PrimitiveError("invalid_args", "text is required and must be non-empty");
-  }
-  const inject = (window as unknown as {
-    __voittaInjectChatMessage?: (t: string) => Promise<void>;
-  }).__voittaInjectChatMessage;
-  if (typeof inject !== "function") {
-    throw new PrimitiveError(
-      "chat_not_mounted",
-      "chat pane is not open (the bookmarklet must be active on this page)",
-    );
-  }
-  // Fire and forget — the streaming response is rendered into the
-  // chat pane via the regular SSE path, not returned here.
-  void inject(text);
-  return { ok: true };
-});
-
-// ---- get_url ---------------------------------------------------------------
-
-registerPrimitive("get_url", async () => ({
-  href: location.href,
-  pathname: location.pathname,
-  search: location.search,
-  hash: location.hash,
-  title: document.title,
-}));
-
-// ---- read_selection --------------------------------------------------------
-
-registerPrimitive("read_selection", async () => {
-  const text = window.getSelection()?.toString() ?? "";
-  return { text };
-});
-
-// ---- read_dom --------------------------------------------------------------
-
-registerPrimitive("read_dom", async (args) => {
-  const selector = String(args.selector ?? "");
-  const kind = args.kind === "html" ? "html" : "text";
-  if (!selector) throw new PrimitiveError("invalid_args", "selector is required");
-  let el: Element | null;
-  try {
-    el = document.querySelector(selector);
-  } catch (err) {
-    throw new PrimitiveError("invalid_selector", String((err as Error).message));
-  }
-  if (!el) throw new PrimitiveError("not_found", `no element matches ${selector}`);
-  const value =
-    kind === "html"
-      ? el.outerHTML
-      : (el as HTMLElement).innerText ?? el.textContent ?? "";
-  if (value.length > DOM_CAP) {
-    throw new PrimitiveError("too_large", `${value.length} > ${DOM_CAP}`, {
-      size: value.length,
-    });
-  }
-  return { value, kind };
-});
-
-// ─────────────────────────────────────────────────────────────────────────
-// screenshot_report — rasterise the active HoloViz Panel report iframe.
-// Returns a base64 dataURL covering the entire scrollHeight, not just
-// the visible viewport. The actual rasterisation runs INSIDE the iframe
-// (via html2canvas loaded by the Panel shim) so it has same-origin
-// access to all canvases. We just shuttle a postMessage round-trip.
-// ─────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+// screenshot_report — rasterise the active report pane.
+//
+// Two paths based on report kind:
+//
+//   • Panel iframe (``payload.kind === "panel"``): the iframe is
+//     same-origin with our backend and hosts html2canvas via the Panel
+//     shim. We resize the iframe with two-phase auto-sizing (probe at
+//     small + large heights to discriminate natural-max vs stretch-fill
+//     content), then postMessage ``voittaAction:screenshot`` and await
+//     the response. The shim composites nested three_scene canvases
+//     via the ``voitta_three_capture`` protocol.
+//
+//   • Everything else (pyplot / plotly / elk): fall back to
+//     html-to-image on the shadow-DOM ``.report-pane`` element. These
+//     panes live entirely inside the closed shadow root, so
+//     html-to-image works as it always has.
+//
+// The result envelope uses the ``_image`` sentinel the BE looks for —
+// see ``app.agent``'s image-block injection — so the rendered PNG
+// reaches the model as an inline image block in the tool result.
+// ─────────────────────────────────────────────────────────────────────
 
 interface ScreenshotArgs {
   scale?: number;
   quality?: number;
   format?: "webp" | "png";
   timeout_ms?: number;
-  // Force the iframe to a tall layout before capture so responsive
-  // Panel reports (sizing_mode=stretch_both, etc.) expand to natural
-  // content height instead of being squashed into the visible
-  // viewport. Default: enabled at 6000px. Set ``expand_height: 0`` to
-  // disable (capture at the iframe's current size).
   expand_height?: number;
-  // How long to wait for Panel/Bokeh to relayout after resizing the
-  // iframe. Bokeh debounces resize events ~250ms; we give it some
-  // headroom for downstream callbacks. Default: 700ms.
+  expand_width?: number;
   expand_settle_ms?: number;
 }
 
@@ -143,94 +61,155 @@ interface ScreenshotResponse {
   scale?: number;
   format?: string;
   nested_scenes_captured?: number;
-  // Debug telemetry from the iframe shim (see backend/app/main.py
-  // ``_afterSettle`` block). When the screenshot looks visible-only,
-  // these numbers reveal whether the iframe's documentElement was
-  // already the full document height or whether an inner scrollable
-  // container was masking content.
-  doc_dims?: {
-    scrollW: number;
-    scrollH: number;
-    clientW: number;
-    clientH: number;
-    innerW: number;
-    innerH: number;
-    bodyScrollH: number;
-    chosenW: number;
-    chosenH: number;
-  };
+  doc_dims?: Record<string, number>;
+}
+
+// Per-technique result emitted by the shim's screenshot_multi handler.
+// ok=true → ``stash_id`` references bytes already uploaded BE-side
+// via /api/screenshot-stash. The shim never returns ``dataUrl``
+// through postMessage anymore — multi-MB PNGs would truncate at the
+// chainlit socket. ok=false → ``message`` describes what failed.
+interface ScreenshotMultiResult {
+  label: string;
+  ok: boolean;
+  stash_id?: string;
+  media_type?: string;
+  bytes_b64_len?: number;
+  width?: number;
+  height?: number;
+  ms?: number;
+  message?: string;
+}
+
+interface ScreenshotMultiResponse {
+  type: "voitta_report_event";
+  kind: "screenshot_multi_response";
+  requestId: string;
+  ok: boolean;
+  message?: string;
+  results?: ScreenshotMultiResult[];
 }
 
 let screenshotCounter = 0;
 
-registerPrimitive("screenshot_report", async (rawArgs) => {
-  const args = (rawArgs || {}) as ScreenshotArgs;
-  const iframe = getActiveReportIframe();
-  if (!iframe || !iframe.contentWindow) {
-    throw new PrimitiveError("no_report", "no report is currently open");
+function findReportIframe(): HTMLIFrameElement | null {
+  const root = shadowRoot();
+  if (!root) return null;
+  // With multiple report tabs all iframes are mounted simultaneously (hidden
+  // via CSS). Query the active panel first, fall back to first visible.
+  const activePanel = root.querySelector('[data-active="true"]');
+  if (activePanel) {
+    const iframe = activePanel.querySelector("iframe.report-panel-iframe") as HTMLIFrameElement | null;
+    if (iframe) return iframe;
   }
-  const info = getActiveReportInfo();
-  // Block screenshots in edit mode: html2canvas chokes on Panel's
-  // editable template CSS (notably the ``color-mix()`` box-shadow on
-  // ``.muuri-grid-item``), throwing "unsupported color function". The
-  // edit-mode handles also visually clutter the captured image. Exit
-  // edit mode first, then retry. iframe.src is preferred over the
-  // cached info.url because ReportPane mutates iframe.src on toggle
-  // without re-pushing info.
-  const url = iframe.src || info?.url || "";
-  if (/[?&]editable=true(?:&|$|#)/.test(url)) {
-    throw new PrimitiveError(
-      "edit_mode",
-      "screenshot_report does not work while the report is in edit mode (the editable template uses CSS that html2canvas cannot rasterise). Ask the user to leave edit mode, then retry.",
-    );
+  // Fallback: first iframe in an active tab panel, then any iframe.
+  const inActivePanel = root.querySelector('.report-tab-panel.active iframe.report-panel-iframe') as HTMLIFrameElement | null;
+  if (inActivePanel) return inActivePanel;
+  return root.querySelector("iframe.report-panel-iframe") as HTMLIFrameElement | null;
+}
+
+async function screenshotPanelIframe(
+  iframe: HTMLIFrameElement,
+  args: ScreenshotArgs,
+): Promise<unknown> {
+  if (!iframe.contentWindow) {
+    return { error: "report iframe has no contentWindow" };
   }
   const requestId = `ss_${Date.now().toString(36)}_${++screenshotCounter}`;
   const scale = typeof args.scale === "number" ? args.scale : 1;
   const quality = typeof args.quality === "number" ? args.quality : 0.85;
   const format = args.format === "png" ? "png" : "webp";
   const timeout = typeof args.timeout_ms === "number" ? args.timeout_ms : 60_000;
-  // Two-phase auto-sizing:
-  //
-  //   1. Set iframe to a "small probe" height and ask the shim for
-  //      its scrollHeight. Call it H1.
-  //   2. Set iframe to a "large probe" height and ask again. Call it H2.
-  //   3. If H2 ≈ H1 → content has a NATURAL maximum height; use H1.
-  //   4. If H2 >> H1 → content is sizing_mode=stretch_both / stretch_height;
-  //      it'll fill any iframe size. Fall back to a sensible default
-  //      (the user's current viewport height, padded).
-  //   5. Resize the iframe to the chosen target, then screenshot.
-  //
-  // ``expand_height`` (if explicitly passed by the LLM/CLI) overrides
-  // the whole auto-size dance — useful when the caller knows exactly
-  // how tall the report needs to be.
-  const PROBE_SMALL_H = 2000;
-  const PROBE_LARGE_H = 6000;
-  const STRETCH_RATIO_THRESHOLD = 1.4;  // H2 > H1 * 1.4 → stretch-fill
-  const explicitExpand =
-    typeof args.expand_height === "number" ? args.expand_height : null;
   const expandSettleMs =
     typeof args.expand_settle_ms === "number" ? args.expand_settle_ms : 500;
 
-  // Capture original iframe height styles so we always restore them.
+  // The shim measures content extent inside the iframe with four
+  // different strategies (body-scroll / deep-content / bokeh-root /
+  // generous). We then run one screenshot per strategy × technique
+  // pair so the user can pick the cleanest combination from chat.
+  // No more guessing or "stretch-fill detection" heuristics — the
+  // iframe tells us every plausible height, we capture all of them.
+  const explicitExpand =
+    typeof args.expand_height === "number" ? args.expand_height : null;
+
   const restoreStyle = {
     height: iframe.style.height,
     minHeight: iframe.style.minHeight,
     maxHeight: iframe.style.maxHeight,
+    width: iframe.style.width,
+    minWidth: iframe.style.minWidth,
+    maxWidth: iframe.style.maxWidth,
   };
   function setIframeHeight(px: number): void {
-    iframe!.style.height = `${px}px`;
-    iframe!.style.minHeight = `${px}px`;
-    iframe!.style.maxHeight = `${px}px`;
+    iframe.style.height = `${px}px`;
+    iframe.style.minHeight = `${px}px`;
+    iframe.style.maxHeight = `${px}px`;
+  }
+  function setIframeWidth(px: number): void {
+    iframe.style.width = `${px}px`;
+    iframe.style.minWidth = `${px}px`;
+    iframe.style.maxWidth = `${px}px`;
   }
   function restoreIframe(): void {
-    iframe!.style.height = restoreStyle.height;
-    iframe!.style.minHeight = restoreStyle.minHeight;
-    iframe!.style.maxHeight = restoreStyle.maxHeight;
+    iframe.style.height = restoreStyle.height;
+    iframe.style.minHeight = restoreStyle.minHeight;
+    iframe.style.maxHeight = restoreStyle.maxHeight;
+    iframe.style.width = restoreStyle.width;
+    iframe.style.minWidth = restoreStyle.minWidth;
+    iframe.style.maxWidth = restoreStyle.maxWidth;
   }
-  // Inline measurement helper. Resizes iframe, posts a "measure"
-  // request to the shim, awaits ``measure_response`` with scrollHeight.
-  // Rejects on timeout — caller catches and falls back to a default.
-  function measureAt(probeH: number, timeoutMs = 5000): Promise<number> {
+
+  function reflowIframe(timeoutMs = 3000): Promise<void> {
+    // Ask the iframe to dispatch a ``resize`` event so Bokeh/Panel
+    // re-evaluates layout for the new iframe dimensions. Without this,
+    // an iframe that was 1076 wide at mount keeps its stacked-column
+    // layout even after we resize it to 1600 — Bokeh caches its
+    // initial measurements.
+    return new Promise((res) => {
+      const rrid = `rf_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      const t = setTimeout(() => {
+        window.removeEventListener("message", onMsg);
+        res(); // best-effort; proceed even on timeout
+      }, timeoutMs);
+      function onMsg(e: MessageEvent) {
+        const d = e.data as {
+          type?: string;
+          kind?: string;
+          requestId?: string;
+        } | null;
+        if (
+          !d ||
+          d.type !== "voitta_report_event" ||
+          d.kind !== "reflow_response" ||
+          d.requestId !== rrid
+        ) {
+          return;
+        }
+        if (e.source !== iframe.contentWindow) return;
+        clearTimeout(t);
+        window.removeEventListener("message", onMsg);
+        res();
+      }
+      window.addEventListener("message", onMsg);
+      iframe.contentWindow!.postMessage(
+        { voittaAction: "reflow", requestId: rrid, settle_ms: expandSettleMs },
+        "*",
+      );
+    });
+  }
+
+  type Extents = {
+    bodyScroll: number;
+    deepContent: number;
+    bokehRoot: number;
+    generous: number;
+  };
+
+  // Single measurement call — the shim runs all measurement
+  // strategies inside the iframe and returns a candidate height
+  // for each. We then run one screenshot per (strategy, technique)
+  // pair so the user can compare and pick.
+  function measureExtentsAt(probeH: number, timeoutMs = 5000): Promise<Extents> {
     return new Promise((resolveM, rejectM) => {
       const mrid = `mm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
       setIframeHeight(probeH);
@@ -239,554 +218,361 @@ registerPrimitive("screenshot_report", async (rawArgs) => {
         rejectM(new Error(`measure timeout at probeH=${probeH}`));
       }, timeoutMs);
       function onMsg(e: MessageEvent) {
-        const d = e.data as
-          | {
-              type?: string;
-              kind?: string;
-              requestId?: string;
-              scrollH?: number;
-            }
-          | null;
+        const d = e.data as {
+          type?: string;
+          kind?: string;
+          requestId?: string;
+          scrollH?: number;
+          bodyScrollH?: number;
+          extents?: Partial<Extents>;
+        } | null;
         if (
           !d ||
           d.type !== "voitta_report_event" ||
           d.kind !== "measure_response" ||
           d.requestId !== mrid
-        )
+        ) {
           return;
-        if (e.source !== iframe!.contentWindow) return;
+        }
+        if (e.source !== iframe.contentWindow) return;
         clearTimeout(t);
         window.removeEventListener("message", onMsg);
-        resolveM(d.scrollH ?? probeH);
+        const ext = d.extents || {};
+        resolveM({
+          bodyScroll: ext.bodyScroll ?? d.bodyScrollH ?? d.scrollH ?? probeH,
+          deepContent: ext.deepContent ?? 0,
+          bokehRoot: ext.bokehRoot ?? 0,
+          generous: ext.generous ?? 5000,
+        });
       }
       window.addEventListener("message", onMsg);
-      iframe!.contentWindow!.postMessage(
+      iframe.contentWindow!.postMessage(
         { voittaAction: "measure", requestId: mrid, settle_ms: expandSettleMs },
         "*",
       );
     });
   }
 
-  // Decide the target capture height. Either explicit (LLM passed
-  // ``expand_height``) or auto-discovered via the two-probe dance.
-  const fallbackH = Math.max(
-    iframe.getBoundingClientRect().height || 0,
-    900,
-  );
-  let chosenHeight: number;
-  let stretchDetected = false;
-  if (explicitExpand !== null && explicitExpand > 0) {
-    chosenHeight = explicitExpand;
-  } else {
-    let h1: number | null = null;
-    let h2: number | null = null;
-    try {
-      h1 = await measureAt(PROBE_SMALL_H);
-      h2 = await measureAt(PROBE_LARGE_H);
-    } catch {
-      /* fall through with whatever we got */
-    }
-    if (h1 !== null && h2 !== null) {
-      if (h2 > h1 * STRETCH_RATIO_THRESHOLD) {
-        // Stretch-fill content. No natural max → use the original
-        // viewport height (padded). Otherwise the LLM gets a 6000px
-        // image of stretched scenes that looks nothing like the user
-        // sees.
-        stretchDetected = true;
-        chosenHeight = Math.round(fallbackH * 1.3);
-      } else {
-        // Natural max. h1 ≈ h2 ≈ true content height.
-        chosenHeight = Math.max(h1, h2);
-      }
-    } else {
-      // Measure failed entirely — punt to the old behaviour.
-      chosenHeight = 2000;
-    }
-  }
-  log.info("screenshot", "auto_size", {
-    explicit: explicitExpand,
-    chosen: chosenHeight,
-    stretch_detected: stretchDetected,
-    fallback_h: fallbackH,
-    report_id: info?.report_id,
-  });
-  setIframeHeight(chosenHeight);
-  // One more settle for the iframe to relayout at the FINAL chosen
-  // height (the last probe was likely a different value).
-  await new Promise((r) => setTimeout(r, expandSettleMs));
-
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      window.removeEventListener("message", onMessage);
-      restoreIframe();
-      reject(
-        new PrimitiveError(
-          "timeout",
-          `report screenshot did not return within ${timeout}ms`,
-        ),
-      );
-    }, timeout);
-
-    function onMessage(e: MessageEvent) {
-      const data = e.data as ScreenshotResponse | null;
-      if (
-        !data ||
-        typeof data !== "object" ||
-        data.type !== "voitta_report_event" ||
-        data.kind !== "screenshot_response" ||
-        data.requestId !== requestId
-      ) {
-        return;
-      }
-      // Only accept from our own iframe.
-      if (e.source !== iframe!.contentWindow) return;
-      clearTimeout(timer);
-      window.removeEventListener("message", onMessage);
-      restoreIframe();
-      if (!data.ok) {
-        reject(
-          new PrimitiveError(
-            "screenshot_failed",
-            data.message || "iframe screenshot returned ok=false",
-          ),
-        );
-        return;
-      }
-      // Surface the iframe's document-dimension telemetry into the
-      // bridge log. Logger entries forward to the backend via
-      // /api/log/event (see logger.ts), so this lands in voitta.log
-      // alongside cache[…] / chat-stream lines for diagnosing
-      // "screenshot is visible-only" reports.
-      if (data.doc_dims) {
-        const payload = {
-          ...data.doc_dims,
-          captured_w: data.width,
-          captured_h: data.height,
-          report_id: info?.report_id,
-          url: info?.url,
-        };
-        log.info("screenshot", "doc_dims", payload);
-        // Forward to the backend so the numbers land in voitta.log
-        // alongside chat-stream / cache_monitor lines. log.info is
-        // browser-local only (in-memory ring buffer), so without this
-        // explicit POST the doc_dims values are stranded in DevTools.
-        try {
-          void fetch(`${getBackendOrigin()}/api/log/screenshot_dims`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload),
-            credentials: "include",
-            keepalive: true,
-          });
-        } catch {
-          /* best-effort */
-        }
-      }
-      resolve({
-        ok: true,
-        data_url: data.dataUrl,
-        width: data.width,
-        height: data.height,
-        full_width: data.full_width,
-        full_height: data.full_height,
-        doc_dims: data.doc_dims,
-        nested_scenes_captured: data.nested_scenes_captured,
-        scale: data.scale,
-        format: data.format,
-        report: info
-          ? { report_id: info.report_id, url: info.url, title: info.title }
-          : null,
-      });
-    }
-    window.addEventListener("message", onMessage);
-    iframe.contentWindow!.postMessage(
-      {
-        voittaAction: "screenshot",
-        requestId,
-        scale,
-        quality,
-        format,
-      },
-      "*",
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────
-// get_report_edits — read the live edit state of the report iframe.
-//
-// 100% client-side. The iframe holds the truth (Muuri grid + Bokeh
-// document + our shim's selection state); the shim posts back a
-// snapshot. Three return shapes:
-//
-//   { status: "no_active_report", message }
-//     — no iframe mounted, or the URL doesn't have ?editable=true
-//
-//   { status: "active_no_edits", report_id, message }
-//     — iframe is in edit mode but every card is at default
-//       width (100%) / height (Bokeh-natural) / visible, original
-//       order, and nothing is selected
-//
-//   { status: "active", report_id, elements, selected_id, order_changed }
-//     — anything else; `elements[]` carries name/title/index/width_pct/
-//       height_px/visible/selected for each card. `name` is the Python
-//       `name=` argument the script set (null when unset — the LLM is
-//       expected to set names on each main component for stable refs).
-// ─────────────────────────────────────────────────────────────────────────
-
-interface EditsElement {
-  index: number;
-  id: string;
-  name: string | null;
-  title: string | null;
-  width_pct: number;
-  height_px: number | null;
-  visible: boolean;
-  selected: boolean;
-}
-
-interface EditsResponse {
-  type: "voitta_report_event";
-  kind: "edits_response";
-  requestId: string;
-  ok: boolean;
-  message?: string;
-  elements?: EditsElement[];
-  selected_id?: string | null;
-  order_changed?: boolean;
-}
-
-let editsCounter = 0;
-
-registerPrimitive("get_report_edits", async () => {
-  const iframe = getActiveReportIframe();
-  if (!iframe || !iframe.contentWindow) {
-    return {
-      status: "no_active_report",
-      message: "no report is currently open in the iframe pane",
-    };
-  }
-  const info = getActiveReportInfo();
-  // Live ``iframe.src`` is the source of truth: ReportPane updates it
-  // in-place when the user toggles edit mode, but the cached
-  // ``info.url`` (set on mount) doesn't get re-pushed. Reading the
-  // iframe directly catches the toggle without needing a ReportPane
-  // change.
-  const url = iframe.src || info?.url || "";
-  if (!/[?&]editable=true(?:&|$|#)/.test(url)) {
-    return {
-      status: "no_active_report",
-      message:
-        "the active report is not in edit mode (open the report and toggle the edit affordance)",
-    };
+  // Force a desktop-class width during capture so responsive reports
+  // render in their multi-column layout instead of collapsing to a
+  // single stacked column. The iframe may visually overflow the chat
+  // pane during the capture window; that's fine — restoreIframe()
+  // puts it back at the end.
+  //
+  // Width strategy:
+  //   - Honour an explicit ``expand_width`` if the LLM passes one.
+  //   - Otherwise take the largest of: the current iframe width, the
+  //     PARENT window's inner width (so we match the user's actual
+  //     monitor), and a desktop floor of 1920. The floor matters when
+  //     the chat is open on a narrow screen — without it we'd capture
+  //     at the chat-pane width and Panel's multi-card row collapses.
+  //   - 1920 is wide enough for 4 Panel cards across (each ~400 +
+  //     gaps). Tested against the executive-dashboard report; 1600
+  //     was too narrow and forced single-column.
+  const currentW = iframe.getBoundingClientRect().width || 0;
+  const explicitWidth =
+    typeof args.expand_width === "number" ? args.expand_width : null;
+  const TARGET_DESKTOP_W = 1920;
+  const parentInnerW = window.innerWidth || 0;
+  const chosenWidth =
+    explicitWidth !== null && explicitWidth > 0
+      ? explicitWidth
+      : Math.max(currentW, parentInnerW, TARGET_DESKTOP_W);
+  if (chosenWidth > currentW) {
+    setIframeWidth(chosenWidth);
+    // Let Bokeh re-flow at the new width BEFORE we probe height —
+    // otherwise the two probes see the old narrow-layout content.
+    await reflowIframe();
   }
 
-  const requestId = `ge_${Date.now().toString(36)}_${++editsCounter}`;
-  const response: EditsResponse = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      window.removeEventListener("message", onMessage);
-      reject(
-        new PrimitiveError(
-          "timeout",
-          "report iframe did not respond to getEdits within 5s",
-        ),
-      );
-    }, 5_000);
-    function onMessage(e: MessageEvent) {
-      const data = e.data as EditsResponse | null;
-      if (
-        !data ||
-        typeof data !== "object" ||
-        data.type !== "voitta_report_event" ||
-        data.kind !== "edits_response" ||
-        data.requestId !== requestId
-      ) {
-        return;
-      }
-      if (e.source !== iframe!.contentWindow) return;
-      clearTimeout(timer);
-      window.removeEventListener("message", onMessage);
-      resolve(data);
-    }
-    window.addEventListener("message", onMessage);
-    iframe.contentWindow!.postMessage(
-      { voittaAction: "getEdits", requestId },
-      "*",
-    );
-  });
-
-  if (!response.ok) {
-    return {
-      status: "no_active_report",
-      message:
-        response.message ||
-        "report iframe responded but reported no editable grid",
-    };
-  }
-
-  const elements = response.elements || [];
-  const reportId = info?.report_id ?? null;
-  const selectedId = response.selected_id ?? null;
-  const orderChanged = !!response.order_changed;
-
-  const anyResize = elements.some(
-    (el) => el.width_pct !== 100 || el.height_px != null,
-  );
-  const anyHidden = elements.some((el) => !el.visible);
-  const anySelection = selectedId != null;
-
-  if (!anyResize && !anyHidden && !anySelection && !orderChanged) {
-    return {
-      status: "active_no_edits",
-      report_id: reportId,
-      message:
-        "report is open in edit mode but the user hasn't moved, resized, hidden, or selected anything yet",
-    };
-  }
-
-  return {
-    status: "active",
-    report_id: reportId,
-    elements,
-    selected_id: selectedId,
-    order_changed: orderChanged,
+  // ─── multi-strategy height resolution ────────────────────────────
+  // Measure ONCE at a generous probe height (8000), then derive a
+  // candidate height per strategy. We capture once per strategy ×
+  // technique pair so the user can compare and pick.
+  const PROBE_H = 8000;
+  let extents: Extents = {
+    bodyScroll: 0, deepContent: 0, bokehRoot: 0, generous: 5000,
   };
-});
-
-// ─────────────────────────────────────────────────────────────────────────
-// CLI back-channel primitives — invoked by the FastAPI `/cli/*` routes
-// from local automation (Claude Code, curl, scripts). Deliberately NOT
-// exposed to the in-pane LLM (no ToolSpec wraps them). They give the
-// developer a way to drive the bookmarked page from outside the chat UI.
-// ─────────────────────────────────────────────────────────────────────────
-
-// Single-round-trip page dump: URL + title + full outerHTML. We use a
-// dedicated primitive (rather than chaining get_url + read_dom) because
-// `read_dom` enforces a 200 KB cap suited to LLM consumption. Real-world
-// pages routinely exceed that, and Claude Code handles big payloads
-// fine, so this primitive is uncapped.
-registerPrimitive("get_page_dump", async () => ({
-  url: location.href,
-  title: document.title,
-  pathname: location.pathname,
-  search: location.search,
-  hash: location.hash,
-  html: document.documentElement?.outerHTML ?? "",
-  user_agent: navigator.userAgent,
-  ts: Date.now(),
-}));
-
-// JSON-safe serialiser. Faithfully encodes things JSON.stringify can't:
-// undefined, BigInt, Symbol, functions, Errors, DOM nodes, Map/Set,
-// Date, RegExp, ArrayBuffer/TypedArray, and cyclic graphs. Each
-// non-plain value is wrapped in `{__type, ...}` so the consumer can
-// reconstruct intent. Plain JSON values pass through untouched.
-function _serialize(v: unknown): unknown {
-  const seen = new WeakSet<object>();
-  function walk(x: unknown): unknown {
-    if (x === undefined) return { __type: "undefined" };
-    if (x === null) return null;
-    const t = typeof x;
-    if (t === "string" || t === "boolean") return x;
-    if (t === "number") {
-      const n = x as number;
-      if (!Number.isFinite(n)) return { __type: "Number", value: String(n) };
-      return n;
-    }
-    if (t === "bigint") return { __type: "BigInt", value: String(x) };
-    if (t === "symbol") {
-      const s = x as symbol;
-      return { __type: "Symbol", description: s.description ?? null };
-    }
-    if (t === "function") {
-      const fn = x as { name?: string; toString(): string };
-      let src = "";
-      try {
-        src = fn.toString();
-      } catch {
-        src = "[unsourceable]";
-      }
-      return {
-        __type: "Function",
-        name: fn.name || "(anonymous)",
-        source: src.slice(0, 4096),
-      };
-    }
-    if (t !== "object") return String(x);
-
-    const o = x as object;
-    if (seen.has(o)) return { __type: "Cycle" };
-    seen.add(o);
-
-    if (typeof Element !== "undefined" && o instanceof Element) {
-      const el = o as Element;
-      let outer = "";
-      try {
-        outer = el.outerHTML.slice(0, 8192);
-      } catch {
-        /* some shadow nodes throw */
-      }
-      return {
-        __type: "Element",
-        tagName: el.tagName,
-        id: el.id || null,
-        className:
-          typeof el.className === "string" ? el.className : null,
-        attributes: Array.from(el.attributes).map((a) => ({
-          name: a.name,
-          value: a.value,
-        })),
-        outerHTML: outer,
-        textContent: (el.textContent || "").slice(0, 2048),
-      };
-    }
-    if (typeof Node !== "undefined" && o instanceof Node) {
-      const n = o as Node;
-      return {
-        __type: "Node",
-        nodeName: n.nodeName,
-        nodeValue: n.nodeValue,
-      };
-    }
-    if (o instanceof Error) {
-      return {
-        __type: "Error",
-        name: o.name,
-        message: o.message,
-        stack: o.stack ?? null,
-      };
-    }
-    if (Array.isArray(o)) return o.map(walk);
-    if (o instanceof Map) {
-      return {
-        __type: "Map",
-        entries: Array.from(o.entries()).map(([k, vv]) => [walk(k), walk(vv)]),
-      };
-    }
-    if (o instanceof Set) {
-      return {
-        __type: "Set",
-        values: Array.from(o.values()).map(walk),
-      };
-    }
-    if (o instanceof Date) {
-      return { __type: "Date", value: o.toISOString() };
-    }
-    if (o instanceof RegExp) {
-      return { __type: "RegExp", source: o.source, flags: o.flags };
-    }
-    if (o instanceof ArrayBuffer) {
-      return { __type: "ArrayBuffer", byteLength: o.byteLength };
-    }
-    if (ArrayBuffer.isView(o)) {
-      const tav = o as ArrayBufferView & { length?: number };
-      return {
-        __type: o.constructor?.name ?? "TypedArray",
-        byteLength: tav.byteLength,
-        length: tav.length ?? null,
-      };
-    }
-    // Plain / unknown object — walk own enumerable string keys.
-    const out: Record<string, unknown> = {};
-    let keys: string[];
-    try {
-      keys = Object.keys(o as Record<string, unknown>);
-    } catch {
-      return { __type: "OpaqueObject", constructor: o.constructor?.name ?? null };
-    }
-    for (const k of keys) {
-      try {
-        out[k] = walk((o as Record<string, unknown>)[k]);
-      } catch (e) {
-        out[k] = {
-          __type: "AccessError",
-          message: String((e as Error)?.message ?? e),
-        };
-      }
-    }
-    if (o.constructor && o.constructor.name && o.constructor.name !== "Object") {
-      out.__constructor = o.constructor.name;
-    }
-    return out;
-  }
-  return walk(v);
-}
-
-interface EvalArgs {
-  js?: string;
-  await_ms?: number;
-}
-
-registerPrimitive("eval_js", async (rawArgs) => {
-  const args = rawArgs as EvalArgs;
-  const src = String(args.js ?? "");
-  if (!src) throw new PrimitiveError("invalid_args", "js is required");
-  const awaitMs =
-    typeof args.await_ms === "number" && args.await_ms > 0
-      ? args.await_ms
-      : 30_000;
-
-  // Capture console.log/info/warn/error/debug for the duration of the
-  // eval. We record level + serialised args + timestamp; restore after.
-  const captured: Array<{ level: string; args: unknown[]; ts: number }> = [];
-  const levels = ["log", "info", "warn", "error", "debug"] as const;
-  type ConsoleLevel = (typeof levels)[number];
-  const orig: Partial<Record<ConsoleLevel, (...a: unknown[]) => void>> = {};
-  for (const lv of levels) {
-    orig[lv] = console[lv].bind(console);
-    console[lv] = (...a: unknown[]) => {
-      try {
-        captured.push({
-          level: lv,
-          args: a.map((x) => _serialize(x)),
-          ts: Date.now(),
-        });
-      } catch {
-        /* must not break console */
-      }
-      return orig[lv]!(...a);
+  if (explicitExpand !== null && explicitExpand > 0) {
+    // Explicit override → just one strategy ("explicit").
+    extents = {
+      bodyScroll: explicitExpand,
+      deepContent: 0,
+      bokehRoot: 0,
+      generous: 0,
     };
+  } else {
+    try {
+      extents = await measureExtentsAt(PROBE_H);
+    } catch {
+      // Probe failed; fall back to current iframe height for all.
+      const h = Math.max(iframe.getBoundingClientRect().height || 0, 900);
+      extents = { bodyScroll: h, deepContent: 0, bokehRoot: 0, generous: h };
+    }
   }
 
-  const t0 = performance.now();
-  let value: unknown = undefined;
-  let errorObj: { name: string; message: string; stack: string | null } | null =
-    null;
-  let timedOut = false;
+  // Strategy list: name + height. Skip strategies that returned
+  // unusable heights (< 200 px). Dedupe strategies whose heights
+  // match within 50 px — no point re-rendering the same capture.
+  type Strategy = { name: string; height: number };
+  const allCandidates: Strategy[] = [
+    { name: "body-scroll",  height: extents.bodyScroll },
+    { name: "deep-content", height: extents.deepContent },
+    { name: "bokeh-root",   height: extents.bokehRoot },
+    { name: "generous",     height: extents.generous },
+  ].filter((s) => s.height >= 200);
 
-  try {
-    const AsyncFunction = Object.getPrototypeOf(async function () {})
-      .constructor as new (...a: string[]) => (...a: unknown[]) => Promise<unknown>;
-    const fn = new AsyncFunction(src);
-    const result = fn.call(window);
-    const timeout = new Promise<never>((_, reject) => {
-      setTimeout(
-        () => reject(new Error(`eval_js await_ms timeout after ${awaitMs}ms`)),
-        awaitMs,
+  // Single best strategy: bokeh-root (empirically the cleanest for
+  // Panel/Bokeh reports). If bokeh-root returns no height (a non-
+  // Panel report), fall back to deep-content; if THAT also fails,
+  // fall back to whichever candidate has the largest height.
+  const bokeh = allCandidates.find((s) => s.name === "bokeh-root");
+  const deep = allCandidates.find((s) => s.name === "deep-content");
+  const tallest = [...allCandidates].sort((a, b) => b.height - a.height)[0];
+  const picked = bokeh ?? deep ?? tallest;
+  if (!picked) {
+    restoreIframe();
+    return { error: "no usable height candidates from any strategy" };
+  }
+  const strategies: Strategy[] = [picked];
+
+  // Take one screenshot batch per strategy. The strategy sets the
+  // iframe height + reflows; the shim then runs every technique
+  // against that geometry, uploads each result to /api/screenshot-stash,
+  // and returns only the stash IDs through postMessage. The bytes
+  // never traverse the chainlit socket so multi-MB PNGs ship fine.
+  const allStashIds: Array<Record<string, unknown>> = [];
+  const allErrors: Array<{ label: string; message: string; ms?: number }> = [];
+
+  // Per-strategy capture. Each call uses its own ``rid`` so stale
+  // responses from a previous strategy can't be picked up by the
+  // current listener. The legacy ``requestId`` from the outer scope
+  // would have caused cross-talk in the multi-strategy loop —
+  // first response wins, subsequent listeners would match it too.
+  let captureCounter = 0;
+  function captureAtHeight(): Promise<ScreenshotMultiResponse | null> {
+    const rid = `${requestId}_s${++captureCounter}`;
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        window.removeEventListener("message", onMsg);
+        console.warn(`[screenshot] strategy capture timed out (rid=${rid})`);
+        resolve(null);
+      }, timeout);
+      function onMsg(e: MessageEvent) {
+        const d = e.data as ScreenshotMultiResponse | null;
+        if (
+          !d ||
+          d.type !== "voitta_report_event" ||
+          d.kind !== "screenshot_multi_response" ||
+          d.requestId !== rid
+        ) return;
+        if (e.source !== iframe.contentWindow) return;
+        clearTimeout(t);
+        window.removeEventListener("message", onMsg);
+        resolve(d);
+      }
+      window.addEventListener("message", onMsg);
+      iframe.contentWindow!.postMessage(
+        {
+          voittaAction: "screenshot_multi",
+          requestId: rid,
+          scale, quality, format,
+          settle_ms: expandSettleMs,
+        },
+        "*",
       );
     });
-    value = await Promise.race([result, timeout]);
-  } catch (e) {
-    const err = e as { name?: string; message?: string; stack?: string };
-    errorObj = {
-      name: err?.name || "Error",
-      message: err?.message || String(e),
-      stack: err?.stack ?? null,
-    };
-    if (errorObj.message.includes("await_ms timeout")) timedOut = true;
-  } finally {
-    for (const lv of levels) {
-      if (orig[lv]) console[lv] = orig[lv]!;
-    }
   }
-  const elapsed_ms = Math.round(performance.now() - t0);
-  return {
-    ok: errorObj === null,
-    value: _serialize(value),
-    console: captured,
-    elapsed_ms,
-    timed_out: timedOut,
-    error: errorObj,
-  };
-});
 
+  console.info(
+    `[screenshot] starting capture across ${strategies.length} strategies`,
+    strategies,
+  );
+  try {
+    for (const strat of strategies) {
+      const sT0 = performance.now();
+      console.info(`[screenshot] → strategy="${strat.name}" h=${strat.height}`);
+      setIframeHeight(strat.height);
+      await reflowIframe();
+      await new Promise((r) => setTimeout(r, expandSettleMs));
+      const res = await captureAtHeight();
+      const sT1 = performance.now();
+      if (!res || !res.ok || !Array.isArray(res.results)) {
+        console.warn(
+          `[screenshot] strategy="${strat.name}" failed (${Math.round(sT1 - sT0)}ms):`,
+          res?.message,
+        );
+        allErrors.push({
+          label: `${strat.name}__all`,
+          message: res?.message || "screenshot_multi returned ok=false",
+        });
+        continue;
+      }
+      console.info(
+        `[screenshot] strategy="${strat.name}" got ${res.results.length} techniques (${Math.round(sT1 - sT0)}ms):`,
+        res.results.map((r) => `${r.label}=${r.ok ? "ok" : "FAIL:" + r.message}`).join("  "),
+      );
+      for (const r of res.results) {
+        const composedLabel = `${strat.name}__${r.label}`;
+        if (r.ok && r.stash_id) {
+          allStashIds.push({
+            label: composedLabel,
+            strategy: strat.name,
+            technique: r.label,
+            target_height: strat.height,
+            stash_id: r.stash_id,
+            media_type: r.media_type ?? "image/png",
+            width: r.width,
+            height: r.height,
+            ms: r.ms,
+            bytes_b64_len: r.bytes_b64_len,
+          });
+        } else {
+          allErrors.push({
+            label: composedLabel,
+            message: r.message || "unknown failure",
+            ms: r.ms,
+          });
+        }
+      }
+    }
+  } finally {
+    restoreIframe();
+  }
+  console.info(
+    `[screenshot] complete — ${allStashIds.length} ok, ${allErrors.length} failed`,
+  );
+
+  // ``_images_stash`` sentinel: the agent loop calls /api/screenshot-stash/...
+  // for each id, attaches the bytes to the Chainlit step as inline
+  // elements, and evicts. NO bytes traverse the socket — only the
+  // (tiny) id list. The LLM sees the metadata summary only.
+  return {
+    ok: allStashIds.length > 0,
+    _images_stash: allStashIds,
+    errors: allErrors.length ? allErrors : undefined,
+    strategies: strategies.map((s) => ({ name: s.name, height: s.height })),
+    techniques_per_strategy: 3,
+    total_captures: allStashIds.length,
+  };
+}
+
+async function screenshotReport(rawArgs: Record<string, unknown>): Promise<unknown> {
+  // Every report is an HTML iframe — the shadow-DOM fallback path
+  // was removed when we collapsed the kind hierarchy to "html only".
+  const args = (rawArgs || {}) as ScreenshotArgs;
+  const iframe = findReportIframe();
+  if (!iframe) {
+    return { error: "no report mounted (iframe.report-panel-iframe not found)" };
+  }
+  return screenshotPanelIframe(iframe, args);
+}
+
+async function getPageDump(): Promise<unknown> {
+  // Snapshot of the host page for the MCP ``mcp_page`` debugging tool.
+  // Returns enough to inspect any page state without a separate eval
+  // round-trip. No size cap on ``html`` — the caller decides what to
+  // do with multi-MB DOMs.
+  return {
+    ok: true,
+    url: location.href,
+    title: document.title,
+    host: location.host,
+    pathname: location.pathname,
+    search: location.search,
+    hash: location.hash,
+    user_agent: navigator.userAgent,
+    html: document.documentElement.outerHTML,
+    ts: Date.now(),
+  };
+}
+
+async function evalJs(args: Record<string, unknown>): Promise<unknown> {
+  // Evaluate arbitrary JS in the bookmarklet's page context. Wraps the
+  // body in an AsyncFunction so ``await`` at top level works and
+  // ``return X`` ships ``X`` back. Console output is captured.
+  // ``await_ms`` is advisory — we honour it as a hard timeout via
+  // Promise.race so a runaway script can't hang the call_fn round-trip.
+  const js = String(args?.js ?? "");
+  const awaitMs = Number(args?.await_ms ?? 30_000) || 30_000;
+  if (!js) return { ok: false, error: "bad_request", message: "js is required" };
+
+  const logs: { level: string; args: unknown[] }[] = [];
+  const wrap = (level: string, orig: (...a: unknown[]) => void) =>
+    (...a: unknown[]) => {
+      try { logs.push({ level, args: a.map((x) => safeStringify(x)) }); } catch { /* noop */ }
+      try { orig.apply(console, a); } catch { /* noop */ }
+    };
+  const origLog = console.log, origWarn = console.warn, origErr = console.error;
+  console.log = wrap("log", origLog);
+  console.warn = wrap("warn", origWarn);
+  console.error = wrap("error", origErr);
+
+  const t0 = performance.now();
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const AsyncFn = (async function () {}).constructor as new (body: string) => () => Promise<unknown>;
+    const fn = new AsyncFn(js);
+    const result = await Promise.race([
+      Promise.resolve().then(() => fn()),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`eval timed out after ${awaitMs}ms`)), awaitMs),
+      ),
+    ]);
+    return {
+      ok: true,
+      result: safeStringify(result),
+      logs,
+      ms: Math.round(performance.now() - t0),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: "eval_threw",
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      logs,
+      ms: Math.round(performance.now() - t0),
+    };
+  } finally {
+    console.log = origLog;
+    console.warn = origWarn;
+    console.error = origErr;
+  }
+}
+
+function safeStringify(v: unknown): unknown {
+  // Try to make ``v`` JSON-serialisable. Functions, DOM nodes,
+  // circular structures all get a string fallback.
+  try {
+    JSON.stringify(v);
+    return v;
+  } catch {
+    try { return String(v); } catch { return "[unstringifiable]"; }
+  }
+}
+
+import { installDevtoolsCapture, getDevtoolsData, clearDevtoolsData } from "./devtools";
+
+export const primitives: Record<string, Primitive> = {
+  get_page_title: () => ({ title: document.title }),
+  screenshot_report: (args) => screenshotReport(args),
+  get_page_dump: () => getPageDump(),
+  eval_js: (args) => evalJs(args),
+  // Devtools capture — install interceptors then poll for data via MCP.
+  install_devtools_capture: () => installDevtoolsCapture(),
+  get_devtools_data: (args) => getDevtoolsData(args as Parameters<typeof getDevtoolsData>[0]),
+  clear_devtools_data: () => clearDevtoolsData(),
+};
+
+// Plugin entry point. Each plugin's ``frontend/widget.ts`` is
+// glob-imported by ``widget.tsx`` and registers its browser-side tools
+// here. Primitive names live in a flat namespace — plugin authors
+// should pick distinctive ones. We warn on collision rather than throw
+// so a buggy plugin doesn't take the whole widget down.
+export function registerPrimitive(name: string, fn: Primitive): void {
+  if (primitives[name] !== undefined) {
+    console.warn(`[voitta] primitive "${name}" already registered; overwriting`);
+  }
+  primitives[name] = fn;
+}

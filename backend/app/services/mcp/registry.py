@@ -292,11 +292,10 @@ async def refresh_one(conn: MCPConnector) -> MCPConnector:
     """
     decl = conn.decl
     url = _read_url(decl)
+    _logger.info("refresh_one: plugin=%s connector=%s url=%r", decl.plugin_name, decl.id, url)
     if not url:
         conn.status = "not_configured"
         conn.last_error = None
-        # Wipe any tools left over from a prior good state — they'd
-        # 500 on every call otherwise.
         _drop_owned_tools(conn)
         return conn
 
@@ -359,8 +358,8 @@ async def refresh_one(conn: MCPConnector) -> MCPConnector:
     conn.status = "ok"
     conn.last_error = None
     _logger.info(
-        "mcp refresh ok: plugin=%s connector=%s tools=%d",
-        decl.plugin_name, decl.id, len(registered),
+        "mcp refresh ok: plugin=%s connector=%s host_pattern=%r tools=%d: %s",
+        decl.plugin_name, decl.id, host_pattern, len(registered), registered,
     )
     return conn
 

@@ -1,17 +1,15 @@
 """Lazy-loaded singletons for the RAG indexes (dense Chroma + sparse BM25).
 
-The chat backend may run for a long time without anyone calling rag_query,
-so we don't open Chroma or load BM25 at startup. The first call lazily
-opens both, then subsequent calls reuse the same handles. Indexes are
-read-only; rebuilds happen out-of-process via ``rag/build_*.py``.
+The chat backend may run for a long time without anyone calling
+``rag_query``, so we don't open Chroma or load BM25 at startup. The
+first call lazily opens both, then subsequent calls reuse the same
+handles. Indexes are read-only at runtime; rebuilds happen
+out-of-process via ``scripts/build_rag.py``.
 
-Two corpora are supported, each with its own pair of index directories so
-they never collide:
-
-* ``"docs"``  — the project's own ``docs/`` markdown, built by
-                 ``rag/build_rag.py``.
-* ``"panel"`` — the holoviz/panel source tree at ``libs-info/panel/``,
-                 built by ``rag/build_panel_rag.py``.
+Phase 1 ships a single corpus, ``"docs"``. ``CORPORA`` is a dict so a
+second corpus (e.g. a Panel-source corpus, a third-party-library
+corpus) can be added with one entry plus a builder. The shape is
+preserved for forward-compat.
 """
 
 from __future__ import annotations
@@ -22,36 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-from app.config import PROJECT_ROOT
-
-# In source-checkout mode PROJECT_ROOT is the repo root, so rag/ already
-# exists with the dev's pre-built indexes. In packaged-.app mode
-# PROJECT_ROOT is the user data dir (writable) and rag/ is created here
-# at first-launch by the installer. Either way, rag_query reads from
-# the same place — keeps the runtime path resolution flat.
-RAG_DIR = PROJECT_ROOT / "rag"
-
-
-def docs_source_dir() -> Path:
-    """Return the read-only docs/ directory the indexer should walk.
-
-    Source-checkout: ``<repo>/docs/``. Packaged .app: the docs are
-    staged into ``src/voitta/resources/docs/`` by ``build_app.sh``,
-    which briefcase auto-includes as package data; we resolve via
-    importing ``voitta``.
-    """
-    candidate = PROJECT_ROOT / "docs"
-    if candidate.is_dir():
-        return candidate
-    try:
-        import voitta
-        bundled = Path(voitta.__file__).resolve().parent / "resources" / "docs"
-        if bundled.is_dir():
-            return bundled
-    except ImportError:
-        pass
-    return Path(__file__).resolve().parents[4] / "docs"
+from app.config import RAG_DIR
 
 
 @dataclass(frozen=True)
@@ -69,14 +38,25 @@ CORPORA: dict[str, CorpusConfig] = {
         chroma_dir=RAG_DIR / ".chroma",
         bm25_dir=RAG_DIR / ".bm25",
         collection_name="docs",
-        description="this project's own docs/ markdown (overview, architecture, providers, tool catalogue, bridge protocol)",
+        description=(
+            "this project's own docs/ markdown (overview, architecture, "
+            "frontend, providers, tool catalogue, plugins, reports) plus "
+            "every plugin's docs/ tree"
+        ),
     ),
-    "panel": CorpusConfig(
-        name="panel",
-        chroma_dir=RAG_DIR / ".chroma_panel",
-        bm25_dir=RAG_DIR / ".bm25_panel",
-        collection_name="panel_source",
-        description="the holoviz/panel library source tree at libs-info/panel/ — Python source, official docs, and examples",
+    "code": CorpusConfig(
+        name="code",
+        chroma_dir=RAG_DIR / ".chroma_code",
+        bm25_dir=RAG_DIR / ".bm25_code",
+        collection_name="code",
+        description=(
+            "source code of vendored libraries under lib-sources/ "
+            "(holoviews, panel, elkjs, three.js). "
+            "Python chunks are AST-bounded (module / class / function / "
+            "method); JS/TS chunks are regex-bounded at top-level "
+            "function and class boundaries. Each chunk carries repo, "
+            "path, file, lang, kind, and symbol metadata."
+        ),
     ),
 }
 
@@ -118,25 +98,56 @@ def _resolve(corpus: str) -> CorpusConfig:
 
 
 def _ensure_built(cfg: CorpusConfig) -> None:
+    """Verify the three on-disk pieces an index needs: the Chroma
+    persistent dir, the BM25 dir, and the BM25 manifest. If any is
+    missing OR the BM25 dir is empty (the most common 'half-built'
+    state — chroma rebuilt but bm25 never finished or was wiped), we
+    raise a diagnostic ``RagNotBuilt`` that names which piece is
+    missing and the exact rebuild command for THIS corpus."""
     manifest_path = cfg.bm25_dir / "manifest.json"
-    if not cfg.chroma_dir.exists() or not cfg.bm25_dir.exists() or not manifest_path.exists():
-        builder = "build_rag.py" if cfg.name == "docs" else "build_panel_rag.py"
-        raise RagNotBuilt(
-            f"RAG index for corpus {cfg.name!r} not built. "
-            f"Run: python {RAG_DIR / builder}"
-        )
+    chroma_present = cfg.chroma_dir.exists() and any(cfg.chroma_dir.iterdir()) if cfg.chroma_dir.exists() else False
+    bm25_dir_present = cfg.bm25_dir.exists()
+    bm25_files_present = bm25_dir_present and any(cfg.bm25_dir.iterdir())
+    manifest_present = manifest_path.exists()
+
+    if chroma_present and bm25_files_present and manifest_present:
+        return
+
+    missing: list[str] = []
+    if not chroma_present:
+        missing.append(f"chroma_dir={cfg.chroma_dir}")
+    if not bm25_files_present:
+        missing.append(f"bm25_dir={cfg.bm25_dir} (empty)" if bm25_dir_present else f"bm25_dir={cfg.bm25_dir}")
+    if not manifest_present:
+        missing.append(f"manifest={manifest_path}")
+
+    fully_absent = (
+        not chroma_present
+        and not bm25_dir_present
+        and not manifest_present
+    )
+    if fully_absent:
+        state_desc = "never built"
+    else:
+        state_desc = "partial / stale — some pieces present, others missing"
+
+    raise RagNotBuilt(
+        f"RAG index for corpus {cfg.name!r} not usable ({state_desc}).\n"
+        f"Missing: {', '.join(missing)}\n"
+        f"Fix: python scripts/build_rag.py --corpus {cfg.name}"
+    )
 
 
 def load(corpus: str = DEFAULT_CORPUS) -> State:
     """Open Chroma + bm25s indexes for *corpus* (idempotent, thread-safe)."""
-
     cfg = _resolve(corpus)
     with _lock:
         st = _states.get(corpus)
         if st is not None:
             return st
         _ensure_built(cfg)
-        # Heavy imports here.
+        # Heavy imports here so module import stays cheap when RAG
+        # isn't touched.
         import bm25s
         import chromadb
         from chromadb.config import Settings
@@ -183,7 +194,7 @@ def load(corpus: str = DEFAULT_CORPUS) -> State:
 
 
 def index_status(corpus: str | None = None) -> dict:
-    """Diagnostic for /health-style routes.
+    """Diagnostic for ``/health``-style routes.
 
     With no argument, reports status for all corpora.
     """
@@ -202,3 +213,9 @@ def index_status(corpus: str | None = None) -> dict:
             "bm25_dir": str(cfg.bm25_dir),
         }
     return {name: index_status(name) for name in CORPORA}
+
+
+def _reset_for_tests() -> None:
+    """Drop cached State so tests with a fresh ``RAG_DIR`` re-open."""
+    with _lock:
+        _states.clear()

@@ -1,0 +1,825 @@
+Date/Time:       2026-05-22 11:11:14 
+Command line:    /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/briefcase create macOS app
+
+OS Release:      Darwin 24.6.0
+OS Version:      Darwin Kernel Version 24.6.0: Wed Nov  5 21:34:00 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8132
+Architecture:    arm64
+Platform:        macOS-15.7.3-arm64-arm-64bit
+
+Python exe:      /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3
+Python version:  3.12.10 (main, Feb  1 2026, 16:47:11) [Clang 17.0.0 (clang-1700.0.13.5)]
+Virtual env:     True
+Conda env:       False
+
+Briefcase:       0.4.2
+Target platform: macOS
+Target format:   app
+
+Environment Variables:
+	AI_AGENT=claude-code_2-1-144_agent
+	ANTHROPIC_BASE_URL=http://127.0.0.1:18901
+	BUN_INSTALL=/Users/roman/.bun
+	CLAUDECODE=1
+	CLAUDE_AGENT_SDK_VERSION=0.3.143
+	CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true
+	CLAUDE_CODE_ENABLE_TASKS=0
+	CLAUDE_CODE_ENTRYPOINT=claude-vscode
+	CLAUDE_CODE_EXECPATH=/Users/roman/.local/share/claude/versions/2.1.144
+	CLAUDE_CODE_SESSION_ID=ca921529-b27b-4b45-b628-f012879333d3
+	CLAUDE_EFFORT=medium
+	COMMAND_MODE=unix2003
+	COREPACK_ENABLE_AUTO_PIN=0
+	CPPFLAGS=-I/opt/homebrew/opt/icu4c/include
+	DISPLAY=/private/tmp/com.apple.launchd.Oze3wNeZtv/org.xquartz:0
+	ELECTRON_RUN_AS_NODE=1
+	ENABLE_TOOL_SEARCH=true
+	FPATH=/opt/homebrew/share/zsh/site-functions:/usr/local/share/zsh/site-functions:/usr/share/zsh/site-functions:/usr/share/zsh/5.9/functions
+	GIT_EDITOR=true
+	HOME=/Users/roman
+	HOMEBREW_CELLAR=/opt/homebrew/Cellar
+	HOMEBREW_PREFIX=/opt/homebrew
+	HOMEBREW_REPOSITORY=/opt/homebrew
+	INFOPATH=/opt/homebrew/share/info:
+	JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+	LC_CTYPE=C.UTF-8
+	LDFLAGS=-L/opt/homebrew/opt/icu4c/lib
+	LOGNAME=roman
+	LaunchInstanceID=149C5D62-A25D-40DA-A799-4B52FB1D0286
+	MACH_PORT_RENDEZVOUS_PEER_VALDATION=0
+	MCP_CONNECTION_NONBLOCKING=true
+	MallocNanoZone=0
+	NVM_BIN=/Users/roman/.nvm/versions/node/v22.15.0/bin
+	NVM_CD_FLAGS=-q
+	NVM_DIR=/Users/roman/.nvm
+	NVM_INC=/Users/roman/.nvm/versions/node/v22.15.0/include/node
+	NoDefaultCurrentDirectoryInExePath=1
+	OLDPWD=/Users/roman/DEVEL/voitta-bookmarklet-chainlit/frontend
+	PATH=/Users/roman/.pyenv/versions/3.12.10/bin:/Users/roman/.local/bin:/Users/roman/.bun/bin:/Users/roman/.antigravity/antigravity/bin:/opt/homebrew/opt/icu4c/bin:/Users/roman/.nvm/versions/node/v22.15.0/bin:/Users/roman/.pyenv/shims:/Users/roman/.pyenv/bin:/opt/homebrew/opt/openjdk@17/bin:/opt/homebrew/opt/postgresql@16/bin:/opt/homebrew/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/X11/bin:/Library/TeX/texbin:/usr/local/share/dotnet:~/.dotnet/tools:/Users/roman/.local/bin:/Users/roman/.bun/bin:/Users/roman/.antigravity/antigravity/bin:/opt/homebrew/opt/icu4c/bin:/Users/roman/.nvm/versions/node/v22.15.0/bin:/Users/roman/.pyenv/bin:/opt/homebrew/opt/openjdk@17/bin:/opt/homebrew/opt/postgresql@16/bin:/Users/roman/.cargo/bin:/Users/roman/.claude/plugins/cache/claude-plugins-official/clangd-lsp/1.0.0/bin
+	PKG_CONFIG_PATH=/opt/homebrew/opt/icu4c/lib/pkgconfig:
+	PWD=/Users/roman/DEVEL/voitta-bookmarklet-chainlit
+	PYENV_ROOT=/Users/roman/.pyenv
+	PYENV_SHELL=zsh
+	SECURITYSESSIONID=186a5
+	SHELL=/bin/zsh
+	SHLVL=2
+	SSH_AUTH_SOCK=/private/tmp/com.apple.launchd.bQDz5Xa17s/Listeners
+	TMPDIR=/var/folders/10/lxyrrksj58g91rrr91ncslx80000gn/T/
+	USER=roman
+	VIRTUAL_ENV=/Users/roman/.pyenv/versions/3.12.10
+	VSCODE_CODE_CACHE_PATH=/Users/roman/Library/Application Support/Code/CachedData/560a9dba96f961efea7b1612916f89e5d5d4d679
+	VSCODE_CRASH_REPORTER_PROCESS_TYPE=extensionHost
+	VSCODE_CWD=/
+	VSCODE_ESM_ENTRYPOINT=vs/workbench/api/node/extensionHostProcess
+	VSCODE_HANDLES_UNCAUGHT_ERRORS=true
+	VSCODE_IPC_HOOK=/Users/roman/Library/Application Support/Code/1.11-main.sock
+	VSCODE_L10N_BUNDLE_LOCATION=
+	VSCODE_NLS_CONFIG={"userLocale":"en-us","osLocale":"en-us","resolvedLanguage":"en","defaultMessagesFile":"/Applications/Visual Studio Code.app/Contents/Resources/app/out/nls.messages.json","locale":"en-us","availableLanguages":{}}
+	VSCODE_PID=608
+	XPC_FLAGS=0x0
+	XPC_SERVICE_NAME=0
+	_=/Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/briefcase
+	__CFBundleIdentifier=com.microsoft.VSCode
+	__CF_USER_TEXT_ENCODING=0x1F5:0x0:0x0
+
+pyproject.toml:
+# Repo-root briefcase manifest.
+#
+# briefcase reads pyproject.toml from CWD and writes build/ + dist/ next
+# to it, so this file lives at the repo root. Backend Python deps and
+# tests still live in backend/pyproject.toml; this file is briefcase-only.
+#
+# build_app.sh cd's here before invoking briefcase, using the same
+# backend/.venv that build.sh set up.
+
+[tool.briefcase]
+project_name = "Voitta"
+bundle = "ai.voitta"
+version = "0.1.1"
+url = "https://voitta.ai"
+license.text = "GNU Affero General Public License v3 or later (AGPLv3+)"
+author = "Voitta"
+author_email = "info@voitta.ai"
+
+[tool.briefcase.app.voitta-chainlit]
+# formal_name → .app filename ("Voitta Chainlit.app") and DMG name.
+# The table key ("voitta-chainlit") becomes the build-dir slug.
+formal_name = "Voitta Chainlit"
+description = "Local Chainlit-based AI assistant with bookmarklet injection."
+icon = "icons/voitta"
+long_description = """
+Voitta Chainlit runs a local Chainlit + FastAPI backend accessible via
+a browser bookmarklet on any HTTPS page. macOS menu-bar shell, no Dock icon.
+"""
+
+# Paths relative to this pyproject.toml (repo root).
+# - src/voitta_chainlit  : briefcase shim + bundled resources
+# - backend/app          : the actual application code
+# - scripts              : build_rag.py (importable by app.rag_build at runtime)
+sources = [
+    "src/voitta_chainlit",
+    "backend/app",
+    "scripts",
+]
+
+# Run-time deps shipped INSIDE the bundle. Heavy scientific packages
+# (scipy, pandas, matplotlib, plotly, chromadb) are NOT here — they are
+# pip-installed on first launch into ~/Library/Application Support/Voitta Chainlit/
+# userbase/ by app.installer. This keeps the bundle under ~350 MB.
+#
+# pip + setuptools + wheel are bundled so the first-run installer can call
+# pip._internal.cli.main without bootstrapping.
+requires = [
+    # Server
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    # Chat framework — must be in bundle; Chainlit imports happen at startup.
+    "chainlit>=2.0.0",
+    # LLM providers
+    "anthropic>=0.39",
+    "openai>=1.50",
+    "google-genai>=0.3",
+    # MCP (imports at module load, before installer can run)
+    "fastmcp>=2.0",
+    # RAG sparse index — lightweight, no C extensions
+    "bm25s>=0.2.6",
+    "PyStemmer>=2.2.0",
+    # Utilities
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "pypdf>=5.0",
+    "python-multipart",
+    # macOS menu-bar
+    "./wheels/rumps-0.4.0-py3-none-any.whl",
+    "pyobjc-framework-Cocoa>=10.0",
+    # Installer bootstrap
+    "pip",
+    "setuptools",
+    "wheel",
+]
+
+[tool.briefcase.app.voitta-chainlit.macOS]
+# arm64 only — universal2 doubles bundle size and scientific wheels
+# default to arm64-only anyway.
+universal_build = false
+# Sonoma is Apple's current security floor and the minimum for
+# the scientific stack wheels we lazy-install.
+min_os_version = "14.0"
+# LSUIElement = menu-bar only, no Dock icon.
+info."LSUIElement" = true
+info."NSHumanReadableCopyright" = "© Voitta"
+
+# ---- hardened runtime entitlements (required for notarisation) ----------
+#
+# • allow-jit: Python bytecode mprotects RWX pages; killed without this.
+# • allow-unsigned-executable-memory: catches the same in C extensions.
+# • disable-library-validation: we vendor ~80 C extensions signed by
+#   their wheel builders, not by our team ID. Standard Python-app pattern.
+# • allow-dyld-environment-variables: briefcase stub sets DYLD_FRAMEWORK_PATH
+#   so the bundled Python.framework is preferred; hardened runtime strips
+#   DYLD_* vars by default.
+entitlement."com.apple.security.cs.allow-jit" = true
+entitlement."com.apple.security.cs.allow-unsigned-executable-memory" = true
+entitlement."com.apple.security.cs.disable-library-validation" = true
+entitlement."com.apple.security.cs.allow-dyld-environment-variables" = true
+
+Briefcase Log:
+[11:11:02]                                                                                                                                                             config.py:951
+           *******************************************************************************                                                                             config.py:951
+           ** WARNING: 'voitta-chainlit' uses PEP 621 `license.text` format             **                                                                             config.py:951
+           *******************************************************************************                                                                             config.py:951
+                                                                                                                                                                       config.py:951
+               Briefcase now uses PEP 639 format for license definitions.                                                                                              config.py:951
+                                                                                                                                                                       config.py:951
+               PEP 639 requires the definition of both `license` and `license-files`,                                                                                  config.py:951
+               and `license` must be a valid SPDX expression. The current value for                                                                                    config.py:951
+               `license.text` seems to define a SPDX license of 'GPL-3.0+'.                                                                                            config.py:951
+                                                                                                                                                                       config.py:951
+               Your project will not have a value for `license-files`. This will                                                                                       config.py:951
+               cause problems packaging for some platforms.                                                                                                            config.py:951
+                                                                                                                                                                       config.py:951
+               Update your configuration to put the full license text in a file and use                                                                                config.py:951
+               PEP 639 format for the license definition:                                                                                                              config.py:951
+                                                                                                                                                                       config.py:951
+                   license = "GPL-3.0+"                                                                                                                                config.py:951
+                   license-files = ["LICENSE"]                                                                                                                         config.py:951
+                                                                                                                                                                       config.py:951
+               You should not release your project without resolving this warning.                                                                                     config.py:951
+                                                                                                                                                                       config.py:951
+           *******************************************************************************                                                                             config.py:951
+                                                                                                                                                                       create.py:961
+           [voitta-chainlit] Generating application template...                                                                                                        create.py:961
+           Using app template: https://github.com/beeware/briefcase-macOS-app-template.git, branch v0.4.2                                                               base.py:1354
+           Using existing template (sha bf39615e9589614fc01a9e41587bb0807c40c88e, updated Mon Mar 23 23:44:16 2026)                                                     base.py:1255
+[11:11:03]                                                                                                                                                         subprocess.py:844
+           >>> Running Command:                                                                                                                                    subprocess.py:844
+           >>>     xattr -p 'com.apple.fileprovider.fpfs#P' '/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app'   subprocess.py:844
+           >>> Working Directory:                                                                                                                                  subprocess.py:844
+           >>>     /Users/roman/DEVEL/voitta-bookmarklet-chainlit                                                                                                  subprocess.py:844
+           >>> Command Output:                                                                                                                                     subprocess.py:844
+           >>>     xattr: /Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app: No such xattr:                       subprocess.py:844
+           com.apple.fileprovider.fpfs#P                                                                                                                                            
+           >>> Return code: 1                                                                                                                                      subprocess.py:844
+                                                                                                                                                                   subprocess.py:844
+                                                                                                                                                                       create.py:983
+           [voitta-chainlit] Installing support package...                                                                                                             create.py:983
+           Using support package https://briefcase-support.s3.amazonaws.com/python/3.12/macOS/Python-3.12-macOS-support.b8.tar.gz                                      create.py:386
+           Python-3.12-macOS-support.b8.tar.gz already downloaded                                                                                                        file.py:226
+           Unpacking support package... started                                                                                                                        create.py:301
+[11:11:04] Unpacking support package... done                                                                                                                           create.py:301
+           Copying standard library into app bundle... started                                                                                                             app.py:66
+[11:11:05] Copying standard library into app bundle... done                                                                                                                app.py:66
+                                                                                                                                                                       create.py:994
+           [voitta-chainlit] Installing stub binary...                                                                                                                 create.py:994
+           Using stub binary https://briefcase-support.s3.amazonaws.com/python/3.12/macOS/GUI-Stub-3.12-b13.zip                                                        create.py:497
+           GUI-Stub-3.12-b13.zip already downloaded                                                                                                                      file.py:226
+           Installing stub binary... started                                                                                                                           create.py:442
+           Installing stub binary... done                                                                                                                              create.py:442
+                                                                                                                                                                      create.py:1001
+           [voitta-chainlit] Installing application code...                                                                                                           create.py:1001
+           Installing src/voitta_chainlit... started                                                                                                                   create.py:757
+[11:11:09] Installing src/voitta_chainlit... done                                                                                                                      create.py:757
+           Installing backend/app... started                                                                                                                           create.py:757
+           Installing backend/app... done                                                                                                                              create.py:757
+           Installing scripts... started                                                                                                                               create.py:757
+           Installing scripts... done                                                                                                                                  create.py:757
+                                                                                                                                                                      create.py:1004
+           [voitta-chainlit] Installing requirements...                                                                                                               create.py:1004
+           Installing app requirements... started                                                                                                                      create.py:680
+                                                                                                                                                                   subprocess.py:844
+           >>> Running Command:                                                                                                                                    subprocess.py:844
+           >>>     /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3 -u -X utf8 -m pip install --disable-pip-version-check --upgrade        subprocess.py:844
+           --no-user '--target=/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages'                  
+           --only-binary :all: --platform macosx_14_0_arm64 'fastapi>=0.115' 'uvicorn[standard]>=0.30' 'pydantic>=2.7' 'httpx>=0.27' 'chainlit>=2.0.0'                              
+           'anthropic>=0.39' 'openai>=1.50' 'google-genai>=0.3' 'fastmcp>=2.0' 'bm25s>=0.2.6' 'PyStemmer>=2.2.0' 'numpy>=1.26' 'pillow>=10.0' 'pypdf>=5.0'                          
+           python-multipart ./wheels/rumps-0.4.0-py3-none-any.whl 'pyobjc-framework-Cocoa>=10.0' pip setuptools wheel                                                               
+           >>> Working Directory:                                                                                                                                  subprocess.py:844
+           >>>     /Users/roman/DEVEL/voitta-bookmarklet-chainlit                                                                                                  subprocess.py:844
+           Processing ./wheels/rumps-0.4.0-py3-none-any.whl                                                                                                        subprocess.py:196
+           Collecting fastapi>=0.115                                                                                                                               subprocess.py:196
+             Using cached fastapi-0.136.1-py3-none-any.whl.metadata (28 kB)                                                                                        subprocess.py:196
+           Collecting uvicorn>=0.30 (from uvicorn[standard]>=0.30)                                                                                                 subprocess.py:196
+             Using cached uvicorn-0.47.0-py3-none-any.whl.metadata (6.7 kB)                                                                                        subprocess.py:196
+           Collecting pydantic>=2.7                                                                                                                                subprocess.py:196
+             Using cached pydantic-2.13.4-py3-none-any.whl.metadata (109 kB)                                                                                       subprocess.py:196
+           Collecting httpx>=0.27                                                                                                                                  subprocess.py:196
+             Using cached httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)                                                                                          subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Using cached chainlit-2.11.1-py3-none-any.whl.metadata (8.1 kB)                                                                                       subprocess.py:196
+           Collecting anthropic>=0.39                                                                                                                              subprocess.py:196
+[11:11:10]   Downloading anthropic-0.104.0-py3-none-any.whl.metadata (3.2 kB)                                                                                      subprocess.py:196
+           Collecting openai>=1.50                                                                                                                                 subprocess.py:196
+             Downloading openai-2.38.0-py3-none-any.whl.metadata (31 kB)                                                                                           subprocess.py:196
+           Collecting google-genai>=0.3                                                                                                                            subprocess.py:196
+             Downloading google_genai-2.6.0-py3-none-any.whl.metadata (52 kB)                                                                                      subprocess.py:196
+           Collecting fastmcp>=2.0                                                                                                                                 subprocess.py:196
+             Using cached fastmcp-3.3.1-py3-none-any.whl.metadata (8.2 kB)                                                                                         subprocess.py:196
+           Collecting bm25s>=0.2.6                                                                                                                                 subprocess.py:196
+             Using cached bm25s-0.3.9-py3-none-any.whl.metadata (29 kB)                                                                                            subprocess.py:196
+           Collecting PyStemmer>=2.2.0                                                                                                                             subprocess.py:196
+             Downloading pystemmer-3.1.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (4.1 kB)                                                                       subprocess.py:196
+           Collecting numpy>=1.26                                                                                                                                  subprocess.py:196
+             Downloading numpy-2.4.6-cp312-cp312-macosx_14_0_arm64.whl.metadata (6.6 kB)                                                                           subprocess.py:196
+[11:11:11] Collecting pillow>=10.0                                                                                                                                 subprocess.py:196
+             Using cached pillow-12.2.0-cp312-cp312-macosx_11_0_arm64.whl.metadata (8.8 kB)                                                                        subprocess.py:196
+           Collecting pypdf>=5.0                                                                                                                                   subprocess.py:196
+             Downloading pypdf-6.12.1-py3-none-any.whl.metadata (7.2 kB)                                                                                           subprocess.py:196
+           Collecting python-multipart                                                                                                                             subprocess.py:196
+             Using cached python_multipart-0.0.29-py3-none-any.whl.metadata (2.1 kB)                                                                               subprocess.py:196
+           Collecting pyobjc-framework-Cocoa>=10.0                                                                                                                 subprocess.py:196
+             Using cached pyobjc_framework_cocoa-12.1-cp312-cp312-macosx_10_13_universal2.whl.metadata (2.6 kB)                                                    subprocess.py:196
+           Collecting pip                                                                                                                                          subprocess.py:196
+             Using cached pip-26.1.1-py3-none-any.whl.metadata (4.6 kB)                                                                                            subprocess.py:196
+           Collecting setuptools                                                                                                                                   subprocess.py:196
+             Using cached setuptools-82.0.1-py3-none-any.whl.metadata (6.5 kB)                                                                                     subprocess.py:196
+           Collecting wheel                                                                                                                                        subprocess.py:196
+             Using cached wheel-0.47.0-py3-none-any.whl.metadata (2.3 kB)                                                                                          subprocess.py:196
+           Collecting starlette>=0.46.0 (from fastapi>=0.115)                                                                                                      subprocess.py:196
+             Downloading starlette-1.0.1-py3-none-any.whl.metadata (6.3 kB)                                                                                        subprocess.py:196
+           Collecting typing-extensions>=4.8.0 (from fastapi>=0.115)                                                                                               subprocess.py:196
+             Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)                                                                              subprocess.py:196
+           Collecting typing-inspection>=0.4.2 (from fastapi>=0.115)                                                                                               subprocess.py:196
+             Using cached typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)                                                                               subprocess.py:196
+           Collecting annotated-doc>=0.0.2 (from fastapi>=0.115)                                                                                                   subprocess.py:196
+             Using cached annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)                                                                                   subprocess.py:196
+           Collecting click>=7.0 (from uvicorn>=0.30->uvicorn[standard]>=0.30)                                                                                     subprocess.py:196
+             Downloading click-8.4.1-py3-none-any.whl.metadata (2.6 kB)                                                                                            subprocess.py:196
+           Collecting h11>=0.8 (from uvicorn>=0.30->uvicorn[standard]>=0.30)                                                                                       subprocess.py:196
+             Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)                                                                                            subprocess.py:196
+           Collecting annotated-types>=0.6.0 (from pydantic>=2.7)                                                                                                  subprocess.py:196
+             Using cached annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)                                                                                  subprocess.py:196
+           Collecting pydantic-core==2.46.4 (from pydantic>=2.7)                                                                                                   subprocess.py:196
+             Using cached pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl.metadata (6.6 kB)                                                                 subprocess.py:196
+           Collecting anyio (from httpx>=0.27)                                                                                                                     subprocess.py:196
+             Using cached anyio-4.13.0-py3-none-any.whl.metadata (4.5 kB)                                                                                          subprocess.py:196
+           Collecting certifi (from httpx>=0.27)                                                                                                                   subprocess.py:196
+             Downloading certifi-2026.5.20-py3-none-any.whl.metadata (2.5 kB)                                                                                      subprocess.py:196
+[11:11:12] Collecting httpcore==1.* (from httpx>=0.27)                                                                                                             subprocess.py:196
+             Using cached httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)                                                                                         subprocess.py:196
+           Collecting idna (from httpx>=0.27)                                                                                                                      subprocess.py:196
+             Downloading idna-3.16-py3-none-any.whl.metadata (6.4 kB)                                                                                              subprocess.py:196
+           Collecting aiofiles>=23.1.0 (from chainlit>=2.0.0)                                                                                                      subprocess.py:196
+             Using cached aiofiles-25.1.0-py3-none-any.whl.metadata (6.3 kB)                                                                                       subprocess.py:196
+           Collecting asyncer<0.1.0,>=0.0.8 (from chainlit>=2.0.0)                                                                                                 subprocess.py:196
+             Using cached asyncer-0.0.17-py3-none-any.whl.metadata (6.4 kB)                                                                                        subprocess.py:196
+           Collecting dataclasses-json<0.7.0,>=0.6.7 (from chainlit>=2.0.0)                                                                                        subprocess.py:196
+             Using cached dataclasses_json-0.6.7-py3-none-any.whl.metadata (25 kB)                                                                                 subprocess.py:196
+           Collecting filetype<2.0.0,>=1.2.0 (from chainlit>=2.0.0)                                                                                                subprocess.py:196
+             Using cached filetype-1.2.0-py2.py3-none-any.whl.metadata (6.5 kB)                                                                                    subprocess.py:196
+           Collecting lazify<0.5.0,>=0.4.0 (from chainlit>=2.0.0)                                                                                                  subprocess.py:196
+             Using cached Lazify-0.4.0-py2.py3-none-any.whl.metadata (1.4 kB)                                                                                      subprocess.py:196
+           INFO: pip is looking at multiple versions of chainlit to determine which version is compatible with other requirements. This could take a while.        subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Downloading chainlit-2.11.0-py3-none-any.whl.metadata (8.1 kB)                                                                                        subprocess.py:196
+             Downloading chainlit-2.10.1-py3-none-any.whl.metadata (8.1 kB)                                                                                        subprocess.py:196
+           Collecting aiofiles<25.0.0,>=23.1.0 (from chainlit>=2.0.0)                                                                                              subprocess.py:196
+             Using cached aiofiles-24.1.0-py3-none-any.whl.metadata (10 kB)                                                                                        subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Using cached chainlit-2.10.0-py3-none-any.whl.metadata (8.1 kB)                                                                                       subprocess.py:196
+             Using cached chainlit-2.9.6-py3-none-any.whl.metadata (8.1 kB)                                                                                        subprocess.py:196
+             Downloading chainlit-2.9.5-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.9.4-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.9.3-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+           INFO: pip is still looking at multiple versions of chainlit to determine which version is compatible with other requirements. This could take a while.  subprocess.py:196
+             Downloading chainlit-2.9.2-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.9.1-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.9.0-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.8.5-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.8.4-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+           Collecting fastapi>=0.115                                                                                                                               subprocess.py:196
+             Using cached fastapi-0.116.2-py3-none-any.whl.metadata (28 kB)                                                                                        subprocess.py:196
+           INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See              subprocess.py:196
+           https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.                                                                   
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Using cached chainlit-2.8.3-py3-none-any.whl.metadata (8.1 kB)                                                                                        subprocess.py:196
+             Downloading chainlit-2.8.2-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.8.1-py3-none-any.whl.metadata (8.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.8.0-py3-none-any.whl.metadata (8.0 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.7.2-py3-none-any.whl.metadata (8.0 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.7.1.1-py3-none-any.whl.metadata (8.0 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.7.1-py3-none-any.whl.metadata (8.0 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.7.0-py3-none-any.whl.metadata (8.0 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.9-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+           Collecting asyncer<0.0.9,>=0.0.8 (from chainlit>=2.0.0)                                                                                                 subprocess.py:196
+             Using cached asyncer-0.0.8-py3-none-any.whl.metadata (6.7 kB)                                                                                         subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Downloading chainlit-2.6.8-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.7-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.6-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.5-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.4-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.3-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+           Collecting fastapi>=0.115                                                                                                                               subprocess.py:196
+             Using cached fastapi-0.115.14-py3-none-any.whl.metadata (27 kB)                                                                                       subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Downloading chainlit-2.6.2-py3-none-any.whl.metadata (6.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.6.0-py3-none-any.whl.metadata (6.3 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.5.5-py3-none-any.whl.metadata (6.2 kB)                                                                                         subprocess.py:196
+           Collecting asyncer<0.0.8,>=0.0.7 (from chainlit>=2.0.0)                                                                                                 subprocess.py:196
+[11:11:13]   Downloading asyncer-0.0.7-py3-none-any.whl.metadata (6.6 kB)                                                                                          subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Downloading chainlit-2.4.400-py3-none-any.whl.metadata (6.3 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.4.302-py3-none-any.whl.metadata (5.8 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.4.301-py3-none-any.whl.metadata (5.8 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.4.3-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.4.2-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.4.1-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.4.0-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.3.0-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.2.1-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+           Collecting aiofiles<24.0.0,>=23.1.0 (from chainlit>=2.0.0)                                                                                              subprocess.py:196
+             Using cached aiofiles-23.2.1-py3-none-any.whl.metadata (9.7 kB)                                                                                       subprocess.py:196
+           Collecting chainlit>=2.0.0                                                                                                                              subprocess.py:196
+             Downloading chainlit-2.2.0-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.1.2-py3-none-any.whl.metadata (5.8 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.1.1-py3-none-any.whl.metadata (5.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.1.0-py3-none-any.whl.metadata (5.4 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.603-py3-none-any.whl.metadata (5.1 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.0.602-py3-none-any.whl.metadata (5.1 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.0.601-py3-none-any.whl.metadata (5.1 kB)                                                                                       subprocess.py:196
+             Downloading chainlit-2.0.6-py3-none-any.whl.metadata (5.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.5-py3-none-any.whl.metadata (5.1 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.4-py3-none-any.whl.metadata (5.2 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.3-py3-none-any.whl.metadata (5.2 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.2-py3-none-any.whl.metadata (5.2 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.1-py3-none-any.whl.metadata (5.2 kB)                                                                                         subprocess.py:196
+             Downloading chainlit-2.0.0-py3-none-any.whl.metadata (5.2 kB)                                                                                         subprocess.py:196
+           ERROR: Cannot install chainlit==2.0.0, chainlit==2.0.1, chainlit==2.0.2, chainlit==2.0.3, chainlit==2.0.4, chainlit==2.0.5, chainlit==2.0.6,            subprocess.py:196
+           chainlit==2.0.601, chainlit==2.0.602, chainlit==2.0.603, chainlit==2.1.0, chainlit==2.1.1, chainlit==2.1.2, chainlit==2.10.0, chainlit==2.10.1,                          
+           chainlit==2.11.0, chainlit==2.11.1, chainlit==2.2.0, chainlit==2.2.1, chainlit==2.3.0, chainlit==2.4.0, chainlit==2.4.1, chainlit==2.4.2,                                
+           chainlit==2.4.3, chainlit==2.4.301, chainlit==2.4.302, chainlit==2.4.400, chainlit==2.5.5, chainlit==2.6.0, chainlit==2.6.2, chainlit==2.6.3,                            
+           chainlit==2.6.4, chainlit==2.6.5, chainlit==2.6.6, chainlit==2.6.7, chainlit==2.6.8, chainlit==2.6.9, chainlit==2.7.0, chainlit==2.7.1,                                  
+           chainlit==2.7.1.1, chainlit==2.7.2, chainlit==2.8.0, chainlit==2.8.1, chainlit==2.8.2, chainlit==2.8.3, chainlit==2.8.4, chainlit==2.8.5,                                
+           chainlit==2.9.0, chainlit==2.9.1, chainlit==2.9.2, chainlit==2.9.3, chainlit==2.9.4, chainlit==2.9.5 and chainlit==2.9.6 because these package versions                  
+           have conflicting dependencies.                                                                                                                                           
+                                                                                                                                                                   subprocess.py:196
+           The conflict is caused by:                                                                                                                              subprocess.py:196
+               chainlit 2.11.1 depends on literalai==0.1.201                                                                                                       subprocess.py:196
+               chainlit 2.11.0 depends on literalai==0.1.201                                                                                                       subprocess.py:196
+               chainlit 2.10.1 depends on literalai==0.1.201                                                                                                       subprocess.py:196
+               chainlit 2.10.0 depends on literalai==0.1.201                                                                                                       subprocess.py:196
+               chainlit 2.9.6 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.5 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.4 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.3 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.2 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.1 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.9.0 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.5 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.4 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.3 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.2 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.1 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.8.0 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.7.2 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.7.1.1 depends on literalai==0.1.201                                                                                                      subprocess.py:196
+               chainlit 2.7.1 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.7.0 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.9 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.8 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.7 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.6 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.5 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.4 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.3 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.2 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.6.0 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.5.5 depends on literalai==0.1.201                                                                                                        subprocess.py:196
+               chainlit 2.4.400 depends on literalai==0.1.201                                                                                                      subprocess.py:196
+               chainlit 2.4.302 depends on literalai==0.1.201                                                                                                      subprocess.py:196
+               chainlit 2.4.301 depends on literalai==0.1.103                                                                                                      subprocess.py:196
+               chainlit 2.4.3 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.4.2 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.4.1 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.4.0 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.3.0 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.2.1 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.2.0 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.1.2 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.1.1 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.1.0 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.603 depends on literalai==0.1.103                                                                                                      subprocess.py:196
+               chainlit 2.0.602 depends on literalai==0.1.103                                                                                                      subprocess.py:196
+               chainlit 2.0.601 depends on literalai==0.1.103                                                                                                      subprocess.py:196
+               chainlit 2.0.6 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.5 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.4 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.3 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.2 depends on literalai==0.1.103                                                                                                        subprocess.py:196
+               chainlit 2.0.1 depends on literalai==0.0.623                                                                                                        subprocess.py:196
+               chainlit 2.0.0 depends on literalai==0.0.623                                                                                                        subprocess.py:196
+                                                                                                                                                                   subprocess.py:196
+           To fix this you could try to:                                                                                                                           subprocess.py:196
+           1. loosen the range of package versions you've specified                                                                                                subprocess.py:196
+           2. remove package versions to allow pip to attempt to solve the dependency conflict                                                                     subprocess.py:196
+                                                                                                                                                                   subprocess.py:196
+           ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/#dealing-with-dependency-conflicts               subprocess.py:196
+           >>> Return code: 1                                                                                                                                      subprocess.py:844
+[11:11:14]                                                                                                                                                         subprocess.py:844
+           Installing app requirements... errored                                                                                                                      create.py:680
+                                                                                                                                                                      __main__.py:42
+           Unable to install requirements. This may be because one of your                                                                                            __main__.py:43
+           requirements is invalid, or because pip was unable to connect                                                                                              __main__.py:43
+           to the PyPI server.                                                                                                                                        __main__.py:43
+           Saving log... started                                                                                                                                      console.py:543
+
+Main thread traceback:
+╭─────────────────────────────────────────────────────────────────────── Traceback (most recent call last) ────────────────────────────────────────────────────────────────────────╮
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:625 in _pip_install                                       │
+│                                                                                                                                                                                  │
+│    622 │   │   │   ``subprocess.run`` when invoking pip.                                                                                                                         │
+│    623 │   │   """                                                                                                                                                               │
+│    624 │   │   try:                                                                                                                                                              │
+│ ❱  625 │   │   │   self.tools[app].app_context.run(                                                                                                                              │
+│    626 │   │   │   │   [                                                                                                                                                         │
+│    627 │   │   │   │   │   sys.executable,                                                                                                                                       │
+│    628 │   │   │   │   │   "-u",                                                                                                                                                 │
+│                                                                                                                                                                                  │
+│ ╭────────────────────────────────────────────────────────────────────────────── locals ───────────────────────────────────────────────────────────────────────────────╮          │
+│ │               app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                                                                           │          │
+│ │ app_packages_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages') │          │
+│ │      install_hint = ''                                                                                                                                              │          │
+│ │          pip_args = [                                                                                                                                               │          │
+│ │                     │   '--only-binary',                                                                                                                            │          │
+│ │                     │   ':all:',                                                                                                                                    │          │
+│ │                     │   '--platform',                                                                                                                               │          │
+│ │                     │   'macosx_14_0_arm64',                                                                                                                        │          │
+│ │                     │   'fastapi>=0.115',                                                                                                                           │          │
+│ │                     │   'uvicorn[standard]>=0.30',                                                                                                                  │          │
+│ │                     │   'pydantic>=2.7',                                                                                                                            │          │
+│ │                     │   'httpx>=0.27',                                                                                                                              │          │
+│ │                     │   'chainlit>=2.0.0',                                                                                                                          │          │
+│ │                     │   'anthropic>=0.39',                                                                                                                          │          │
+│ │                     │   ... +14                                                                                                                                     │          │
+│ │                     ]                                                                                                                                               │          │
+│ │        pip_kwargs = {}                                                                                                                                              │          │
+│ │              self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                                                                     │          │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/integrations/subprocess.py:145 in inner                                      │
+│                                                                                                                                                                                  │
+│   142 │   │   │   with sub.tools.console.release_console_control():                                                                                                              │
+│   143 │   │   │   │   return sub_method(sub, args, *wrapped_args, **wrapped_kwargs)                                                                                              │
+│   144 │   │   else:                                                                                                                                                              │
+│ ❱ 145 │   │   │   return sub_method(sub, args, *wrapped_args, **wrapped_kwargs)                                                                                                  │
+│   146 │                                                                                                                                                                          │
+│   147 │   return inner                                                                                                                                                           │
+│   148                                                                                                                                                                            │
+│                                                                                                                                                                                  │
+│ ╭───────────────────────────────────────────────── locals ──────────────────────────────────────────────────╮                                                                    │
+│ │                    args = [                                                                               │                                                                    │
+│ │                           │   '/Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3', │                                                                    │
+│ │                           │   '-u',                                                                       │                                                                    │
+│ │                           │   '-X',                                                                       │                                                                    │
+│ │                           │   'utf8',                                                                     │                                                                    │
+│ │                           │   '-m',                                                                       │                                                                    │
+│ │                           │   'pip',                                                                      │                                                                    │
+│ │                           │   'install',                                                                  │                                                                    │
+│ │                           │   '--disable-pip-version-check',                                              │                                                                    │
+│ │                           │   '--upgrade',                                                                │                                                                    │
+│ │                           │   '--no-user',                                                                │                                                                    │
+│ │                           │   ... +25                                                                     │                                                                    │
+│ │                           ]                                                                               │                                                                    │
+│ │ remove_dynamic_elements = False                                                                           │                                                                    │
+│ │                     sub = <briefcase.integrations.subprocess.Subprocess object at 0x108cd7950>            │                                                                    │
+│ │            wrapped_args = ()                                                                              │                                                                    │
+│ │          wrapped_kwargs = {'check': True, 'encoding': 'UTF-8'}                                            │                                                                    │
+│ ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯                                                                    │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/integrations/subprocess.py:544 in run                                        │
+│                                                                                                                                                                                  │
+│   541 │   │   # caller sets stream_output=False, then ensure_console_is_safe() will                                                                                              │
+│   542 │   │   # disable any dynamic console elements while the command runs.                                                                                                     │
+│   543 │   │   if stream_output:                                                                                                                                                  │
+│ ❱ 544 │   │   │   return self._run_and_stream_output(args, filter_func=filter_func, **kwargs)                                                                                    │
+│   545 │   │                                                                                                                                                                      │
+│   546 │   │   # Can't filter non-streamed output.                                                                                                                                │
+│   547 │   │   if filter_func:                                                                                                                                                    │
+│                                                                                                                                                                                  │
+│ ╭──────────────────────────────────────────── locals ─────────────────────────────────────────────╮                                                                              │
+│ │          args = [                                                                               │                                                                              │
+│ │                 │   '/Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3', │                                                                              │
+│ │                 │   '-u',                                                                       │                                                                              │
+│ │                 │   '-X',                                                                       │                                                                              │
+│ │                 │   'utf8',                                                                     │                                                                              │
+│ │                 │   '-m',                                                                       │                                                                              │
+│ │                 │   'pip',                                                                      │                                                                              │
+│ │                 │   'install',                                                                  │                                                                              │
+│ │                 │   '--disable-pip-version-check',                                              │                                                                              │
+│ │                 │   '--upgrade',                                                                │                                                                              │
+│ │                 │   '--no-user',                                                                │                                                                              │
+│ │                 │   ... +25                                                                     │                                                                              │
+│ │                 ]                                                                               │                                                                              │
+│ │   filter_func = None                                                                            │                                                                              │
+│ │        kwargs = {'check': True, 'encoding': 'UTF-8'}                                            │                                                                              │
+│ │          self = <briefcase.integrations.subprocess.Subprocess object at 0x108cd7950>            │                                                                              │
+│ │ stream_output = True                                                                            │                                                                              │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯                                                                              │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/integrations/subprocess.py:621 in _run_and_stream_output                     │
+│                                                                                                                                                                                  │
+│   618 │   │   self._log_return_code(return_code)                                                                                                                                 │
+│   619 │   │                                                                                                                                                                      │
+│   620 │   │   if check and return_code:                                                                                                                                          │
+│ ❱ 621 │   │   │   raise subprocess.CalledProcessError(return_code, args, stderr=stderr)                                                                                          │
+│   622 │   │                                                                                                                                                                      │
+│   623 │   │   return subprocess.CompletedProcess(args, return_code, stderr=stderr)                                                                                               │
+│   624                                                                                                                                                                            │
+│                                                                                                                                                                                  │
+│ ╭──────────────────────────────────────────── locals ────────────────────────────────────────────╮                                                                               │
+│ │        args = [                                                                                │                                                                               │
+│ │               │   '/Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3',  │                                                                               │
+│ │               │   '-u',                                                                        │                                                                               │
+│ │               │   '-X',                                                                        │                                                                               │
+│ │               │   'utf8',                                                                      │                                                                               │
+│ │               │   '-m',                                                                        │                                                                               │
+│ │               │   'pip',                                                                       │                                                                               │
+│ │               │   'install',                                                                   │                                                                               │
+│ │               │   '--disable-pip-version-check',                                               │                                                                               │
+│ │               │   '--upgrade',                                                                 │                                                                               │
+│ │               │   '--no-user',                                                                 │                                                                               │
+│ │               │   ... +25                                                                      │                                                                               │
+│ │               ]                                                                                │                                                                               │
+│ │       check = True                                                                             │                                                                               │
+│ │ filter_func = None                                                                             │                                                                               │
+│ │      kwargs = {'encoding': 'UTF-8', 'stdout': -1, 'stderr': -2, 'bufsize': 1}                  │                                                                               │
+│ │     process = <Popen: returncode: 1 args: ['/Users/roman/DEVEL/voitta-bookmarklet-chainlit...> │                                                                               │
+│ │ return_code = 1                                                                                │                                                                               │
+│ │        self = <briefcase.integrations.subprocess.Subprocess object at 0x108cd7950>             │                                                                               │
+│ │      stderr = None                                                                             │                                                                               │
+│ ╰────────────────────────────────────────────────────────────────────────────────────────────────╯                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+CalledProcessError: Command '['/Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/bin/python3', '-u', '-X', 'utf8', '-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', '--no-user', '--target=/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages', '--only-binary', ':all:', '--platform', 'macosx_14_0_arm64', 'fastapi>=0.115', 'uvicorn[standard]>=0.30', 'pydantic>=2.7', 'httpx>=0.27', 'chainlit>=2.0.0', 'anthropic>=0.39', 'openai>=1.50', 'google-genai>=0.3', 'fastmcp>=2.0', 'bm25s>=0.2.6', 'PyStemmer>=2.2.0', 'numpy>=1.26', 'pillow>=10.0', 'pypdf>=5.0', 'python-multipart', './wheels/rumps-0.4.0-py3-none-any.whl', 'pyobjc-framework-Cocoa>=10.0', 'pip', 'setuptools', 'wheel']' returned non-zero exit status 1.
+
+The above exception was the direct cause of the following exception:
+
+╭─────────────────────────────────────────────────────────────────────── Traceback (most recent call last) ────────────────────────────────────────────────────────────────────────╮
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/__main__.py:27 in main                                                       │
+│                                                                                                                                                                                  │
+│   24 │   │   │   Path.cwd() / "pyproject.toml",                                                                                                                                  │
+│   25 │   │   │   overrides=overrides,                                                                                                                                            │
+│   26 │   │   )                                                                                                                                                                   │
+│ ❱ 27 │   │   command(**options)                                                                                                                                                  │
+│   28 │   except HelpText as e:                                                                                                                                                   │
+│   29 │   │   console.info()                                                                                                                                                      │
+│   30 │   │   console.info(str(e))                                                                                                                                                │
+│                                                                                                                                                                                  │
+│ ╭────────────────────────────────────────── locals ───────────────────────────────────────────╮                                                                                  │
+│ │       command = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30> │                                                                                  │
+│ │       console = <briefcase.console.Console object at 0x1051b6c90>                           │                                                                                  │
+│ │             e = RequirementsInstallError()                                                  │                                                                                  │
+│ │ extra_cmdline = []                                                                          │                                                                                  │
+│ │       options = {}                                                                          │                                                                                  │
+│ │     overrides = {}                                                                          │                                                                                  │
+│ │        result = 200                                                                         │                                                                                  │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────────────╯                                                                                  │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:1047 in __call__                                          │
+│                                                                                                                                                                                  │
+│   1044 │   │                                                                                                                                                                     │
+│   1045 │   │   state = None                                                                                                                                                      │
+│   1046 │   │   for _, app_obj in sorted(finalized_apps.items()):                                                                                                                 │
+│ ❱ 1047 │   │   │   state = self.create_app(                                                                                                                                      │
+│   1048 │   │   │   │   app_obj,                                                                                                                                                  │
+│   1049 │   │   │   │   **full_options(state, options),                                                                                                                           │
+│   1050 │   │   │   )                                                                                                                                                             │
+│                                                                                                                                                                                  │
+│ ╭─────────────────────────────────────────── locals ───────────────────────────────────────────╮                                                                                 │
+│ │              _ = 'voitta-chainlit'                                                           │                                                                                 │
+│ │            app = None                                                                        │                                                                                 │
+│ │       app_name = None                                                                        │                                                                                 │
+│ │        app_obj = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                       │                                                                                 │
+│ │ apps_to_create = {'voitta-chainlit': <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>}  │                                                                                 │
+│ │ finalized_apps = {'voitta-chainlit': <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>}  │                                                                                 │
+│ │        options = {}                                                                          │                                                                                 │
+│ │           self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30> │                                                                                 │
+│ │          state = None                                                                        │                                                                                 │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯                                                                                 │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:1005 in create_app                                        │
+│                                                                                                                                                                                  │
+│   1002 │   │   │   self.install_app_code(app=app)                                                                                                                                │
+│   1003 │   │   │                                                                                                                                                                 │
+│   1004 │   │   │   self.console.info("Installing requirements...", prefix=app.app_name)                                                                                          │
+│ ❱ 1005 │   │   │   self.install_app_requirements(app=app)                                                                                                                        │
+│   1006 │   │   │                                                                                                                                                                 │
+│   1007 │   │   │   self.console.info(                                                                                                                                            │
+│   1008 │   │   │   │   "Installing application resources...", prefix=app.app_name                                                                                                │
+│                                                                                                                                                                                  │
+│ ╭───────────────────────────────────────────────── locals ──────────────────────────────────────────────────╮                                                                    │
+│ │         app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                       │                                                                    │
+│ │ bundle_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app') │                                                                    │
+│ │     options = {}                                                                                          │                                                                    │
+│ │        self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                 │                                                                    │
+│ ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────╯                                                                    │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:734 in install_app_requirements                           │
+│                                                                                                                                                                                  │
+│    731 │   │   else:                                                                                                                                                             │
+│    732 │   │   │   try:                                                                                                                                                          │
+│    733 │   │   │   │   app_packages_path = self.app_packages_path(app)                                                                                                           │
+│ ❱  734 │   │   │   │   self._install_app_requirements(app, requires, app_packages_path)                                                                                          │
+│    735 │   │   │   except KeyError as e:                                                                                                                                         │
+│    736 │   │   │   │   raise BriefcaseCommandError(                                                                                                                              │
+│    737 │   │   │   │   │   "Application path index file does not define "                                                                                                        │
+│                                                                                                                                                                                  │
+│ ╭─────────────────────────────────────────────────────────────────────────────────── locals ───────────────────────────────────────────────────────────────────────────────────╮ │
+│ │                             app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                                                                      │ │
+│ │               app_packages_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta                                           │ │
+│ │                                   Chainlit.app/Contents/Resources/app_packages')                                                                                             │ │
+│ │ requirement_installer_args_path = None                                                                                                                                       │ │
+│ │               requirements_path = None                                                                                                                                       │ │
+│ │                        requires = [                                                                                                                                          │ │
+│ │                                   │   'fastapi>=0.115',                                                                                                                      │ │
+│ │                                   │   'uvicorn[standard]>=0.30',                                                                                                             │ │
+│ │                                   │   'pydantic>=2.7',                                                                                                                       │ │
+│ │                                   │   'httpx>=0.27',                                                                                                                         │ │
+│ │                                   │   'chainlit>=2.0.0',                                                                                                                     │ │
+│ │                                   │   'anthropic>=0.39',                                                                                                                     │ │
+│ │                                   │   'openai>=1.50',                                                                                                                        │ │
+│ │                                   │   'google-genai>=0.3',                                                                                                                   │ │
+│ │                                   │   'fastmcp>=2.0',                                                                                                                        │ │
+│ │                                   │   'bm25s>=0.2.6',                                                                                                                        │ │
+│ │                                   │   ... +10                                                                                                                                │ │
+│ │                                   ]                                                                                                                                          │ │
+│ │                            self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                                                                │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/platforms/macOS/__init__.py:367 in _install_app_requirements                 │
+│                                                                                                                                                                                  │
+│    364 │   │   else:                                                                                                                                                             │
+│    365 │   │   │   # If we're not building a universal binary, we can do a single install pass                                                                                   │
+│    366 │   │   │   # directly into the app_packages folder.                                                                                                                      │
+│ ❱  367 │   │   │   super()._install_app_requirements(                                                                                                                            │
+│    368 │   │   │   │   app,                                                                                                                                                      │
+│    369 │   │   │   │   requires=requires,                                                                                                                                        │
+│    370 │   │   │   │   app_packages_path=app_packages_path,                                                                                                                      │
+│                                                                                                                                                                                  │
+│ ╭─────────────────────────────────────────────────────────────────────────────────── locals ───────────────────────────────────────────────────────────────────────────────────╮ │
+│ │                 app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                                                                                  │ │
+│ │   app_packages_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages')        │ │
+│ │                   f = <_io.BufferedReader                                                                                                                                    │ │
+│ │                       name='/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/support/Python.xcframework/macos-arm64_x86_64/Python.framework/R… │ │
+│ │          info_plist = {                                                                                                                                                      │ │
+│ │                       │   'CFBundleDevelopmentRegion': 'English',                                                                                                            │ │
+│ │                       │   'CFBundleExecutable': 'Python',                                                                                                                    │ │
+│ │                       │   'CFBundleGetInfoString': 'Python Runtime and Library',                                                                                             │ │
+│ │                       │   'CFBundleIdentifier': 'org.python.python',                                                                                                         │ │
+│ │                       │   'CFBundleInfoDictionaryVersion': '6.0',                                                                                                            │ │
+│ │                       │   'CFBundleName': 'Python',                                                                                                                          │ │
+│ │                       │   'CFBundlePackageType': 'FMWK',                                                                                                                     │ │
+│ │                       │   'CFBundleShortVersionString': '3.12.10, (c) 2001-2023 Python Software Foundation.',                                                                │ │
+│ │                       │   'CFBundleLongVersionString': '3.12.10, (c) 2001-2023 Python Software Foundation.',                                                                 │ │
+│ │                       │   'CFBundleSignature': '????',                                                                                                                       │ │
+│ │                       │   ... +2                                                                                                                                             │ │
+│ │                       }                                                                                                                                                      │ │
+│ │              kwargs = {}                                                                                                                                                     │ │
+│ │       macOS_min_tag = '14_0'                                                                                                                                                 │ │
+│ │   macOS_min_version = '14.0'                                                                                                                                                 │ │
+│ │          plist_file = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/support/Python.xcframework/macos-arm64_x86_64/Python.framew… │ │
+│ │            requires = [                                                                                                                                                      │ │
+│ │                       │   'fastapi>=0.115',                                                                                                                                  │ │
+│ │                       │   'uvicorn[standard]>=0.30',                                                                                                                         │ │
+│ │                       │   'pydantic>=2.7',                                                                                                                                   │ │
+│ │                       │   'httpx>=0.27',                                                                                                                                     │ │
+│ │                       │   'chainlit>=2.0.0',                                                                                                                                 │ │
+│ │                       │   'anthropic>=0.39',                                                                                                                                 │ │
+│ │                       │   'openai>=1.50',                                                                                                                                    │ │
+│ │                       │   'google-genai>=0.3',                                                                                                                               │ │
+│ │                       │   'fastmcp>=2.0',                                                                                                                                    │ │
+│ │                       │   'bm25s>=0.2.6',                                                                                                                                    │ │
+│ │                       │   ... +10                                                                                                                                            │ │
+│ │                       ]                                                                                                                                                      │ │
+│ │                self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                                                                            │ │
+│ │ support_min_version = '11.0'                                                                                                                                                 │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:681 in _install_app_requirements                          │
+│                                                                                                                                                                                  │
+│    678 │   │   # Install requirements                                                                                                                                            │
+│    679 │   │   if requires:                                                                                                                                                      │
+│    680 │   │   │   with self.console.wait_bar(progress_message):                                                                                                                 │
+│ ❱  681 │   │   │   │   self._pip_install(                                                                                                                                        │
+│    682 │   │   │   │   │   app,                                                                                                                                                  │
+│    683 │   │   │   │   │   app_packages_path=app_packages_path,                                                                                                                  │
+│    684 │   │   │   │   │   pip_args=(                                                                                                                                            │
+│                                                                                                                                                                                  │
+│ ╭────────────────────────────────────────────────────────────────────────────── locals ───────────────────────────────────────────────────────────────────────────────╮          │
+│ │               app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                                                                           │          │
+│ │ app_packages_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages') │          │
+│ │      install_hint = ''                                                                                                                                              │          │
+│ │          pip_args = ['--only-binary', ':all:', '--platform', 'macosx_14_0_arm64']                                                                                   │          │
+│ │        pip_kwargs = None                                                                                                                                            │          │
+│ │  progress_message = 'Installing app requirements...'                                                                                                                │          │
+│ │          requires = [                                                                                                                                               │          │
+│ │                     │   'fastapi>=0.115',                                                                                                                           │          │
+│ │                     │   'uvicorn[standard]>=0.30',                                                                                                                  │          │
+│ │                     │   'pydantic>=2.7',                                                                                                                            │          │
+│ │                     │   'httpx>=0.27',                                                                                                                              │          │
+│ │                     │   'chainlit>=2.0.0',                                                                                                                          │          │
+│ │                     │   'anthropic>=0.39',                                                                                                                          │          │
+│ │                     │   'openai>=1.50',                                                                                                                             │          │
+│ │                     │   'google-genai>=0.3',                                                                                                                        │          │
+│ │                     │   'fastmcp>=2.0',                                                                                                                             │          │
+│ │                     │   'bm25s>=0.2.6',                                                                                                                             │          │
+│ │                     │   ... +10                                                                                                                                     │          │
+│ │                     ]                                                                                                                                               │          │
+│ │              self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                                                                     │          │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯          │
+│                                                                                                                                                                                  │
+│ /Users/roman/DEVEL/voitta-bookmarklet-chainlit/backend/.venv/lib/python3.12/site-packages/briefcase/commands/create.py:647 in _pip_install                                       │
+│                                                                                                                                                                                  │
+│    644 │   │   │   │   **pip_kwargs,                                                                                                                                             │
+│    645 │   │   │   )                                                                                                                                                             │
+│    646 │   │   except subprocess.CalledProcessError as e:                                                                                                                        │
+│ ❱  647 │   │   │   raise RequirementsInstallError(install_hint=install_hint) from e                                                                                              │
+│    648 │                                                                                                                                                                         │
+│    649 │   def _install_app_requirements(                                                                                                                                        │
+│    650 │   │   self,                                                                                                                                                             │
+│                                                                                                                                                                                  │
+│ ╭────────────────────────────────────────────────────────────────────────────── locals ───────────────────────────────────────────────────────────────────────────────╮          │
+│ │               app = <ai.voitta.voitta-chainlit v0.1.1 FinalizedAppConfig>                                                                                           │          │
+│ │ app_packages_path = PosixPath('/Users/roman/DEVEL/voitta-bookmarklet-chainlit/build/voitta-chainlit/macos/app/Voitta Chainlit.app/Contents/Resources/app_packages') │          │
+│ │      install_hint = ''                                                                                                                                              │          │
+│ │          pip_args = [                                                                                                                                               │          │
+│ │                     │   '--only-binary',                                                                                                                            │          │
+│ │                     │   ':all:',                                                                                                                                    │          │
+│ │                     │   '--platform',                                                                                                                               │          │
+│ │                     │   'macosx_14_0_arm64',                                                                                                                        │          │
+│ │                     │   'fastapi>=0.115',                                                                                                                           │          │
+│ │                     │   'uvicorn[standard]>=0.30',                                                                                                                  │          │
+│ │                     │   'pydantic>=2.7',                                                                                                                            │          │
+│ │                     │   'httpx>=0.27',                                                                                                                              │          │
+│ │                     │   'chainlit>=2.0.0',                                                                                                                          │          │
+│ │                     │   'anthropic>=0.39',                                                                                                                          │          │
+│ │                     │   ... +14                                                                                                                                     │          │
+│ │                     ]                                                                                                                                               │          │
+│ │        pip_kwargs = {}                                                                                                                                              │          │
+│ │              self = <briefcase.platforms.macOS.app.macOSAppCreateCommand object at 0x108c00b30>                                                                     │          │
+│ ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+RequirementsInstallError: Unable to install requirements. This may be because one of your
+requirements is invalid, or because pip was unable to connect
+to the PyPI server.
+

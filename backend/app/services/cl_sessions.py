@@ -1,0 +1,117 @@
+"""Per-session metadata registry — feeds the MCP debugging endpoint.
+
+Chainlit's own ``WebsocketSession`` registry tracks sockets + ids but
+doesn't surface what *page* each session is on, what its user-agent
+is, or when we last heard from it. We keep a parallel dict keyed by
+``session_id`` and populate it from ``@cl.on_chat_start`` /
+``@cl.on_window_message`` so the tray's "list sessions" view (and the
+MCP ``mcp_sessions`` tool) can show meaningful debugging info.
+
+Stays in sync with Chainlit's lifecycle:
+* ``record_chat_start`` is called from ``@cl.on_chat_start`` and seeds
+  user_agent / created_at.
+* ``record_host`` is called from ``@cl.on_window_message`` when the
+  bookmarklet posts ``host:<host>`` after mount.
+* Sessions are dropped lazily: a session shows up as "stale" if its
+  id is no longer in ``chainlit.session.ws_sessions_id``.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field, asdict
+from typing import Any
+
+
+@dataclass
+class PageInfo:
+    """Best-effort snapshot of what page a session is attached to.
+
+    All fields except ``session_id`` start ``None`` and get filled
+    progressively as window-messages arrive from the FE.
+    """
+
+    session_id: str
+    host: str | None = None
+    url: str | None = None
+    title: str | None = None
+    user_agent: str | None = None
+    created_at: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
+    # Free-form metadata the FE might post later (capabilities, plugin
+    # list, etc.). Kept open-ended so additions don't need a registry
+    # schema change.
+    extras: dict[str, Any] = field(default_factory=dict)
+
+
+_BY_ID: dict[str, PageInfo] = {}
+
+
+def record_chat_start(session_id: str, user_agent: str | None = None) -> PageInfo:
+    info = _BY_ID.get(session_id)
+    if info is None:
+        info = PageInfo(session_id=session_id, user_agent=user_agent)
+        _BY_ID[session_id] = info
+    else:
+        info.last_seen = time.time()
+        if user_agent and not info.user_agent:
+            info.user_agent = user_agent
+    return info
+
+
+def record_host(session_id: str, host: str | None) -> None:
+    info = _BY_ID.get(session_id)
+    if info is None:
+        info = PageInfo(session_id=session_id, host=host)
+        _BY_ID[session_id] = info
+    else:
+        info.host = host
+        info.last_seen = time.time()
+
+
+def record_window_message(session_id: str, message: str) -> None:
+    """Parse known ``key:value`` payloads from window-messages and
+    update the matching field. Unknown payloads land in ``extras``."""
+    info = _BY_ID.get(session_id)
+    if info is None:
+        info = PageInfo(session_id=session_id)
+        _BY_ID[session_id] = info
+    info.last_seen = time.time()
+    if not isinstance(message, str):
+        return
+    for key in ("host", "url", "title", "user_agent"):
+        prefix = key + ":"
+        if message.startswith(prefix):
+            setattr(info, key, message[len(prefix):].strip() or None)
+            return
+    # Unrecognised — stash so we can debug what the FE is sending.
+    info.extras.setdefault("raw_messages", []).append(message[:200])
+
+
+def forget(session_id: str) -> None:
+    _BY_ID.pop(session_id, None)
+
+
+def get(session_id: str) -> PageInfo | None:
+    return _BY_ID.get(session_id)
+
+
+def all_records() -> list[PageInfo]:
+    return list(_BY_ID.values())
+
+
+def snapshot() -> list[dict[str, Any]]:
+    """Wire-friendly dump for the MCP ``mcp_sessions`` tool. Joined with
+    Chainlit's own session registry so we can flag ids that no longer
+    have a live socket."""
+    try:
+        from chainlit.session import ws_sessions_id  # type: ignore
+        live_ids = set(ws_sessions_id.keys())
+    except Exception:
+        live_ids = set()
+    out: list[dict[str, Any]] = []
+    for info in _BY_ID.values():
+        d = asdict(info)
+        d["connected"] = info.session_id in live_ids
+        out.append(d)
+    return out

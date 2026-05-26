@@ -1,30 +1,29 @@
-// Google plugin — custom Settings panel.
+// Google plugin — custom Settings panel (React, chainlit build).
 //
 // Why custom (not schema-driven): the Drive OAuth flow has a popup +
 // status-poll dance that doesn't fit the declarative ``settings_schema``
 // shape. The plugin manifest sets ``"settings_panel": "custom"`` and
-// core SettingsView discovers this file via import.meta.glob, rendering
-// it in place of the schema renderer.
+// core SettingsView discovers this file via import.meta.glob.
 //
-// Two top-level concerns:
+// Two top-level sections:
 //
-//   * **OAuth section** — Configure clientId/clientSecret → Connect →
-//     poll /api/google/status → Disconnect. Backend persists tokens
-//     in the user's keychain; this UI just kicks the flow.
+//   * OAuth section — Configure clientId/clientSecret → Connect →
+//     poll /api/google/status → Disconnect. The BE persists tokens in
+//     ``~/.config/voitta-bookmarklet-chainlit/settings.json``; this UI
+//     just kicks the flow.
 //
-//   * **Pickup fallback** — flat-key Settings fields
-//     ``driveDownloadViaPickup`` + ``pickupDownloadsDir`` for the
-//     no-OAuth racy download path. Kept as flat keys (not
-//     ``plugins.google.*``) so the existing tool code that reads
-//     them via /api/settings doesn't need a migration. The panel
-//     itself is where they live now, conceptually.
+//   * No-OAuth pickup fallback — dotted-path settings
+//     ``plugins.google.driveDownloadViaPickup`` +
+//     ``plugins.google.pickupDownloadsDir`` for the racy
+//     downloads-folder watcher path.
 
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useState } from "react";
 import {
-  loadSettings,
+  getDotted,
+  getSettings,
   saveSettings,
   subscribeSettings,
-  type Settings,
+  type PublicSettings,
 } from "../../../frontend/src/lib/settings";
 
 interface Props {
@@ -46,31 +45,39 @@ interface GoogleClientConfig {
 }
 
 export default function GoogleSettingsPanel({ backendOrigin }: Props) {
-  const [snapshot, setSnapshot] = useState<Settings>(() => loadSettings());
+  const [snapshot, setSnapshot] = useState<PublicSettings>(getSettings);
   useEffect(() => subscribeSettings(setSnapshot), []);
 
-  function patch(p: Partial<Settings>) {
-    saveSettings(p);
+  const pickupOn = !!getDotted(
+    snapshot as unknown as Record<string, unknown>,
+    "plugins.google.driveDownloadViaPickup",
+  );
+  const pickupDir =
+    (getDotted(
+      snapshot as unknown as Record<string, unknown>,
+      "plugins.google.pickupDownloadsDir",
+    ) as string | undefined) ?? "";
+
+  async function patchDotted(key: string, value: unknown) {
+    await saveSettings(backendOrigin, { dotted: { [key]: value } });
   }
 
   return (
-    <div class="plugin-settings-panel google-settings">
+    <div className="plugin-settings-panel google-settings">
       <GoogleDriveSection backendOrigin={backendOrigin} />
 
-      <hr style={{ margin: "20px 0", border: "0", borderTop: "1px solid var(--voitta-border)" }} />
+      <hr style={{ margin: "20px 0", border: 0, borderTop: "1px solid var(--voitta-border, #d1d5db)" }} />
 
-      <h3 style={{ margin: "0 0 12px", fontSize: "14px" }}>No-OAuth pickup fallback</h3>
-      <label style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>No-OAuth pickup fallback</h3>
+      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <input
           type="checkbox"
-          checked={!!snapshot.driveDownloadViaPickup}
-          onChange={(e) =>
-            patch({ driveDownloadViaPickup: (e.currentTarget as HTMLInputElement).checked })
-          }
+          checked={pickupOn}
+          onChange={(e) => patchDotted("plugins.google.driveDownloadViaPickup", e.currentTarget.checked)}
         />
         <span>Drive download via Downloads-folder pickup (no OAuth)</span>
       </label>
-      <p class="muted">
+      <p className="muted">
         Off by default. Hacky workaround for when you don't want to set up
         Google OAuth: the LLM gets a <code>drive_pickup_to_python_storage</code>
         tool that opens the Drive download URL in a new tab (your existing
@@ -84,16 +91,12 @@ export default function GoogleSettingsPanel({ backendOrigin }: Props) {
       <input
         id="pickupDownloadsDir"
         type="text"
-        value={snapshot.pickupDownloadsDir}
+        value={pickupDir}
         placeholder="~/Downloads"
-        onInput={(e) =>
-          patch({
-            pickupDownloadsDir: (e.currentTarget as HTMLInputElement).value,
-          })
-        }
-        disabled={!snapshot.driveDownloadViaPickup}
+        onChange={(e) => patchDotted("plugins.google.pickupDownloadsDir", e.currentTarget.value)}
+        disabled={!pickupOn}
       />
-      <p class="muted">
+      <p className="muted">
         Default <code>~/Downloads</code>. Tilde and environment variables are
         expanded server-side. Only used when the pickup option above is enabled.
       </p>
@@ -101,7 +104,7 @@ export default function GoogleSettingsPanel({ backendOrigin }: Props) {
   );
 }
 
-// ---- OAuth section (moved verbatim from SettingsView.tsx) ----
+// ---- OAuth section -----------------------------------------------------
 
 function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
   const [status, setStatus] = useState<GoogleStatus | null>(null);
@@ -129,6 +132,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
       if (polling) void refresh();
     }, 2000);
     return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [polling]);
 
   function connect() {
@@ -181,11 +185,11 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
   const connected = !!status?.connected;
 
   return (
-    <div class="google-drive-section">
-      <h3 style={{ margin: "0 0 6px", fontSize: "14px" }}>Google Drive · OAuth</h3>
-      {status === null && <p class="muted">Loading…</p>}
+    <div className="google-drive-section">
+      <h3 style={{ margin: "0 0 6px", fontSize: 14 }}>Google Drive · OAuth</h3>
+      {status === null && <p className="muted">Loading…</p>}
       {status && !configured && (
-        <p class="muted">
+        <p className="muted">
           Not configured. Click <b>Configure</b> to paste your Google OAuth
           client credentials (created in Google Cloud Console). Once
           configured, click <b>Connect</b> to sign in — the Drive tools
@@ -193,13 +197,13 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
         </p>
       )}
       {configured && !connected && (
-        <p class="muted">
+        <p className="muted">
           Configured but not connected. Click <b>Connect</b> to sign in —
           the browser opens a consent popup; come back here when done.
         </p>
       )}
       {connected && (
-        <p class="muted">
+        <p className="muted">
           Connected as <b>{status?.account_email || "(unknown)"}</b>. Drive
           tools are visible to the LLM
           {typeof status?.expires_in_s === "number"
@@ -209,32 +213,27 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
         </p>
       )}
 
-      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {!connected && (
           <button
             type="button"
             onClick={connect}
             disabled={busy || !configured}
-            class="save-btn"
+            className="save-btn"
             title={!configured ? "Configure OAuth credentials first" : "Sign in with Google"}
           >
             {busy ? "Waiting for consent…" : "Connect"}
           </button>
         )}
         {connected && (
-          <button
-            type="button"
-            onClick={disconnect}
-            disabled={busy}
-            class="save-btn"
-          >
+          <button type="button" onClick={disconnect} disabled={busy} className="save-btn">
             Disconnect
           </button>
         )}
         <button
           type="button"
           onClick={() => setConfigureOpen((v) => !v)}
-          class="save-btn"
+          className="save-btn"
           style={{ background: "#6b7280" }}
         >
           {configureOpen ? "Cancel" : "Configure"}
@@ -253,7 +252,7 @@ function GoogleDriveSection({ backendOrigin }: { backendOrigin: string }) {
       )}
 
       {err && (
-        <p class="muted" style={{ color: "#b00020" }}>
+        <p className="muted" style={{ color: "#b00020" }}>
           {err}
         </p>
       )}
@@ -287,7 +286,7 @@ function ConfigureForm({
         setClientSecret(c.clientSecret || "");
       })
       .catch(() => {
-        // Non-fatal — start with empty fields.
+        /* non-fatal — start empty */
       });
     return () => {
       cancelled = true;
@@ -330,9 +329,8 @@ function ConfigureForm({
     }
   }
 
-  function onFileChange(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
+  function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.currentTarget.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
@@ -346,7 +344,7 @@ function ConfigureForm({
     };
     reader.onerror = () => setParseErr("Couldn't read file.");
     reader.readAsText(file);
-    input.value = "";
+    e.currentTarget.value = "";
   }
 
   async function onSave() {
@@ -389,14 +387,14 @@ function ConfigureForm({
   return (
     <div
       style={{
-        marginTop: "12px",
-        padding: "12px",
+        marginTop: 12,
+        padding: 12,
         border: "1px solid #d1d5db",
-        borderRadius: "6px",
+        borderRadius: 6,
         background: "#f9fafb",
       }}
     >
-      <p class="muted" style={{ marginTop: 0 }}>
+      <p className="muted" style={{ marginTop: 0 }}>
         Upload <code>credentials.json</code> from Google Cloud Console, paste
         the JSON, or fill the fields manually. The redirect URI registered
         in your OAuth client must match{" "}
@@ -408,101 +406,91 @@ function ConfigureForm({
         type="file"
         accept=".json,application/json"
         onChange={onFileChange}
-        style={{ marginTop: "4px" }}
+        style={{ marginTop: 4 }}
       />
 
-      <label style={{ marginTop: "10px" }}>Or paste JSON</label>
+      <label style={{ marginTop: 10 }}>Or paste JSON</label>
       <textarea
         value={pasteJson}
-        onInput={(e) => setPasteJson((e.currentTarget as HTMLTextAreaElement).value)}
+        onChange={(e) => setPasteJson(e.currentTarget.value)}
         rows={4}
-        spellcheck={false}
+        spellCheck={false}
         style={{
           width: "100%",
-          marginTop: "4px",
+          marginTop: 4,
           padding: "7px 10px",
           border: "1px solid #d1d5db",
-          borderRadius: "5px",
+          borderRadius: 5,
           font: "12px ui-monospace, Menlo, Consolas, monospace",
           resize: "vertical",
         }}
         placeholder='{"web": {"client_id": "...", "client_secret": "...", ...}}'
       />
-      <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "8px" }}>
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
         <button
           type="button"
           onClick={onParseClick}
-          class="save-btn"
-          style={{ background: "#6b7280", padding: "5px 12px", fontSize: "12px" }}
+          className="save-btn"
+          style={{ background: "#6b7280", padding: "5px 12px", fontSize: 12 }}
         >
           Parse JSON
         </button>
         {parseErr && (
-          <span class="status err" style={{ fontSize: "11px" }}>
+          <span className="status err" style={{ fontSize: 11 }}>
             {parseErr}
           </span>
         )}
       </div>
 
-      <label htmlFor="g-client-id" style={{ marginTop: "12px" }}>
+      <label htmlFor="g-client-id" style={{ marginTop: 12 }}>
         Client ID
       </label>
       <input
         id="g-client-id"
         type="text"
-        spellcheck={false}
-        autocomplete="off"
-        data-lpignore="true"
-        data-1p-ignore="true"
+        spellCheck={false}
+        autoComplete="off"
         value={clientId}
-        onInput={(e) => setClientId((e.currentTarget as HTMLInputElement).value)}
+        onChange={(e) => setClientId(e.currentTarget.value)}
         placeholder="...apps.googleusercontent.com"
       />
 
       <label htmlFor="g-client-secret">Client secret</label>
       <input
         id="g-client-secret"
-        class="secret"
+        className="secret"
         type="text"
-        spellcheck={false}
-        autocomplete="off"
-        autocorrect="off"
-        autocapitalize="off"
-        data-lpignore="true"
-        data-1p-ignore="true"
-        data-form-type="other"
+        spellCheck={false}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
         value={clientSecret}
-        onInput={(e) => setClientSecret((e.currentTarget as HTMLInputElement).value)}
+        onChange={(e) => setClientSecret(e.currentTarget.value)}
         placeholder="GOCSPX-..."
       />
 
       {connected && (
-        <p class="muted" style={{ color: "#92400e", marginTop: "8px" }}>
+        <p className="muted" style={{ color: "#92400e", marginTop: 8 }}>
           Saving will disconnect the current Drive session — the existing
           tokens belong to the old client.
         </p>
       )}
 
-      <div style={{ marginTop: "12px", display: "flex", gap: "8px", alignItems: "center" }}>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saving}
-          class="save-btn"
-        >
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="button" onClick={onSave} disabled={saving} className="save-btn">
           {saving ? "Saving…" : "Save credentials"}
         </button>
         <button
           type="button"
           onClick={() => onClose(false)}
           disabled={saving}
-          class="save-btn"
+          className="save-btn"
           style={{ background: "#6b7280" }}
         >
           Cancel
         </button>
         {saveErr && (
-          <span class="status err" style={{ fontSize: "11px" }}>
+          <span className="status err" style={{ fontSize: 11 }}>
             {saveErr}
           </span>
         )}

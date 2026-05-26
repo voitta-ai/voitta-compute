@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="5" fill="#ffffff"/>
+  <!--
+    V left arm + apex, then right arm rises to become B spine top.
+    B spine continues straight down from that point.
+    Two D-curves peel off the right side of the spine → B bumps.
+  -->
+
+  <!-- V left arm + right arm (shares top with B spine) -->
+  <path
+    d="M3,4 L14,27 L22,4"
+    fill="none"
+    stroke="#1a56db"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <!-- B spine: continues straight down from V's right arm top -->
+  <line x1="22" y1="4" x2="22" y2="28"
+    stroke="#1a56db" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- B top bump -->
+  <path
+    d="M22,4 Q30,10 22,16"
+    fill="none"
+    stroke="#1a56db"
+    stroke-width="2.8"
+    stroke-linecap="round"
+  />
+
+  <!-- B bottom bump (slightly wider) -->
+  <path
+    d="M22,16 Q31,22 22,28"
+    fill="none"
+    stroke="#1a56db"
+    stroke-width="2.8"
+    stroke-linecap="round"
+  />
+</svg>
