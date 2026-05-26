@@ -32,6 +32,10 @@ src/voitta_chainlit/resources/frontend_dist/
 src/voitta_chainlit/resources/plugins/
 src/voitta_chainlit/resources/vendor_js/
 
+# Build artifacts / release binaries
+dist/
+wheels/
+
 # Editor / OS
 .DS_Store
 *.swp
