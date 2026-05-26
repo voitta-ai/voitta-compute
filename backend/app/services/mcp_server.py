@@ -135,21 +135,38 @@ async def _call_in_session(
     t0 = time.perf_counter()
     try:
         emitter = ChainlitEmitter(session)
-        _log.info("MCP▶ emitter built — dispatching via run_in_executor to avoid blocking event loop")
-        # sio.call() blocks the entire asyncio event loop when the socket is
-        # dead or unresponsive — asyncio.wait_for cannot cancel a coroutine
-        # that never yields. Running it in a thread executor lets the event
-        # loop stay live and makes asyncio.wait_for actually work.
-        result = await emitter.send_call_fn(primitive, args, timeout=int(timeout_s))
+        _log.info("MCP▶ emitter built — awaiting send_call_fn primitive=%s timeout=%ss", primitive, timeout_s)
+        # send_call_fn wraps sio.call(), which uses asyncio.wait_for internally and
+        # times out after timeout_s with socketio.TimeoutError. However, the
+        # post-timeout cleanup inside send_call_fn (send_timeout, clear) also calls
+        # sio.emit() which has no timeout of its own and can hang if the socket is
+        # stale. The outer asyncio.wait_for here (timeout_s + 5s grace) is a backstop
+        # that cancels the whole coroutine if Chainlit's internal cleanup stalls.
+        result = await asyncio.wait_for(
+            emitter.send_call_fn(primitive, args, timeout=int(timeout_s)),
+            timeout=timeout_s + 5,
+        )
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         _log.info("MCP▶ send_call_fn returned in %dms result=%s", elapsed_ms, type(result).__name__)
-    except (asyncio.TimeoutError, Exception) as exc:
+    except asyncio.TimeoutError:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        _log.warning("MCP▶ outer asyncio.wait_for timeout after %dms (inner=%ss + 5s grace) primitive=%s session=%s",
+                     elapsed_ms, timeout_s, primitive, session_id)
+        return _err(
+            "no_ack",
+            f"outer asyncio timeout after {elapsed_ms}ms (inner={timeout_s}s + 5s grace) — "
+            f"socket_id={socket_id!r} — Chainlit post-timeout cleanup likely stalled",
+            session_id=session_id, primitive=primitive, elapsed_ms=elapsed_ms,
+        )
+    except Exception as exc:
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         # sio.call() raises socketio.exceptions.TimeoutError (not asyncio.TimeoutError)
-        # when the FE doesn't ack. Catch it by name to avoid import coupling.
+        # when the FE doesn't ack within timeout_s. Chainlit catches it internally
+        # and returns None from send_call_fn, so we rarely see it here — but guard
+        # anyway.
         exc_name = type(exc).__name__
         if "Timeout" in exc_name:
-            _log.warning("MCP▶ timeout (%s) after %dms primitive=%s session=%s",
+            _log.warning("MCP▶ inner timeout (%s) after %dms primitive=%s session=%s",
                          exc_name, elapsed_ms, primitive, session_id)
             return _err(
                 "no_ack",
@@ -234,6 +251,7 @@ def get_server() -> FastMCP:
 
         Returns ``{ok, url, title, host, html_bytes, file, fetched_at_ms}``.
         """
+        _log.info("MCP▶ mcp_page called session=%s", session_id)
         from app.services import mcp_dumps
 
         payload = await _call_in_session(session_id, "get_page_dump", {})
@@ -275,6 +293,7 @@ def get_server() -> FastMCP:
         ``await_ms`` is a hard timeout: a runaway script aborts at
         this deadline so the call_fn round-trip can't hang.
         """
+        _log.info("MCP▶ mcp_eval called session=%s await_ms=%s js_len=%d", session_id, await_ms, len(js or ""))
         if not js or not js.strip():
             return _err("bad_request", "js is required", session_id=session_id)
         return await _call_in_session(
@@ -289,6 +308,7 @@ def get_server() -> FastMCP:
         uses, but bypasses chat — no message in the pane, no LLM turn.
         Returns base64 PNG + size metadata in the ``_image`` envelope.
         """
+        _log.info("MCP▶ mcp_screenshot called session=%s", session_id)
         payload = await _call_in_session(session_id, "screenshot_report", {})
         if not payload.get("ok"):
             return payload
@@ -313,6 +333,7 @@ def get_server() -> FastMCP:
 
         Returns ``{ok, already_installed}``.
         """
+        _log.info("MCP▶ mcp_devtools_install called session=%s", session_id)
         return await _call_in_session(session_id, "install_devtools_capture", {})
 
     @mcp.tool()
@@ -342,6 +363,7 @@ def get_server() -> FastMCP:
                             req_headers, res_headers, req_body, res_body, error?}
           error   entries: {ts, message, source?, lineno?, colno?, stack?}
         """
+        _log.info("MCP▶ mcp_devtools_read called session=%s kind=%s limit=%s clear=%s", session_id, kind, limit, clear)
         from app.services import mcp_dumps
 
         if kind not in ("console", "network", "errors", "all"):
@@ -383,6 +405,7 @@ def get_server() -> FastMCP:
         uninstalling the interceptors. Useful before triggering a specific
         action you want to observe cleanly.
         """
+        _log.info("MCP▶ mcp_devtools_clear called session=%s", session_id)
         return await _call_in_session(session_id, "clear_devtools_data", {})
 
     _SERVER = mcp
