@@ -53,6 +53,7 @@ class DispatchResult:
     errors: list[dict[str, Any]] | None = None
     inventory: dict[str, Any] | None = None
     error: Optional[str] = None
+    inline: list[dict[str, Any]] | None = None
 
 
 async def emit_inline(ctx) -> None:
@@ -144,14 +145,14 @@ async def run_and_dispatch(
     assert run.ctx is not None
     in_chat = _cl_context_active()
 
-    # Inline items (text/image/json emitted by the script) only make sense
-    # inside a Chainlit session — skip silently when called from REST.
+    inline_items = [{"kind": i.kind, "payload": i.payload} for i in run.ctx.inline]
+
     if in_chat:
         await emit_inline(run.ctx)
 
     if run.result is None:
         store.update_meta(slug, last_ok=True, last_run_at=_now_iso(), last_kind=None)
-        return DispatchResult(ok=True, status="no-render")
+        return DispatchResult(ok=True, status="no-render", inline=inline_items or None)
 
     render_id = uuid.uuid4().hex
     try:
@@ -176,6 +177,7 @@ async def run_and_dispatch(
         result = DispatchResult(
             ok=True, status="ready", kind="html",
             inventory={"url": payload.url, "render_id": render_id},
+            inline=inline_items or None,
         )
 
     store.update_meta(

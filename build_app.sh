@@ -195,12 +195,12 @@ cp -r "$ROOT/plugins/" "$RES/plugins/"
 #     two small files into resources/vendor_js/ and serve from there.
 mkdir -p "$RES/vendor_js"
 NM="$ROOT/frontend/node_modules"
-[ -f "$NM/html2canvas/dist/html2canvas.min.js" ] \
-  && cp "$NM/html2canvas/dist/html2canvas.min.js" "$RES/vendor_js/html2canvas.min.js" \
-  || echo "[build_app] WARNING: html2canvas not in node_modules — skipping"
-[ -f "$NM/html-to-image/dist/html-to-image.js" ] \
-  && cp "$NM/html-to-image/dist/html-to-image.js" "$RES/vendor_js/html-to-image.js" \
-  || echo "[build_app] WARNING: html-to-image not in node_modules — skipping"
+if [ ! -f "$NM/html2canvas/dist/html2canvas.min.js" ] || [ ! -f "$NM/html-to-image/dist/html-to-image.js" ]; then
+  echo "[build_app] vendor_js deps missing — running npm install…"
+  ( cd "$ROOT/frontend" && npm install --silent )
+fi
+cp "$NM/html2canvas/dist/html2canvas.min.js" "$RES/vendor_js/html2canvas.min.js"
+cp "$NM/html-to-image/dist/html-to-image.js" "$RES/vendor_js/html-to-image.js"
 echo "[build_app] staged vendor_js"
 
 # 5e. mkcert binary (arm64, required for cert provisioning)

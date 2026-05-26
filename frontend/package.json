@@ -13,6 +13,7 @@
     "@chainlit/react-client": "^0.4.1",
     "dompurify": "^3.4.5",
     "html-to-image": "^1.11.11",
+    "html2canvas": "^1.4.1",
     "marked": "^18.0.3",
     "mermaid": "^11.15.0",
     "react": "^18.3.1",
