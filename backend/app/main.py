@@ -1293,14 +1293,16 @@ async def screenshot_stash_put(request: Request) -> dict[str, Any]:
 from app.config import FRONTEND_DIST as _FE_DIST
 
 
+_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
 @app.get("/{full_path:path}", include_in_schema=False)
 async def serve_frontend(full_path: str) -> FileResponse:
     if not _FE_DIST.is_dir():
         return FileResponse(str(Path(__file__).with_name("missing_frontend.html")))
     target = _FE_DIST / full_path
     if full_path and target.is_file():
-        return FileResponse(str(target))
+        return FileResponse(str(target), headers=_NO_CACHE)
     index = _FE_DIST / "index.html"
     if index.is_file():
-        return FileResponse(str(index))
-    return FileResponse(str(_FE_DIST / "widget.js"))
+        return FileResponse(str(index), headers=_NO_CACHE)
+    return FileResponse(str(_FE_DIST / "widget.js"), headers=_NO_CACHE)
