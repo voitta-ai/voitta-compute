@@ -32,8 +32,8 @@ voitta-bookmarklet-chainlit/
 > time. The `resources/` subdirectories (`docs/`, `frontend_dist/`,
 > `plugins/`, `vendor_js/`) are gitignored — never edit them directly.
 
-Five plugins ship today: `default` (always-on system prompt), `ebay`,
-`google`, `linkedin`, `voitta-enterprise`. See [`docs/05-plugins.md`](docs/05-plugins.md)
+Six plugins ship today: `default` (always-on system prompt), `ebay`,
+`google`, `linkedin`, `veed`, `voitta-enterprise`. See [`docs/05-plugins.md`](docs/05-plugins.md)
 for the plugin model.
 
 ## Setup
@@ -79,7 +79,7 @@ Per-user settings at
 {
   "provider": "anthropic",
   "api_keys": { "anthropic": "sk-ant-..." },
-  "models":   { "anthropic": "claude-sonnet-4-5-20250929" },
+  "models":   { "anthropic": "claude-sonnet-4-6" },
   "googleOAuth": { "clientId": "...", "clientSecret": "..." },
   "plugins": { "voitta-enterprise": { "mcp": { "url": "...", "api_key": "..." } } }
 }
@@ -91,7 +91,7 @@ that ships configurable fields.
 
 ## `lib-sources/` — vendored libraries
 
-Five libraries live here as git submodules so the LLM can grep
+Four libraries live here as git submodules so the LLM can grep
 through their source via the RAG `code` corpus:
 
 | Submodule              | Indexed roots                  | Why                          |
@@ -122,12 +122,12 @@ fusion:
 python scripts/build_rag.py                       # both corpora
 python scripts/build_rag.py --corpus docs         # docs/ + plugins/*/docs/  (fast, ~1s)
 python scripts/build_rag.py --corpus code         # lib-sources/*  (slower, ~1 min)
-python scripts/build_rag.py --corpus code --repo panel             # one repo only
-python scripts/build_rag.py --corpus code --repo panel,three.js    # subset
+python scripts/build_rag.py --corpus code --repo three.js          # one repo only
+python scripts/build_rag.py --corpus code --repo three.js,elkjs    # subset
 ```
 
-Each run is a **full rewrite** of the named corpus — `--repo panel`
-REPLACES the code corpus with just panel chunks, it doesn't merge.
+Each run is a **full rewrite** of the named corpus — `--repo three.js`
+REPLACES the code corpus with just three.js chunks, it doesn't merge.
 Use it for fast iteration after bumping a submodule, then rebuild
 all when you're done.
 
