@@ -104,17 +104,19 @@ in the `meta` dict to `put_file()`.
 individual snapshots with the trash icon in the Workspace panel or by
 calling the workspace API. Don't accumulate hundreds of unnamed frames.
 
-### Folder before creating
+### Folder before creating (for non-script artefacts)
 
-If you're about to produce several related artefacts (e.g. multiple
-frames from a video, or a suite of reports for one project), create the
-folder first, then produce the artefacts into it. Avoids a move step.
+`define_script` auto-creates the folder when `folder_name` is given, so no
+prior `create_folder` call is needed. For tools that store data artefacts
+(`veed_frame`, `put_file`, etc.) the folder must exist first.
 
 ```
-# Good sequence:
+# define_script — folder auto-created in one call:
+define_script("acme-revenue", code=..., folder_name="acme-analysis")
+
+# data tools — create folder first:
 create_folder("acme-analysis", description="ACME project frames and reports")
 veed_frame(clip_uuid=..., folder_name="acme-analysis")
-define_script("acme-revenue", code=..., folder_name="acme-analysis")
 ```
 
 ### `list_data` before writing a report that reads data

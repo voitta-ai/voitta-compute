@@ -42,8 +42,8 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
             "ok": False,
             "error": str(exc),
             "hint": (
-                f"Use create_folder(name={folder_name!r}) first, "
-                "then retry define_script."
+                f"Retry define_script — if the folder {folder_name!r} "
+                "still can't be created, call create_folder first."
             ) if folder_name else None,
         }
     return {
@@ -77,7 +77,7 @@ registry.register(
                 },
                 "folder_name": {
                     "type": "string",
-                    "description": "Workspace folder to place the script in. Create with create_folder first.",
+                    "description": "Workspace folder to place the script in. Auto-created if it doesn't exist.",
                 },
             },
             "required": ["name", "code"],
