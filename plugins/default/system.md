@@ -167,6 +167,13 @@ defining the script.
   text as content) without writing a script.
 - **`create_folder` / `move_to_folder` / `delete_folder`** — manage
   workspace folders. See `07-workspace.md` for conventions.
+- **`browser_eval(js, await_ms?)`** — execute arbitrary JavaScript in
+  the user's current tab. Full DOM/fetch/localStorage/cookie access;
+  top-level `await` works; returns `{ok, result, logs, ms}`. Use this
+  when no narrower plugin primitive covers the task. When a
+  purpose-built tool exists (e.g. `simr_get_token`, `ebay_scrape_search`,
+  `sheets_get_page_context`), prefer it — the result shape is stable and
+  it's faster.
 - **`rag_query` / `rag_get_chunk_range`** — search the docs and code
   corpora.
 - **`get_active_theme`** — read the host plugin's palette (`ctx`

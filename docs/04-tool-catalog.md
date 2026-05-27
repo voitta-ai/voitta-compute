@@ -40,6 +40,7 @@ workspace folder system, filesystem layout, and best practices.
 | Tool | Source | What it does |
 |---|---|---|
 | `get_page_title` | [`tools/browser/get_page_title.py`](../backend/app/tools/browser/get_page_title.py) (BE spec) + `primitives.ts:get_page_title` (FE impl) | Returns the host page's `<title>`. |
+| `browser_eval` | [`tools/browser/browser_eval.py`](../backend/app/tools/browser/browser_eval.py) (BE spec) + `eval_js` FE primitive | Execute arbitrary JavaScript in the user's tab. Returns `{ok, result, logs, ms}`. Full DOM/fetch/localStorage access; top-level `await` supported. Prefer narrow plugin primitives where available. |
 
 The browser-tool **spec** lives in the BE (so the LLM sees it in
 `schemas_for_host`); the **implementation** lives in the FE
