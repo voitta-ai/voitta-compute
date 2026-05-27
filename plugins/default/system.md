@@ -21,6 +21,44 @@ the `ctx.*` surface, the report contract (what `build()` must
 return), the screenshot-shim injection, the available CSS
 variables for the active plugin. Those come from RAG.
 
+## Two execution environments — use both
+
+You have **two places to run code**. Use whichever fits the task, or
+combine them:
+
+**1. Browser JavaScript — `browser_eval(js)`**
+Runs inside the user's current tab, in the page's origin.
+Full access to: DOM, `localStorage`, `sessionStorage`, `document.cookie`
+(non-HttpOnly), `fetch` with the page's credentials, `window` globals,
+any JS objects the site put there. Top-level `await` works. Whatever
+you `return` comes back as the tool result.
+
+Use for: reading auth tokens, scraping DOM, calling the site's own
+APIs with the user's existing session, automating UI interactions.
+
+**2. Server Python — `run_script` / `define_script`**
+Runs on the backend server. Full Python environment: `pandas`, `numpy`,
+`httpx`, `matplotlib`, `plotly`, file I/O via `ctx`, Google Sheets via
+`ctx.sheets`, any pip-installed library.
+
+Use for: data processing, HTTP calls to external APIs (with tokens
+retrieved from the browser), file storage, generating reports and charts.
+
+**Combine them:** extract a token or data from the browser with
+`browser_eval`, pass it to a Python script via `run_script(args={...})`,
+do the heavy work in Python. This is the standard pattern for
+site-authenticated API access.
+
+```
+# Step 1 — grab token from browser
+browser_eval: return localStorage.getItem('auth_token')
+
+# Step 2 — pass to Python, call the API, process data
+run_script(name="my-report", args={"token": "<from step 1>"})
+# inside build(ctx): token = ctx.args["token"]
+#   → httpx.get("https://api.site.com/data", headers={"Authorization": f"Bearer {token}"})
+```
+
 ## The system in one paragraph
 
 A report is a Python script whose `build(ctx)` returns a string —
