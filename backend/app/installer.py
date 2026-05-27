@@ -434,7 +434,15 @@ def install_all(progress_cb: ProgressCb) -> bool:
         blurb = PACKAGE_BLURBS.get(import_name, f"Installing {import_name}…")
         progress_cb(i, total, blurb, f">>> pip install {spec}")
 
-        args = ["install", "--no-warn-script-location", spec]
+        args = ["install", "--no-warn-script-location"]
+        try:
+            import voitta_compute
+            _whl = Path(voitta_compute.__file__).resolve().parent / "resources" / "wheels"
+        except Exception:
+            _whl = Path(__file__).resolve().parent.parent.parent / "wheels"
+        if _whl.is_dir():
+            args += ["--find-links", str(_whl)]
+        args.append(spec)
         out_buf = io.StringIO()
         err_buf = io.StringIO()
         try:

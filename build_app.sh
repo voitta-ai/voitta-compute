@@ -189,6 +189,12 @@ cp -r "$ROOT/docs/" "$RES/docs/"
 rm -rf "$RES/plugins"
 cp -r "$ROOT/plugins/" "$RES/plugins/"
 
+# 5d-pre. Bundle pre-built wheels so installer.py never goes to PyPI for
+#         sdist-only packages (e.g. literalai) that fail on quarantined mounts.
+rm -rf "$RES/wheels"
+mkdir -p "$RES/wheels"
+cp "$WHEELS_DIR/"*.whl "$RES/wheels/" 2>/dev/null || true
+
 # 5d. Screenshot JS libs (html2canvas + html-to-image) — served by
 #     /api/_html2canvas.js and /api/_html_to_image.js at runtime.
 #     In the frozen .app node_modules/ is absent, so we vendor these
