@@ -170,6 +170,7 @@ _build_wheel_from_sdist "rumps-"      "rumps>=0.4"
 _build_wheel_from_sdist "literalai-"  "literalai==0.1.201"
 _build_wheel_from_sdist "syncer-"     "syncer==2.0.3"
 _build_wheel_from_sdist "lazify-"     "Lazify==0.4.0"
+_build_wheel_from_sdist "cuid-"       "cuid<0.5,>=0.4"
 
 # ---------------------------------------------------------------------------
 # 5. Stage resources into src/voitta_compute/resources/

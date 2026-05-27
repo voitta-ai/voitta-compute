@@ -437,7 +437,8 @@ def install_all(progress_cb: ProgressCb) -> bool:
     # is invisible to the parent. ~/Library/Application Support/ is not
     # namespaced, so both sides always resolve it to the same real path.
     import tempfile
-    build_tmp = USER_DATA_DIR / "build-tmp"
+    from app.config import USER_DATA_ROOT
+    build_tmp = USER_DATA_ROOT / "build-tmp"
     build_tmp.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(build_tmp)
     tempfile.tempdir = str(build_tmp)
