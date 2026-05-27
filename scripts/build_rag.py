@@ -985,14 +985,12 @@ def assemble_docs_chunks() -> list[Chunk]:
 
     plugin_pairs: list[tuple[Path, Path]] = []
     if PLUGINS_DIR.is_dir():
-        for plugin_dir in sorted(PLUGINS_DIR.iterdir()):
-            if not plugin_dir.is_dir() or plugin_dir.name.startswith("."):
+        for docs_dir in sorted(PLUGINS_DIR.rglob("docs")):
+            if not docs_dir.is_dir():
                 continue
-            docs_dir = plugin_dir / "docs"
-            if docs_dir.is_dir():
-                for md in sorted(docs_dir.rglob("*.md")):
-                    if md.is_file():
-                        plugin_pairs.append((PLUGINS_DIR, md))
+            for md in sorted(docs_dir.rglob("*.md")):
+                if md.is_file():
+                    plugin_pairs.append((PLUGINS_DIR, md))
     if plugin_pairs:
         n_plugins = len({p[1].parent.parent for p in plugin_pairs})
         print(f"plugins: {len(plugin_pairs)} markdown file(s) across {n_plugins} plugin(s)")
