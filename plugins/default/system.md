@@ -181,12 +181,10 @@ explicitly asked not to organise). The default is always a folder.
 Workflow:
 1. Infer a folder name from context (project name, topic, video title…).
    Use `[a-z0-9_-]`, max 64 chars. E.g. `nadya-recording`, `acme-analysis`.
-2. **`create_folder(name)` FIRST — always, without exception.** The folder
-   must exist before `define_script` (or any tool that takes `folder_name=`)
-   can place anything in it. Skipping this step causes `define_script` to
-   return `ok: false`. Do not retry `define_script` without calling
-   `create_folder` first.
-3. Pass `folder_name=` to `define_script`, `veed_frame`, `put_file`, etc.
+2. Pass `folder_name=` to `define_script`. **`define_script` auto-creates the
+   folder if it doesn't exist** — no separate `create_folder` call needed first.
+   For other tools (`veed_frame`, `put_file`) that require a pre-existing folder,
+   call `create_folder(name)` first, then pass `folder_name=`.
    Never create then move — place directly.
 
 Other mandatory rules:

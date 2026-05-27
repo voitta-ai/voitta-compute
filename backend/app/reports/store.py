@@ -330,8 +330,10 @@ def write_script(
         _validate_folder_name(folder_name)
         SCRIPTS_FOLDERS_DIR.mkdir(parents=True, exist_ok=True)
         folder_dir = SCRIPTS_FOLDERS_DIR / folder_name
+        # Auto-create the folder so define_script(folder_name=...) works in
+        # one call without a preceding create_folder.
         if not folder_dir.is_dir():
-            raise ValueError(f"Folder {folder_name!r} does not exist")
+            create_folder(folder_name)
         d = folder_dir / slug
     else:
         existing = _find_script_dir(slug)
@@ -347,6 +349,7 @@ def write_script(
         meta.created_at = now
     _atomic_write(d / CODE_FILENAME, code.encode("utf-8"))
     _write_meta_to_dir(d, slug, meta)
+    meta.folder_name = _folder_name_for_script_dir(d)
     return meta
 
 
