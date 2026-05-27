@@ -34,12 +34,14 @@ type CustomPanelModule = {
   default: (props: CustomPanelProps) => JSX.Element;
 };
 const CUSTOM_PANEL_MODULES = import.meta.glob<CustomPanelModule>(
-  "../../plugins/*/frontend/settings-panel.tsx",
+  "../../plugins/**/frontend/settings-panel.tsx",
   { eager: true },
 );
 
-function findCustomPanel(pluginName: string) {
-  const needle = `/plugins/${pluginName}/frontend/settings-panel.tsx`;
+// relDir is the plugin's path relative to plugins/ root (e.g. "google/drive").
+// Falls back to bare plugin name for flat plugins without a rel_dir from the API.
+function findCustomPanel(relDir: string) {
+  const needle = `/plugins/${relDir}/frontend/settings-panel.tsx`;
   for (const path in CUSTOM_PANEL_MODULES) {
     if (path.endsWith(needle)) {
       return CUSTOM_PANEL_MODULES[path].default;
@@ -105,7 +107,7 @@ export default function SettingsView({ backendOrigin, onClose }: Props) {
   // Plugin gets a tab if it has a schema OR a custom panel; otherwise
   // it has nothing to configure and we hide it.
   const tabbedPlugins = plugins.filter(
-    (p) => p.settings_schema || findCustomPanel(p.name),
+    (p) => p.settings_schema || findCustomPanel(p.rel_dir ?? p.name),
   );
 
   return (
@@ -221,7 +223,7 @@ function PluginTabBody({
   }
   // Custom panel beats schema if both are present — the documented
   // opt-out escape hatch.
-  const CustomPanel = findCustomPanel(plugin.name);
+  const CustomPanel = findCustomPanel(plugin.rel_dir ?? plugin.name);
   if (CustomPanel) {
     return <CustomPanel pluginName={plugin.name} backendOrigin={backendOrigin} />;
   }

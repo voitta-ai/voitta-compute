@@ -64,10 +64,10 @@ async def get_active_account_index(ctx: ToolCtx) -> int | None:
     entirely).
     """
     try:
-        url_info = await call_browser("get_url", {}, ctx)
+        url_info = await call_browser("get_page_dump", {}, ctx)
     except BrowserToolError:
         return None
-    href = str(url_info.get("href") or "")
+    href = str(url_info.get("url") or "")
     pathname = urlparse(href).path or "/"
     for rx in (_FOLDER_RE, _VIEW_RE):
         m = rx.match(pathname)
@@ -82,7 +82,7 @@ async def get_active_account_index(ctx: ToolCtx) -> int | None:
 
 async def _drive_page_context(args: dict[str, Any], ctx: ToolCtx) -> dict[str, Any]:
     try:
-        url_info = await call_browser("get_url", {}, ctx)
+        url_info = await call_browser("get_page_dump", {}, ctx)
     except BrowserToolError as exc:
         return {
             "ok": False,
@@ -90,7 +90,7 @@ async def _drive_page_context(args: dict[str, Any], ctx: ToolCtx) -> dict[str, A
             "message": str(exc),
         }
 
-    href = str(url_info.get("href") or "")
+    href = str(url_info.get("url") or "")
     title = str(url_info.get("title") or "")
     parsed = urlparse(href)
     pathname = parsed.path or "/"

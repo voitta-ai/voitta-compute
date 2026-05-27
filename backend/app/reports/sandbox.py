@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import traceback
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional  # noqa: F401 — Any used in _make_sheets_client return type
 
 from app.reports.ctx import ScriptContext
 
@@ -86,13 +86,33 @@ def _execute(code: str, ctx: ScriptContext) -> RunResult:
     return RunResult(ok=True, result=result, ctx=ctx)
 
 
+def _make_sheets_client(loop: Optional[asyncio.AbstractEventLoop]) -> Any:
+    """Return a SheetsClient when the spreadsheets OAuth scope is active,
+    or a _NullSheetsClient stub otherwise. Import is guarded so a missing
+    plugin never breaks script execution on non-Sheets pages."""
+    try:
+        from app.services import google_oauth
+        from voitta_sheets.client import NULL_SHEETS_CLIENT, SheetsClient
+        if google_oauth.has_sheets_scope():
+            return SheetsClient(loop=loop)
+        return NULL_SHEETS_CLIENT
+    except Exception:
+        try:
+            from voitta_sheets.client import NULL_SHEETS_CLIENT
+            return NULL_SHEETS_CLIENT
+        except Exception:
+            return None
+
+
 def smoke_test(slug: str, code: str, host: Optional[str] = None) -> RunResult:
     """Run ``build(ctx)`` once with a throwaway context.
 
     Used by ``define_script`` / ``edit_script`` to validate code BEFORE
     it lands on disk. Side-effects in ``ctx`` are discarded.
     """
-    return _execute(code, ScriptContext(slug=slug, host=host))
+    ctx = ScriptContext(slug=slug, host=host)
+    ctx.sheets = _make_sheets_client(None)
+    return _execute(code, ctx)
 
 
 async def run(
@@ -109,4 +129,5 @@ async def run(
     except RuntimeError:
         loop = None
     ctx = ScriptContext(slug=slug, args=dict(args or {}), host=host, _loop=loop)
+    ctx.sheets = _make_sheets_client(loop)
     return await asyncio.to_thread(_execute, code, ctx)

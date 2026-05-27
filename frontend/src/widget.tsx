@@ -8,15 +8,16 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { cssText } from "./styles";
 
-// Plugin frontends — every ``plugins/<name>/frontend/widget.ts`` is
+// Plugin frontends — every ``plugins/**/frontend/widget.ts`` is
 // glob-imported so its ``registerPrimitive`` calls run at module load.
 // ``eager: true`` makes Vite inline the modules into our bundle rather
 // than chunk-split them, which keeps the bookmarklet a single file.
-// Adding a plugin = creating ``plugins/<name>/frontend/widget.ts``;
+// The ``**`` glob supports nested plugin trees (e.g. plugins/google/drive/).
+// Adding a plugin = creating ``plugins/<path>/frontend/widget.ts``;
 // no edits to this file required. Path is relative to this file:
 // ``frontend/src/widget.tsx`` → ``..`` → ``frontend/src/`` parent =
 // ``frontend/`` → ``../..`` = repo root → + ``/plugins/...``.
-import.meta.glob("../../plugins/*/frontend/widget.ts", { eager: true });
+import.meta.glob("../../plugins/**/frontend/widget.ts", { eager: true });
 
 const HOST_ID = "voitta-compute-host";
 

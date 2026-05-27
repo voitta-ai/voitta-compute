@@ -121,9 +121,13 @@ def _prepare_user_data_dir() -> Path:
     # frontend/dist — overwrite every launch so .app upgrades propagate.
     _seed_overwrite(res / "frontend_dist", user / "frontend" / "dist")
 
-    # docs + plugins — overwrite every launch (small, fast).
-    _seed_overwrite(res / "docs",    user / "docs")
-    _seed_overwrite(res / "plugins", user / "plugins")
+    # docs + plugins — replace every launch (small, fast). rmtree first so
+    # removed or reorganised files don't survive across .app upgrades.
+    _seed_overwrite(res / "docs", user / "docs")
+    plugins_dst = user / "plugins"
+    if plugins_dst.exists():
+        shutil.rmtree(plugins_dst)
+    _seed_overwrite(res / "plugins", plugins_dst)
 
     # lib-sources — stamp-gated copy (may be large).
     _seed_lib_sources(

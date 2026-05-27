@@ -30,6 +30,7 @@ export interface PluginConnectorStatus {
 
 export interface PluginInfo {
   name: string;
+  rel_dir?: string;  // path relative to plugins/ root, e.g. "google/drive"
   version?: string | null;
   description?: string | null;
   agent_name?: string | null;

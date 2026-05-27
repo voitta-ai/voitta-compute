@@ -1,4 +1,4 @@
-"""Google OAuth 2.0 — confidential web-app flow for personal Drive access.
+"""Google OAuth 2.0 — confidential web-app flow for Google API access.
 
 Lives entirely on the backend (token store + token refresh + REST
 proxy). Frontend's only role is the Settings panel button that opens
@@ -12,9 +12,12 @@ The OAuth client ID/secret are also there
 (``settings.googleOAuth.clientId``, ``…clientSecret``); they're treated
 as installation credentials, not per-call settings.
 
-Scope policy: ``drive.readonly`` (read-only access to all files the
-user can see) plus ``openid email`` so we can show the connected
+Scope policy: ``drive.readonly`` + ``spreadsheets`` (cell-level read/write
+for the Sheets plugin) plus ``openid email`` so we can show the connected
 account's email in the UI without an extra API call.
+
+If a user was connected under an older scope set, ``status()`` returns
+``needs_reauth: True`` so the UI can prompt them to reconnect.
 """
 
 from __future__ import annotations
@@ -35,14 +38,23 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
-# What we ask Google for. Drive scope is read-only — no upload, no
-# share, no metadata-mutation. ``openid email`` lets us decode the
-# returned ID token and surface the user's email in the Settings UI.
+# What we ask Google for.
+# - drive.readonly:  read-only Drive access — no upload, share, or metadata mutation.
+# - spreadsheets:    cell-level read/write for the Sheets plugin.
+# - openid email:    decode the returned ID token to surface account email in the UI.
 SCOPES = [
     "openid",
     "email",
     "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
+
+# Scopes (excluding openid/email) that must be present in a stored token for
+# all Google plugins to function. Used by needs_reauth() / status().
+_REQUIRED_API_SCOPES = frozenset([
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+])
 
 # Where Google redirects with the authorization code.
 # Must match the URI registered for the OAuth client in Google Cloud
@@ -175,10 +187,34 @@ def is_configured() -> bool:
 
 def is_connected() -> bool:
     """True iff we hold a refresh token. Used by tool registration as
-    a runtime visibility gate — Drive tools are hidden from the LLM
-    until the user has connected."""
+    a runtime visibility gate — Drive/Sheets tools are hidden from the
+    LLM until the user has connected."""
     tok = _get_tokens()
     return bool(tok and tok.get("refresh_token"))
+
+
+def has_sheets_scope() -> bool:
+    """True iff the stored token includes the Sheets API scope.
+
+    Used as a visibility gate for Sheets tools so they stay hidden if
+    the user connected under an older scope set (drive.readonly only)
+    and hasn't re-authorised yet.
+    """
+    tok = _get_tokens()
+    if not tok:
+        return False
+    granted = set((tok.get("scope") or "").split())
+    return "https://www.googleapis.com/auth/spreadsheets" in granted
+
+
+def _needs_reauth() -> bool:
+    """True iff connected but the stored token is missing one or more
+    required API scopes — user must re-authorise to get them."""
+    if not is_connected():
+        return False
+    tok = _get_tokens()
+    granted = set((tok.get("scope") or "").split()) if tok else set()
+    return bool(_REQUIRED_API_SCOPES - granted)
 
 
 def status() -> dict[str, Any]:
@@ -186,6 +222,7 @@ def status() -> dict[str, Any]:
     out: dict[str, Any] = {
         "configured": is_configured(),
         "connected": is_connected(),
+        "needs_reauth": _needs_reauth(),
     }
     tok = _get_tokens()
     if tok:

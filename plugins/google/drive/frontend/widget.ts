@@ -21,7 +21,7 @@ import {
   getBackendOrigin,
   PrimitiveError,
   registerPrimitive,
-} from "../../../frontend/src/lib/bridge";
+} from "../../../../frontend/src/lib/bridge";
 
 // ---- download_in_modal -----------------------------------------------------
 //

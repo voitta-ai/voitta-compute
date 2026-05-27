@@ -51,6 +51,7 @@ def _plugin_to_dict(p: Plugin) -> dict[str, Any]:
     """Project a loaded-plugin record into the wire shape."""
     return {
         "name": p.name,
+        "rel_dir": p.rel_dir,
         "version": p.version,
         "description": p.description,
         "agent_name": p.agent_name,

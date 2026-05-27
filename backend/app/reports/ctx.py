@@ -16,6 +16,13 @@ as a string; nothing else lives here.
     canonical ``scheme://...`` refs.
   • ``args`` / ``host`` — script inputs (``host`` = the page the
     bookmarklet is mounted on, used for plugin-palette resolution).
+  • ``sheets`` — SheetsClient injected by sandbox.run() when Google
+    OAuth has the ``spreadsheets`` scope. Provides sync-callable
+    access to all Sheets API operations (read_range, write_range,
+    format_range, etc.). Raises RuntimeError with a clear message
+    when not available (wrong host, OAuth not connected). Pass
+    ``spreadsheet_id`` via ``ctx.args`` so the LLM can supply it
+    through ``run_script``'s args field.
 
 Removed entirely (not coming back; the LLM does these directly in
 the HTML it returns):
@@ -57,6 +64,11 @@ class ScriptContext:
     # to a thread pool. Passed through to ensure_local so it can bridge
     # async resolvers back to the loop via run_coroutine_threadsafe.
     _loop: asyncio.AbstractEventLoop | None = field(default=None, repr=False)
+    # SheetsClient injected by sandbox.run() when Google OAuth spreadsheets
+    # scope is active. A _NullSheetsClient stub otherwise — never None, so
+    # attribute access always gives a readable RuntimeError rather than
+    # AttributeError.
+    sheets: Any = field(default=None, repr=False)
 
     # ---- inline emitters -------------------------------------------
 

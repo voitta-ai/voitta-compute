@@ -1,0 +1,9 @@
+{
+  "name": "google-sheets",
+  "version": "0.1.0",
+  "description": "Google Sheets plugin — cell-level read/write via the Sheets API v4, using the same OAuth credentials as the Google Drive plugin.",
+  "host_patterns": ["docs.google.com"],
+  "python_module": "voitta_sheets",
+  "docs_dir": "docs",
+  "system_prompt": "prompt.md"
+}

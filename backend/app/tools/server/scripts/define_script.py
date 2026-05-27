@@ -35,7 +35,17 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
     result = sandbox.smoke_test(name, code)
     if not result.ok:
         return {"ok": False, "error": result.error, "traceback": result.traceback}
-    meta = store.write_script(name, code, folder_name=folder_name)
+    try:
+        meta = store.write_script(name, code, folder_name=folder_name)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error": str(exc),
+            "hint": (
+                f"Use create_folder(name={folder_name!r}) first, "
+                "then retry define_script."
+            ) if folder_name else None,
+        }
     return {
         "ok": True,
         "name": meta.name,

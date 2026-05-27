@@ -24,7 +24,7 @@ import {
   saveSettings,
   subscribeSettings,
   type PublicSettings,
-} from "../../../frontend/src/lib/settings";
+} from "../../../../frontend/src/lib/settings";
 
 interface Props {
   pluginName: string;

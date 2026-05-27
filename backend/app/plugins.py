@@ -1,6 +1,7 @@
 """Plugin loader (BE-side).
 
-Discovers ``plugins/*/manifest.json`` at startup. A manifest looks like:
+Discovers ``plugins/**/manifest.json`` at startup (recursive, so nested
+plugin trees like ``plugins/google/drive/`` work). A manifest looks like:
 
     {
       "name": "ebay",
@@ -52,6 +53,7 @@ class Plugin:
     python_module: str | None
     frontend_bundle: str | None
     dir: Path
+    rel_dir: str = ""  # path relative to PLUGINS_DIR, e.g. "google/drive"
     # Manifest metadata surfaced to the Settings UI via /api/plugins.
     version: str | None = None
     description: str | None = None
@@ -192,7 +194,7 @@ def load_all() -> list[Plugin]:
     if not PLUGINS_DIR.exists():
         logger.info("plugins dir %s does not exist; skipping", PLUGINS_DIR)
         return []
-    for manifest_path in sorted(PLUGINS_DIR.glob("*/manifest.json")):
+    for manifest_path in sorted(PLUGINS_DIR.glob("**/manifest.json")):
         plugin_dir = manifest_path.parent
         try:
             data = json.loads(manifest_path.read_text())
@@ -223,6 +225,10 @@ def load_all() -> list[Plugin]:
         settings_panel = data.get("settings_panel")
         if not isinstance(settings_panel, str) or settings_panel not in ("schema", "custom"):
             settings_panel = "schema"
+        try:
+            rel_dir = str(plugin_dir.relative_to(PLUGINS_DIR))
+        except ValueError:
+            rel_dir = plugin_dir.name
         _PLUGINS.append(
             Plugin(
                 name=data["name"],
@@ -231,6 +237,7 @@ def load_all() -> list[Plugin]:
                 python_module=python_module,
                 frontend_bundle=frontend_bundle,
                 dir=plugin_dir,
+                rel_dir=rel_dir,
                 version=data.get("version") if isinstance(data.get("version"), str) else None,
                 description=data.get("description") if isinstance(data.get("description"), str) else None,
                 agent_name=data.get("agent_name") if isinstance(data.get("agent_name"), str) else None,
