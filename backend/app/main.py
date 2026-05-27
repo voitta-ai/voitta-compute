@@ -15,6 +15,14 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+# engineio hardcodes max_decode_packets=16, which is hit when the browser
+# reconnects after a hang and batches up queued polling packets. Raise it.
+try:
+    import engineio.payload
+    engineio.payload.Payload.max_decode_packets = 128
+except Exception:
+    pass
+
 
 # Build the FastMCP sub-app BEFORE constructing FastAPI so we can hand
 # its lifespan to the parent. FastMCP's streamable-HTTP transport
