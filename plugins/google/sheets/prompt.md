@@ -4,68 +4,80 @@ You are operating on a Google Sheets spreadsheet.
 
 ## Standard workflow
 
-1. Call `sheets_get_page_context` → gives you `spreadsheet_id` and `gid` (the active sheet's numeric ID).
-2. Call `sheets_get_metadata` → gives you all sheet names, their `sheet_id` (same thing as `gid`), and dimensions.
-   - If `gid` from step 1 is null, the user is on the first sheet — use `sheets[0].sheet_id` from metadata.
+1. Call `sheets_get_page_context` → gives you `spreadsheet_id` and `gid` (active sheet numeric GID).
+2. Call `sheets_get_metadata` → all sheet names and their `sheet_id` (same as `gid`).
 3. Read data with `sheets_read_range` using `SheetName!A1:Z10` notation.
-4. Before any write or format operation, show the user what will change and confirm.
+4. Before any write, show the user what will change and confirm.
 
-## Key concept: sheet_id vs sheet name
+## Available LLM tools (quick in-chat operations)
 
-- Read/write tools (`sheets_read_range`, `sheets_write_range`, `sheets_append_rows`) use **sheet name** in range notation: `Sheet1!A1:D5`
-- Formatting tools (`sheets_format_range`, `sheets_conditional_format`, `sheets_merge_cells`, `sheets_resize_columns`, `sheets_resize_rows`) use **numeric sheet_id** + range **without** sheet prefix: `sheet_id=0, range="A1:D5"`
-- The `sheet_id` from `sheets_get_metadata` and `gid` from `sheets_get_page_context` are the same value.
-
-## Available tools
-
-**Data:**
-- `sheets_get_page_context` — spreadsheet_id + active sheet gid from URL. Always call first.
+- `sheets_get_page_context` — spreadsheet_id + active sheet gid from URL.
 - `sheets_get_metadata` — all sheet names, sheet_ids, row/col counts.
-- `sheets_read_range(spreadsheet_id, range, value_render?)` — read cells. Returns `{range, values: [[...], ...], row_count, col_count}` (use `.values` key).
+- `sheets_read_range(spreadsheet_id, range, value_render?)` — returns `{range, values, row_count, col_count}`.
 - `sheets_write_range(spreadsheet_id, range, values)` — overwrite a range. Confirm first.
 - `sheets_append_rows(spreadsheet_id, range, values)` — append after last non-empty row. Confirm first.
 
-**Formatting (all require sheet_id, not sheet name):**
-- `sheets_format_range(spreadsheet_id, sheet_id, range, ...)` — background color, font color, bold, italic, font size, borders, alignment, wrap strategy.
-- `sheets_conditional_format(spreadsheet_id, sheet_id, range, ...)` — add a conditional format rule: `single_color` (condition + fill color) or `color_scale` (gradient min/max).
-- `sheets_merge_cells(spreadsheet_id, sheet_id, range, merge_type?, unmerge?)` — merge or unmerge cells.
-- `sheets_resize_columns(spreadsheet_id, sheet_id, columns)` — set column widths in pixels; columns is a list of `{index, width_px}` or `{start, end, width_px}`.
-- `sheets_resize_rows(spreadsheet_id, sheet_id, rows)` — set row heights in pixels; rows is a list of `{index, height_px}` or `{start, end, height_px}`.
+## ctx.sheets in scripts — full API access
 
-## Using ctx.sheets in scripts
+For anything beyond simple reads/writes — formatting, conditional formatting,
+freeze rows, data validation, hide columns, charts, etc. — write a script
+using `ctx.sheets`. Three raw HTTP methods, auth injected automatically:
 
-For data-driven work (color rows by value, append computed results, generate
-reports from sheet data), use `run_script` with `ctx.sheets` instead of
-calling tools one at a time. Scripts have full sync access to all Sheets API
-operations.
-
-**Workflow:**
-1. Get `spreadsheet_id` from `sheets_get_page_context`.
-2. Call `run_script` with `args: {spreadsheet_id: "..."}`.
-3. Inside the script, `ctx.args["spreadsheet_id"]` has the ID.
-
-**All ctx.sheets methods (sync, no await):**
 ```python
-meta  = ctx.sheets.get_metadata(sid)               # sheet names + sheet_ids
-rows  = ctx.sheets.read_range(sid, "Sheet1!A1:D20")  # returns list-of-lists DIRECTLY, not a dict
-ctx.sheets.write_range(sid, "Sheet1!A1", values)
-ctx.sheets.append_rows(sid, "Sheet1!A1", new_rows)
-ctx.sheets.format_range(sid, sheet_id, "A1:D1",    # sheet_id = numeric GID
-    bold=True, background_color="#1a73e8", font_color="#ffffff")
-ctx.sheets.conditional_format(sid, sheet_id, "B2:B100",
-    rule_type="color_scale", min_color="#f4c7c3", max_color="#b7e1cd")
-ctx.sheets.merge_cells(sid, sheet_id, "A1:D1")
-ctx.sheets.resize_columns(sid, sheet_id, [{"index": 0, "width_px": 200}])
-ctx.sheets.resize_rows(sid, sheet_id, [{"index": 0, "height_px": 36}])
-ctx.sheets.batch_update(sid, [...])                # raw batchUpdate escape hatch
+ctx.sheets.get(path, **params)        # GET  spreadsheets/{path}
+ctx.sheets.post(path, body, **params) # POST spreadsheets/{path}
+ctx.sheets.put(path, body, **params)  # PUT  spreadsheets/{path}
+ctx.sheets.get_metadata(sid)          # parse sheet structure
 ```
 
-`ctx.sheets` is unavailable (raises `RuntimeError`) when OAuth is not
-connected or lacks the `spreadsheets` scope.
+### Before writing any script that uses ctx.sheets
 
-## Notes
+1. `rag_query corpus="docs" query="ctx sheets api"` → `03-api-ctx-sheets.md`
+   Full usage examples for all values operations and common batchUpdate patterns.
 
-- Colors are `'#RRGGBB'` hex strings.
-- Column indices are 0-based (A=0, B=1). Row indices are 0-based (row 1 in the UI = index 0).
-- `value_input_mode: "USER_ENTERED"` (default) interprets formulas like `=SUM(A1:A10)`.
-- If any tool returns `insufficient_scope`, the user needs to reconnect Google OAuth via the Drive settings panel.
+2. `rag_query corpus="docs" query="sheets batchUpdate requests"` → `04-api-batch-requests.md`
+   Every batchUpdate request type with field names and examples.
+
+### Quick examples
+
+**Read cells:**
+```python
+data = ctx.sheets.get(f"{sid}/values/Sheet1!A1:D20",
+                      valueRenderOption="UNFORMATTED_VALUE")
+rows = data.get("values", [])
+```
+
+**Write cells:**
+```python
+ctx.sheets.put(f"{sid}/values/Sheet1!A1",
+               {"range": "Sheet1!A1", "values": [["Name", "Score"]]},
+               valueInputOption="USER_ENTERED")
+```
+
+**Any batchUpdate:**
+```python
+ctx.sheets.post(f"{sid}:batchUpdate", {"requests": [
+    { ... }   # see 04-api-batch-requests.md for all request types
+]})
+```
+
+**Clear a range:**
+```python
+ctx.sheets.post(f"{sid}/values/Sheet1!A1:D20:clear", {})
+```
+
+### Script smoke-test guard
+
+```python
+def build(ctx):
+    sid = ctx.args.get("spreadsheet_id")
+    if not sid:
+        return None
+    ...
+```
+
+## Key concept: sheet_id vs sheet name
+
+- Read/write tools and `values.*` calls use **sheet name** in range notation: `Sheet1!A1:D5`
+- batchUpdate `GridRange` uses **numeric sheet_id** + 0-based row/column indices
+- Get the numeric sheet_id from `get_metadata()["sheets"][n]["sheet_id"]`

@@ -87,7 +87,11 @@ ctx.snapshot(handle)          — python_storage lookup
 ctx.dataframe(handle)         — curves.pkl as DataFrame
 ctx.raw(handle)               — raw.json as Python value
 ctx.ensure_local(ref)         — materialise scheme://... ref
-ctx.sheets                    — SheetsClient (docs.google.com only; see sheets docs)
+ctx.sheets.get(path, **p)     — GET  sheets API (docs.google.com only)
+ctx.sheets.post(path, body)   — POST sheets API
+ctx.sheets.put(path, body)    — PUT  sheets API
+ctx.sheets.get_metadata(sid)  — parse sheet structure {title, sheets[]}
+                                 rag_query "ctx sheets api" before using
 ```
 
 That's the WHOLE ctx. There are no other methods. There is no
