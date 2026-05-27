@@ -430,6 +430,18 @@ def install_all(progress_cb: ProgressCb) -> bool:
 
     from pip._internal.cli.main import main as pip_main
 
+    # Redirect pip's tempdir (and that of PEP-517 build subprocesses) to a
+    # path under USER_DATA_DIR. macOS App Translocation sandbox-namespaces
+    # /var/folders/ so parent and child processes see different real paths for
+    # the same /var/folders/... string — output.json written by the subprocess
+    # is invisible to the parent. ~/Library/Application Support/ is not
+    # namespaced, so both sides always resolve it to the same real path.
+    import tempfile
+    build_tmp = USER_DATA_DIR / "build-tmp"
+    build_tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(build_tmp)
+    tempfile.tempdir = str(build_tmp)
+
     for i, (import_name, spec) in enumerate(todo):
         blurb = PACKAGE_BLURBS.get(import_name, f"Installing {import_name}…")
         progress_cb(i, total, blurb, f">>> pip install {spec}")
