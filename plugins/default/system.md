@@ -87,11 +87,29 @@ ctx.snapshot(handle)          — python_storage lookup
 ctx.dataframe(handle)         — curves.pkl as DataFrame
 ctx.raw(handle)               — raw.json as Python value
 ctx.ensure_local(ref)         — materialise scheme://... ref
+ctx.sheets                    — SheetsClient (docs.google.com only; see sheets docs)
 ```
 
 That's the WHOLE ctx. There are no other methods. There is no
 `ctx.apply_theme`, `ctx.add_js`, `ctx.three_scene`, `ctx.set_design`
 etc. — those were removed in the strip.
+
+## Smoke-test guard for runtime args
+
+`define_script` runs `build(ctx)` with an **empty** `ctx.args` as a
+smoke-test. Any script that needs args at run time MUST guard against
+their absence so the smoke-test passes:
+
+```python
+def build(ctx):
+    sid = ctx.args.get("spreadsheet_id")
+    if not sid:
+        return None   # smoke-test pass; nothing written
+    # ... real work ...
+```
+
+Never write `ctx.args["key"]` directly at the top of `build` — that
+crashes smoke-test with a `KeyError` and the script is never saved.
 
 ## Prefer numpy over stdlib `random`
 
@@ -163,7 +181,11 @@ explicitly asked not to organise). The default is always a folder.
 Workflow:
 1. Infer a folder name from context (project name, topic, video title…).
    Use `[a-z0-9_-]`, max 64 chars. E.g. `nadya-recording`, `acme-analysis`.
-2. `create_folder(name)` first — it's a no-op if the folder already exists.
+2. **`create_folder(name)` FIRST — always, without exception.** The folder
+   must exist before `define_script` (or any tool that takes `folder_name=`)
+   can place anything in it. Skipping this step causes `define_script` to
+   return `ok: false`. Do not retry `define_script` without calling
+   `create_folder` first.
 3. Pass `folder_name=` to `define_script`, `veed_frame`, `put_file`, etc.
    Never create then move — place directly.
 
