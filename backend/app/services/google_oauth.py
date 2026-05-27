@@ -80,6 +80,15 @@ class _PendingState:
 _pending: dict[str, _PendingState] = {}
 _PENDING_TTL_S = 10 * 60
 
+# In-memory token cache — avoids blocking file I/O on the event loop
+# every time get_access_token() is called from a coroutine.
+_token_cache: dict | None = None
+
+
+def _invalidate_token_cache() -> None:
+    global _token_cache
+    _token_cache = None
+
 
 def _gc_pending() -> None:
     cutoff = time.time() - _PENDING_TTL_S
@@ -153,14 +162,20 @@ async def set_client_credentials(client_id: str, client_secret: str) -> None:
 
 
 def _get_tokens() -> dict | None:
+    global _token_cache
+    if _token_cache is not None:
+        return _token_cache
     oauth = _settings().get("googleOAuth") or {}
     tok = oauth.get("tokens")
     if not isinstance(tok, dict):
         return None
+    _token_cache = tok
     return tok
 
 
 def _set_tokens(tokens: dict) -> None:
+    global _token_cache
+    _token_cache = tokens
     s = _settings()
     oauth = s.get("googleOAuth") or {}
     oauth["tokens"] = tokens
@@ -169,6 +184,8 @@ def _set_tokens(tokens: dict) -> None:
 
 
 def _clear_tokens() -> None:
+    global _token_cache
+    _token_cache = None
     s = _settings()
     oauth = s.get("googleOAuth") or {}
     oauth.pop("tokens", None)

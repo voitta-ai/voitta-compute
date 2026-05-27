@@ -115,6 +115,9 @@ def smoke_test(slug: str, code: str, host: Optional[str] = None) -> RunResult:
     return _execute(code, ctx)
 
 
+_SCRIPT_TIMEOUT_S = 120  # max wall time for a single build(ctx) run
+
+
 async def run(
     slug: str,
     code: str,
@@ -130,4 +133,15 @@ async def run(
         loop = None
     ctx = ScriptContext(slug=slug, args=dict(args or {}), host=host, _loop=loop)
     ctx.sheets = _make_sheets_client(loop)
-    return await asyncio.to_thread(_execute, code, ctx)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_execute, code, ctx),
+            timeout=_SCRIPT_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        return RunResult(
+            ok=False,
+            error=f"Script timed out after {_SCRIPT_TIMEOUT_S}s — "
+                  "it may be making too many API calls or waiting on a slow network.",
+            ctx=ctx,
+        )
