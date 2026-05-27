@@ -56,7 +56,8 @@ class SheetsClient:
 
     def _run(self, coro) -> Any:
         if self._loop is not None and self._loop.is_running():
-            return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+            fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return fut.result(timeout=60)  # never block forever
         return asyncio.run(coro)
 
     async def _headers(self) -> dict[str, str]:
