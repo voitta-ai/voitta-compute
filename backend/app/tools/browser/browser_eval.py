@@ -70,6 +70,7 @@ registry.register(
             "additionalProperties": False,
         },
         side="hybrid",
+        global_tool=True,
         handler=_handler,
     )
 )

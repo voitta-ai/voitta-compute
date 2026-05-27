@@ -66,6 +66,10 @@ class ToolSpec:
     # plugin-contributed specs that didn't set their own (per-tool
     # values win over the manifest default).
     host_pattern: str | list[str] | None = None
+    # Set True for core tools that must be visible on every host.
+    # The plugin loader's back-fill skips specs where this is True so
+    # a plugin's host_patterns can't accidentally gate a global tool.
+    global_tool: bool = False
     # Runtime gate: if set, the tool only appears in the LLM's list
     # when the callable returns True. Used for state the LLM can't
     # manipulate (e.g. "Drive tools only show when OAuth is connected").
@@ -243,7 +247,7 @@ def _back_fill_host_pattern(
     applied = 0
     for name in new_keys:
         spec = registry._tools.get(name)
-        if spec is not None and spec.host_pattern is None:
+        if spec is not None and spec.host_pattern is None and not spec.global_tool:
             spec.host_pattern = pattern
             applied += 1
     return applied
