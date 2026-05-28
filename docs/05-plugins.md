@@ -1,126 +1,86 @@
 # Plugins
 
-Plugins are the extension model. A plugin can contribute:
+Plugins extend Voitta with host-specific system prompts, backend tools, frontend components, and MCP servers.
 
-- A **system-prompt addendum** scoped to specific hosts.
-- **Server tools** (Python ToolSpecs registered as an import side effect).
-- **Browser primitives** (FE-side, registered via `registerPrimitive`).
-- **Docs** (auto-indexed by the RAG builder).
+## Manifest format
 
-The plugin tree lives at the repo root, sibling to `backend/` and
-`frontend/`:
-
-```
-plugins/<name>/
-├── manifest.json            ← REQUIRED
-├── prompt.md                ← optional — host-scoped system prompt
-├── backend/
-│   └── <python_module>/     ← optional Python package; registers ToolSpecs
-│       └── __init__.py
-├── frontend/
-│   └── widget.ts            ← optional FE bundle; calls registerPrimitive
-└── docs/                    ← optional markdown, auto-indexed by RAG
-    └── *.md
-```
-
-Every piece is optional except `manifest.json`. A docs-only plugin
-is valid; a tools-only plugin is valid; a prompt-only plugin is valid.
-
-## Manifest
+`plugins/<name>/manifest.json`:
 
 ```json
 {
-  "name": "ebay",
-  "host_patterns": ["ebay.com"],
-  "python_module": "voitta_ebay",
+  "name": "my-plugin",
+  "version": "1.0.0",
+  "description": "What this plugin does",
+  "host_patterns": ["*.mysite.com", "mysite.com"],
+  "system_prompt": "system.md",
+  "python_module": "voitta_myplugin",
   "frontend_bundle": "frontend/widget.ts",
-  "system_prompt": "prompt.md"
+  "agent_name": "MyPlugin Agent",
+  "settings_schema": {
+    "fields": [
+      {"key": "plugins.my-plugin.api_key", "label": "API Key", "type": "password"}
+    ]
+  },
+  "mcp_servers": [
+    {
+      "id": "my-mcp",
+      "url_setting": "plugins.my-plugin.mcp.url",
+      "api_key_setting": "plugins.my-plugin.mcp.api_key"
+    }
+  ]
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `name` | Display name. Should match the directory. |
-| `host_patterns` | List of hostname suffixes. `"*"` matches every page. |
-| `python_module` | Importable package under `<plugin>/backend/`. Optional. |
-| `frontend_bundle` | Path (relative) to the FE entry; existence-validated, glob-loaded by Vite. Optional. |
-| `system_prompt` | Path to a markdown file whose content is appended to the system prompt when the plugin applies. Optional. |
-| `mcp_servers` | Reserved for a future MCP layer. Skipped today with a log line. |
+All fields except `name` are optional.
+
+## Host gating
+
+`host_patterns` is a list of glob strings matched against the page hostname (lowercased, port stripped). Rules:
+- `"*"` matches every page (used by the default plugin).
+- `"ebay.com"` matches `ebay.com` and `www.ebay.com` (suffix match).
+- `"*.mysite.com"` matches any subdomain via `fnmatch`.
+
+When the bookmarklet is on a matching page:
+- The plugin's `system_prompt` text is appended to the system prompt for the session.
+- The plugin's tools (from `python_module`) become visible to the model.
+- The plugin's MCP server tools become available.
+
+## System prompt composition
+
+At chat start, `app/plugins.py:for_host(host)` returns all matching plugins. Their `system_prompt` strings are concatenated (in discovery order) and passed to the agent loop. The default plugin (`host_patterns: ["*"]`) always contributes the base Voitta prompt.
+
+## Python module
+
+If `python_module` is set, the loader:
+1. Adds `plugins/<name>/backend/` to `sys.path`.
+2. `importlib.import_module(python_module)` — the module registers `ToolSpec` instances as import side effects.
+3. Any `ToolSpec` that didn't declare `host_pattern` inherits the manifest's `host_patterns`.
+
+Import failures are logged and skipped — one bad plugin doesn't abort startup.
+
+## Frontend bundle
+
+`frontend_bundle` is a path relative to the plugin dir (e.g. `frontend/widget.ts`). The Vite build glob picks it up automatically. No runtime loading — it's compiled into the IIFE at build time. The backend warns at startup if the declared file is missing.
+
+## MCP servers
+
+`mcp_servers[]` entries declare remote MCP servers the plugin wants to connect:
+
+```json
+{
+  "id": "my-mcp",
+  "url_setting": "plugins.my-plugin.mcp.url",
+  "api_key_setting": "plugins.my-plugin.mcp.api_key"
+}
+```
+
+`url_setting` and `api_key_setting` are dotted paths into `settings.json`. The loader registers a connector; `app/services/mcp/registry.py:refresh_all()` opens connections at FastAPI startup and synthesises `ToolSpec` instances for every tool the MCP server exposes.
+
+## Settings panel
+
+`settings_panel: "schema"` (default) — the FE renders a form from `settings_schema.fields`.  
+`settings_panel: "custom"` — the FE looks for a `settings-panel.tsx` in the plugin's `frontend/` dir.
 
 ## Discovery
 
-[`backend/app/plugins.py`](../backend/app/plugins.py) runs at BE
-startup:
-
-1. Walks `plugins/*/manifest.json` (sorted).
-2. For each plugin: parses manifest, reads `system_prompt` file,
-   warns if `frontend_bundle` is declared but missing.
-3. If `python_module` is set: inserts `<plugin>/backend/` on
-   `sys.path` and `importlib.import_module(<python_module>)`. The
-   module's `register(ToolSpec(...))` calls run as import side effects.
-4. After import, back-fills `host_pattern` on plugin-contributed
-   ToolSpecs that didn't declare their own — manifest is the source
-   of truth for host gating, per-tool overrides win.
-5. Failure of one plugin is logged + skipped; the rest load.
-
-## System-prompt composition
-
-[`chainlit_app.py`](../backend/app/chainlit_app.py) on every turn:
-
-```python
-host = cl.user_session.get("host")
-parts = []
-for plugin in for_host(host):
-    if plugin.system_prompt:
-        parts.append(plugin.system_prompt.rstrip())
-system = "\n\n".join(parts)
-```
-
-The `default` plugin's `host_patterns: ["*"]` ensures the base
-Voitta prompt always applies; host-scoped plugins layer their
-addenda on top.
-
-## Frontend loading
-
-[`frontend/src/widget.tsx`](../frontend/src/widget.tsx) calls:
-
-```ts
-import.meta.glob("../../../plugins/*/frontend/widget.ts", { eager: true });
-```
-
-Vite walks the sibling `plugins/` tree at build time. Each plugin's
-`widget.ts` registers primitives:
-
-```ts
-import { registerPrimitive } from "../../../frontend/src/lib/primitives";
-
-registerPrimitive("ebay_inspect_page", () => {
-  return { page_type: "search", item_count: 42 };
-});
-```
-
-The relative path back to core: from `plugins/<name>/frontend/widget.ts`,
-`../../../frontend/src/lib/primitives` resolves correctly. If the
-plugin imports React/Preact, you'll need to add the appropriate aliases
-to `frontend/vite.config.ts` (the plugin's own dir has no
-`node_modules` above it).
-
-## Docs
-
-`plugins/<name>/docs/*.md` is auto-indexed by `scripts/build_rag.py`
-into the `docs` corpus. Chunk file paths come out as
-`<plugin>/docs/<file>.md` so search results show provenance.
-
-## The default plugin
-
-[`plugins/default/`](../plugins/default) ships the base Voitta system
-prompt (`system.md`). It has `host_patterns: ["*"]` — always active.
-This is also the one place the core touches: when packaging, ship
-this plugin or the assistant has no instructions.
-
-## Forward-compat fields
-
-- `mcp_servers[]` — declared connectors to remote MCP servers.
-  Reserved; skipped with a log line today. When the MCP layer arrives,
-  each entry will register as an `MCPConnector` whose tools become
-  available alongside local ones.
+The loader does `PLUGINS_DIR.glob("**/manifest.json")` recursively, so nested trees like `plugins/google/drive/manifest.json` work. Plugins are sorted by path before loading so load order is deterministic.

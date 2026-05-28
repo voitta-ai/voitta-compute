@@ -1,46 +1,38 @@
 # Overview
 
-Voitta is an LLM assistant injected into any web page via a
-bookmarklet. The user clicks the bookmark, a closed shadow-DOM widget
-mounts in the corner of the page, and the user can chat with a model
-that has both **server-side tools** (running in the local FastAPI/
-Chainlit backend) and **browser-side tools** (running inside the
-host page via primitives in the widget).
+Voitta Compute is a local AI assistant that runs on your Mac and injects a chat widget into any browser tab via a bookmarklet.
 
-## Two halves
+## What it does
 
-- **Backend** ([`backend/`](../backend)) — a [Chainlit](https://docs.chainlit.io/)
-  app driving an agent loop. The loop streams tokens, executes tool
-  calls (server or browser), and feeds results back to the LLM until
-  the model produces a final answer or hits the iteration cap. LLM
-  provider is pluggable: Anthropic, OpenAI, and Gemini are wired today.
+- Drops a floating chat widget into any page (shadow DOM, no style collisions).
+- Connects to Anthropic / OpenAI / Gemini via your own API keys.
+- Executes server-side Python scripts that produce HTML reports.
+- Evaluates arbitrary JavaScript in the user's active tab (`browser_eval`).
+- Takes screenshots of rendered reports using `html-to-image`.
+- Maintains persistent conversation history per thread (SQLite).
 
-- **Frontend** ([`frontend/`](../frontend)) — a Vite IIFE bundle
-  injected by the bookmarklet. It mounts React into a closed shadow
-  root, talks to the backend via [`@chainlit/react-client`](https://www.npmjs.com/package/@chainlit/react-client),
-  and exposes browser-side **primitives** the BE can call via Chainlit's
-  `CopilotFunction` round-trip.
+## What it is not
 
-## What it's NOT
+- Not a cloud service — the backend runs at `127.0.0.1:12358`.
+- Not a notebook — reports are standalone HTML strings, not live reactive cells.
+- Not a data platform — workspace stores snapshots as flat files; no database.
 
-- Not a Chrome extension. The bookmarklet is a single `<script>` tag —
-  no install, no manifest v3, works on any browser that supports ES2020.
-- Not multi-tenant. The backend binds to `127.0.0.1:12358` and trusts
-  the local user. There's no auth layer.
-- Not a Slack-style chat history server. Conversation state lives in
-  Chainlit's session; restarting the BE clears it.
+## Stack
 
-## Where things live
+| Layer | Technology |
+|---|---|
+| Backend | FastAPI + Chainlit (Python) |
+| Frontend | React + Vite, compiled to IIFE widget |
+| Widget injection | Bookmarklet, shadow DOM |
+| LLM providers | Anthropic, OpenAI, Gemini |
+| Report screenshots | `html-to-image` (SVG foreignObject) |
+| Persistence | SQLite at `~/Library/Application Support/Voitta Compute/backend/conversations.sqlite` |
+| Settings | JSON at `~/.config/voitta-compute/settings.json` |
 
-```
-voitta-compute/
-├── backend/      FastAPI + Chainlit, agent loop, tool registry
-├── frontend/     Vite IIFE bundle, React widget, primitives
-├── plugins/      Host-scoped extensions (manifest + BE module + FE widget + docs + prompt)
-├── docs/         This folder
-├── scripts/      Dev tools (RAG builder)
-└── rag/          Built RAG indexes (gitignored)
-```
+## Key entry points
 
-See [`01-architecture.md`](01-architecture.md) for the request flow,
-[`05-plugins.md`](05-plugins.md) for the extension model.
+- `backend/app/main.py` — FastAPI app, Chainlit mounted at `/chainlit`
+- `backend/app/chainlit_app.py` — `@cl.on_chat_start` / `@cl.on_message` glue
+- `backend/app/agent.py` — tool-use agent loop
+- `backend/app/tools/load.py` — side-effect imports that register all tools
+- `frontend/src/widget.tsx` — React widget root

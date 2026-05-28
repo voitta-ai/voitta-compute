@@ -31,13 +31,19 @@
   --voitta-accent-tint:   rgba(26, 26, 26, 0.12);
 
   /* ── Header strip ─────────────────────────────────────────────── */
-  --voitta-header-bg:           #0f172a;
-  --voitta-header-fg:           #f1f5f9;
-  --voitta-header-rule:         #1e293b;
-  --voitta-header-icon:         #f1f5f9;
-  --voitta-header-muted:        rgba(241, 245, 249, 0.55);
-  --voitta-header-btn-bg:       rgba(241, 245, 249, 0.08);
-  --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.16);
+  --voitta-header-bg:           #f1f5f9;
+  --voitta-header-fg:           #1a1a1a;
+  --voitta-header-rule:         #e2e8f0;
+  --voitta-header-icon:         #374151;
+  --voitta-header-muted:        rgba(26, 26, 26, 0.5);
+  --voitta-header-btn-bg:       rgba(26, 26, 26, 0.06);
+  --voitta-header-btn-bg-hover: rgba(26, 26, 26, 0.12);
+
+  /* ── Thread-picker dropdown (appears below dark header in light mode) */
+  --voitta-picker-bg:    #ffffff;
+  --voitta-picker-rule:  #e2e8f0;
+  --voitta-picker-fg:    #1a1a1a;
+  --voitta-picker-hover: rgba(26, 26, 26, 0.06);
 
   /* ── Conversation bubbles ────────────────────────────────────── */
   --voitta-user-bubble:    #f1f5f9;

@@ -37,9 +37,14 @@ Use for: reading auth tokens, scraping DOM, calling the site's own
 APIs with the user's existing session, automating UI interactions.
 
 **2. Server Python — `run_script` / `define_script`**
-Runs on the backend server. Full Python environment: `pandas`, `numpy`,
-`httpx`, `matplotlib`, `plotly`, file I/O via `ctx`, Google Sheets via
-`ctx.sheets`, any pip-installed library.
+Runs on the backend server in a **worker thread** (not the main thread).
+Full Python environment: `pandas`, `numpy`, `httpx`, `matplotlib`,
+`plotly`, file I/O via `ctx`, Google Sheets via `ctx.sheets`, any
+pip-installed library.
+
+Threading note: the sandbox forces `matplotlib.use("agg")` before your
+code runs, so `plt.subplots()` etc. work fine without any extra setup.
+Do NOT call `matplotlib.use(...)` yourself — it is already set.
 
 Use for: data processing, HTTP calls to external APIs (with tokens
 retrieved from the browser), file storage, generating reports and charts.

@@ -35,6 +35,12 @@
   --voitta-header-btn-bg:       rgba(241, 245, 249, 0.06);
   --voitta-header-btn-bg-hover: rgba(241, 245, 249, 0.14);
 
+  /* ── Thread-picker dropdown */
+  --voitta-picker-bg:    #0f172a;
+  --voitta-picker-rule:  #1e293b;
+  --voitta-picker-fg:    #f1f5f9;
+  --voitta-picker-hover: rgba(241, 245, 249, 0.10);
+
   /* ── Conversation bubbles ────────────────────────────────────── */
   --voitta-user-bubble:    #1f2733;
   --voitta-user-bubble-fg: #e6e6e8;

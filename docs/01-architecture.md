@@ -3,86 +3,57 @@
 ## Request flow (happy path)
 
 ```
-user types in widget
-    │
-    ▼
-@chainlit/react-client emits "send-message" over Socket.IO
-    │
-    ▼
-backend/app/chainlit_app.py:on_message
-    │
-    ▼
-agent.py:run_turn        ◄── messages, system prompt, provider_id
-    │
-    ├── provider.stream_message(NormalisedRequest)
-    │       │
-    │       ├── yields BlockStart / BlockDelta / BlockStop / MessageStop
-    │       │
-    │       └── cl.Message.stream_token → widget renders incrementally
-    │
-    ├── if stop_reason == "tool_use":
-    │       for each tool block:
-    │         registry.dispatch(name, args)
-    │           │
-    │           ├── side="server"  → await spec.impl(args)
-    │           └── side="browser" → cl.CopilotFunction(name, args).acall()
-    │                                 ↳ FE routes to primitives.ts
-    │
-    └── append synthetic tool_result message; loop
+Browser tab
+  └─ bookmarklet injects widget.js (IIFE)
+       └─ React widget mounts in shadow DOM
+            └─ user sends message
+                 └─ Chainlit socket.io (/chainlit/ws/socket.io)
+                      └─ chainlit_app.py: on_message
+                           └─ agent.py: run_turn()
+                                ├─ LLM call (streaming) via services/llm/<provider>
+                                ├─ tool dispatch: registry.dispatch(name, args, ctx)
+                                │    ├─ server-side tools: run in-process
+                                │    └─ browser-side tools: cl.CopilotFunction.acall()
+                                │         └─ call_fn → React widget → page JS → result
+                                └─ streams text tokens back to widget via cl.Message
 ```
-
-The loop terminates when the model emits a non-`tool_use` stop reason
-or hits `MAX_TOOL_ITERATIONS`.
 
 ## Key modules
 
 | Module | Role |
 |---|---|
-| [`chainlit_app.py`](../backend/app/chainlit_app.py) | `@cl.on_chat_start`, `@cl.on_message`, `@cl.on_window_message`. Composes system prompt from applicable plugins. |
-| [`agent.py`](../backend/app/agent.py) | The agent loop. Provider-agnostic — drives a `BaseProvider`. |
-| [`services/llm/`](../backend/app/services/llm) | Provider abstraction. `NormalisedRequest`, `ToolSchema`, streaming events. One subpackage per provider. |
-| [`tools/registry.py`](../backend/app/tools/registry.py) | `ToolSpec` + register / dispatch / `schemas_for_host`. |
-| [`tools/load.py`](../backend/app/tools/load.py) | Side-effect imports — every tool module registers itself here. |
-| [`plugins.py`](../backend/app/plugins.py) | Plugin discovery, manifest parsing, system-prompt loading, Python-module side-effect import. |
-| [`reports/`](../backend/app/reports) | User-authored Python scripts → renderable panes. |
+| `app/main.py` | FastAPI app factory; CORS + PNA middleware; Chainlit mount; screenshot stash |
+| `app/chainlit_app.py` | Chainlit event handlers; session init; plugin loading per host |
+| `app/agent.py` | Tool-use loop: LLM stream → tool dispatch → iterate until stop |
+| `app/plugins.py` | Discovers `plugins/**/manifest.json`; host-gated system prompt composition |
+| `app/tools/registry.py` | `ToolSpec` store; `registry.dispatch()`; `registry.visible_for_host()` |
+| `app/tools/load.py` | Imports all tool modules at startup (side-effect registration) |
+| `app/reports/sandbox.py` | `exec`-based script runner; `asyncio.to_thread`; 120 s timeout |
+| `app/reports/ctx.py` | `ScriptContext` — emitters, theme, data access |
+| `app/services/llm/` | Provider abstraction: `NormalisedRequest`, `stream()`, per-provider impls |
+| `app/data/sqlite_layer.py` | Chainlit `DataLayer` implementation over SQLite |
+| `app/services/user_settings.py` | Raw read/write for `settings.json` |
+| `app/settings.py` | Typed view over `settings.json`; defaults; `redacted_for_wire()` |
 
-## System prompt composition
+## Tool sides
 
-The base Voitta prompt lives in [`plugins/default/system.md`](../plugins/default/system.md).
-At every turn, [`chainlit_app.py`](../backend/app/chainlit_app.py)
-calls `plugins.for_host(host)` — which returns every plugin whose
-`host_patterns` matches the page's host — and concatenates their
-`system_prompt` contents. The default plugin's `host_patterns: ["*"]`
-ensures the base prompt always applies; host-scoped plugins
-(e.g. `ebay`) layer their own rules on top when active.
+Tools declare a `side` field:
+- `"server"` — executed in the backend process.
+- `"browser"` — round-trips to the frontend via `cl.CopilotFunction.acall()`.
+- `"hybrid"` — server-side handler that itself calls the browser (e.g. `browser_eval`).
 
-## Tool gating
+## Host context
 
-`ToolSpec.host_pattern` gates a tool to specific hosts. `None` means
-"always visible." `schemas_for_host(host)` filters the registry before
-handing the tool list to the model — the model never sees tools that
-don't apply on the current page.
+`ToolCtx.host` carries the hostname of the page the bookmarklet is mounted on. The agent loop reads it from the Chainlit window message at session start and passes it to every tool call. Plugins use it for host gating; `ctx.theme()` uses it to pick the matching plugin palette.
 
-Plugins back-fill `host_pattern` on their contributed ToolSpecs from
-the manifest's `host_patterns`, so plugin authors specify host gating
-ONCE in the manifest. Per-tool overrides win.
+## CORS / PNA
 
-## Configuration
+The bookmarklet runs on third-party origins and must reach `127.0.0.1`. FastAPI:
+- Echoes the request `Origin` via `allow_origin_regex=".*"` (CORS cannot use `*` with credentials).
+- A raw ASGI `_PNAMiddleware` handles Chrome's Private Network Access preflights (`Access-Control-Request-Private-Network: true`) that `CORSMiddleware` never answers.
 
-- **Process-wide constants** — [`config.py`](../backend/app/config.py):
-  paths (`PROJECT_ROOT`, `DOCS_DIR`, `PLUGINS_DIR`, `RAG_DIR`), TLS
-  cert paths, host/port, `MAX_TOKENS`, `MAX_TOOL_ITERATIONS`.
+## Conversation persistence
 
-- **Per-user settings** — `~/.config/voitta-compute/settings.json`,
-  read at chat start and on every turn (so settings changes take
-  effect without restarting the session). Holds `provider`,
-  `api_keys[provider]`, `models[provider]`.
-
-## TLS
-
-The widget runs on a foreign origin and embeds the BE via
-`https://127.0.0.1:12358`. Modern browsers require HTTPS for the
-Socket.IO upgrade — a self-signed cert lives at
-[`certs/127.0.0.1+1.pem`](../certs). The user accepts the cert once
-(visit the BE root in the browser), and the bookmarklet works
-thereafter.
+`app/data/sqlite_layer.py` implements Chainlit's `DataLayer` interface.  
+DB path: `~/Library/Application Support/Voitta Compute/backend/conversations.sqlite`.  
+Thread history is exposed via a patched `/chainlit/project/threads` endpoint (Chainlit's upstream requires auth; the patch serves history without it).

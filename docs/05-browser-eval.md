@@ -1,169 +1,67 @@
-# browser_eval — JavaScript execution in the user's tab
+# browser_eval — JavaScript in the user's tab
 
-`browser_eval(js, await_ms?)` runs arbitrary JavaScript in the user's
-currently-bookmarklet'd browser tab and returns the result.
+`browser_eval(js, await_ms?)` executes arbitrary JavaScript in the user's currently-bookmarklet'd browser tab and returns the result.
 
-## When to use it
+## How it works
 
-- Read auth tokens, session data, cookies the page sets in JS
-- Scrape DOM content not exposed by a plugin primitive
-- Call the site's own internal APIs using the user's existing session
-- Extract data from `window` globals the site exposes
-- Pass extracted data to a Python script for processing
+The tool is `side="hybrid"`: the server-side handler calls `call_browser("eval_js", ...)`, which uses Chainlit's `cl.CopilotFunction.acall()` to round-trip through the widget's `call_fn` socket event. The widget runs the JS in the page origin and returns the result back through the socket.
+
+## What the script can access
+
+The JS body runs in the page's origin with full access to:
+- `document` / DOM
+- `localStorage`, `sessionStorage`
+- `document.cookie` (non-HttpOnly cookies)
+- `fetch` with the page's credentials (session cookies, auth headers)
+- `window` globals (frameworks, analytics objects, etc.)
+- `performance` APIs
+
+Top-level `await` is supported — the body is wrapped in an `async function`.
 
 ## Return value
 
-```
-{ok: true, result: <whatever you returned>, logs: [{level, args}], ms}
-{ok: false, error: "eval_threw", message, stack, logs, ms}
-```
+The script must `return` the value it wants the model to receive.
 
-Whatever you `return` from the JS body becomes `result`. Top-level
-`await` works — the body is wrapped in an `async function`.
-
----
-
-## Use cases
-
-### Read an auth token from localStorage
-
-```js
-return localStorage.getItem('auth_token')
-// or
-return localStorage.getItem('token')
+```javascript
+// Example: return all product names from a page
+return Array.from(document.querySelectorAll('.product-name')).map(el => el.textContent.trim());
 ```
 
-### Read all localStorage keys at once
-
-```js
-return Object.fromEntries(
-  Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])
-)
+Success response:
+```json
+{"ok": true, "result": [...], "logs": [{"level": "log", "args": [...]}], "ms": 42}
 ```
 
-### Read a cookie value
-
-```js
-const get = name => document.cookie.split('; ')
-  .find(r => r.startsWith(name + '='))?.split('=')[1]
-return get('session_id')
+Error response (script threw):
+```json
+{"ok": false, "error": "eval_threw", "message": "...", "stack": "...", "logs": [...], "ms": 12}
 ```
 
-### Call the site's API with the user's session
-
-The page's `fetch` carries the user's cookies automatically (same-origin):
-
-```js
-const data = await fetch('/api/v1/user/profile').then(r => r.json())
-return data
+Transport error (no active tab):
+```json
+{"ok": false, "error": "no_session", "message": "..."}
 ```
 
-With a Bearer token from localStorage:
-
-```js
-const token = localStorage.getItem('auth_token')
-const data = await fetch('https://api.site.com/v1/orders', {
-  headers: { 'Authorization': `Bearer ${token}` }
-}).then(r => r.json())
-return data
-```
-
-### Read a window global the site sets
-
-```js
-return window.__INITIAL_STATE__   // React/Redux apps often expose this
-return window.APP_CONFIG
-```
-
-### Scrape DOM content
-
-```js
-const rows = [...document.querySelectorAll('table.data-table tr')].map(tr =>
-  [...tr.querySelectorAll('td')].map(td => td.innerText.trim())
-)
-return rows
-```
-
----
-
-## Pattern: browser → Python pipeline
-
-This is the standard pattern for site-authenticated workflows that need
-real data processing, file storage, or report generation.
-
-**Step 1 — extract from browser:**
-```
-browser_eval: return localStorage.getItem('auth_token')
-// → result: "eyJhbGciOi..."
-```
-
-**Step 2 — define a Python script that accepts it:**
-```python
-def build(ctx):
-    token = ctx.args.get("token")
-    if not token:
-        return None   # smoke-test guard
-
-    import httpx
-    resp = httpx.get(
-        "https://api.site.com/v1/data",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-
-    # ... process, chart, store, whatever
-    ctx.json(data)
-```
-
-**Step 3 — run it with the token:**
-```
-run_script(name="site-data", args={"token": "<token from step 1>"})
-```
-
-The Python script runs on the backend server — it can call any external
-API, write files, generate charts, query databases. The browser only
-needs to supply the credential.
-
----
-
-## Passing multiple values
-
-Return an object from the browser, destructure in Python:
-
-```js
-// browser_eval
-return {
-  token: localStorage.getItem('auth_token'),
-  userId: window.__USER__.id,
-  orgId: window.__USER__.orgId,
-}
-```
-
-```python
-# in build(ctx)
-token   = ctx.args.get("token")
-user_id = ctx.args.get("userId")
-org_id  = ctx.args.get("orgId")
-```
-
----
+Console output (`console.log/warn/error`) is always captured into `logs[]`.
 
 ## Timeout
 
-Default is 30 seconds. For long-running page operations:
+`await_ms` — hard timeout in milliseconds. Default 30000, max 120000. If the script hasn't returned by then, the tool returns an error.
 
-```
-browser_eval(js="...", await_ms=60000)
-```
+## Limitations
 
-Max is 120 seconds.
+- Only works when the bookmarklet is active on the target tab. If the user has navigated away or the widget was injected on a different tab, the call will fail with `no_session` or `not_available`.
+- Runs in the page origin — cross-origin iframes are not accessible.
+- HttpOnly cookies are not readable (browser security).
 
----
+## Use cases
 
-## What browser_eval cannot do
+- Scraping structured data from any page without a dedicated plugin.
+- Reading auth tokens or session state from `localStorage`.
+- Injecting content or triggering UI actions (`document.querySelector('button').click()`).
+- Inspecting framework state (`window.__vue_app__`, `window.React`, etc.).
+- Measuring layout or performance metrics.
 
-- Read `HttpOnly` cookies — browser-enforced, not accessible to JS
-- Access other tabs or origins — same-origin policy applies
-- Write files on the server — use `run_script` for that
+## When to use a plugin instead
+
+If you need to scrape the same site repeatedly with a stable result shape, write a plugin tool (a `ToolSpec` registered via `python_module`). `browser_eval` is the escape hatch when no purpose-built primitive exists.

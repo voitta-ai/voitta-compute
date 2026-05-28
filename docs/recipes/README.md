@@ -1,23 +1,23 @@
 # Recipe index
 
-Copy-paste patterns for embedding common content types inside an
-HTML report. Every recipe assumes the script's `build(ctx)`
-returns a raw HTML string — see `../06-reports.md` for the
-contract.
+Copy-paste patterns for common content types inside HTML reports. Every recipe assumes `build(ctx)` returns a raw HTML string.
 
-| File | What |
+| Recipe | Description |
 |---|---|
-| `plotly.md` | Interactive Plotly charts via CDN |
-| `elk.md` | ELK diagrams — minimal layout + paint pattern |
-| `elk-energy-monitor.md` | **Full proven recipe**: dark control-room theme, per-type SVG glyphs, marching-dash animated edges, grid-wrapped layout |
-| `matplotlib.md` | Server-side matplotlib → base64 `<img>` |
-| `three.md` | Three.js scenes (with `preserveDrawingBuffer` for screenshots) |
-| `mermaid.md` | Mermaid flow/sequence/state diagrams |
-| `tables.md` | HTML tables and KPI cards |
-| `interactivity.md` | Vanilla JS, htmx, Alpine.js for interactive widgets |
+| `matplotlib.md` | Server-side matplotlib chart → base64 `<img>` |
+| `plotly.md` | Interactive Plotly chart via CDN |
+| `three.md` | Three.js WebGL scene via CDN, with `preserveDrawingBuffer` |
+| `mermaid.md` | Mermaid diagrams (flow, sequence, ER, etc.) via CDN |
+| `tables.md` | HTML tables and KPI cards, themed |
+| `interactivity.md` | Vanilla JS and Alpine.js patterns |
+| `elk.md` | ELK graph layout via CDN |
 | `theming.md` | Using `ctx.theme()` CSS variables |
+| `knowledge-graph.md` | networkx → ELK/SVG visualization |
 
-For ELK specifically — coordinated style families (schematic,
-energy-monitor, hybrid) and standalone patterns (dashed
-connectors, gradient fills, KPI cards, foreignObject HTML) — see
-`../elk-design-templates.md`.
+## Rules that apply to all recipes
+
+- Return a **complete** HTML document string (with `<html>`, `<head>`, `<body>`), or at minimum a self-contained fragment. The iframe has no shared styles with the host page.
+- No `100vh` / `100vw` — breaks screenshot capture (see `../screenshot-friendly.md`).
+- SVG `fill`/`stroke` must be inline attributes, not CSS, for screenshots.
+- Three.js needs `preserveDrawingBuffer: true`.
+- CDN scripts load at runtime in the iframe — they work fine for interactive use. Screenshots capture whatever is rendered at capture time.

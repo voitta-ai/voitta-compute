@@ -43,6 +43,14 @@ def _build_namespace() -> dict[str, Any]:
     We expose Python's normal builtins — this is a power-tool for
     advanced users (the LLM), not an untrusted user sandbox.
     """
+    # Scripts run in a thread pool (asyncio.to_thread), never the main thread.
+    # Force matplotlib to the non-interactive Agg backend before user code
+    # can import pyplot, otherwise the macOS GUI backend raises RuntimeError.
+    try:
+        import matplotlib
+        matplotlib.use("agg")
+    except Exception:
+        pass
     return {"__name__": "voitta_script", "__builtins__": __builtins__}
 
 

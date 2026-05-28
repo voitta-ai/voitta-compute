@@ -1,118 +1,103 @@
 # Recipe: Theming via `ctx.theme()`
 
-`ctx.theme()` returns a dict of raw CSS-variable names → values
-for the active plugin. Keys are real CSS variables like
-`--voitta-bg`, `--voitta-accent`, `--voitta-flow-edge-success`.
+`ctx.theme()` returns a dict of CSS variable names → values from the active plugin's theme. Use it to style reports consistently with the surrounding UI.
 
-## Embed all theme vars in CSS
+## Getting tokens
 
 ```python
 def build(ctx):
     t = ctx.theme()
-    vars_block = "".join(f"  {k}: {v};\n" for k, v in t.items())
-    return f"""<!doctype html>
+    # t is a dict like:
+    # {
+    #   "--voitta-bg":      "#1a1a2e",
+    #   "--voitta-text":    "#e2e8f0",
+    #   "--voitta-accent":  "#7c3aed",
+    #   "--voitta-border":  "#2d2d44",
+    #   "--voitta-card":    "#16213e",
+    #   ...
+    # }
+```
+
+Keys depend on the active plugin. Always use `.get(key, fallback)` to handle missing tokens.
+
+## Common tokens
+
+| Token | Typical use |
+|---|---|
+| `--voitta-bg` | Page / report background |
+| `--voitta-text` | Primary text color |
+| `--voitta-accent` | Highlights, buttons, chart primary color |
+| `--voitta-border` | Table borders, dividers |
+| `--voitta-card` | Card / panel background |
+
+## Inject into `<style>` as CSS variables
+
+```python
+def build(ctx):
+    t = ctx.theme()
+    css_vars = "".join(f"  {k}: {v};\n" for k, v in t.items())
+
+    return f"""<!DOCTYPE html>
 <html>
-<head><style>
+<head>
+<style>
   :root {{
-{vars_block}  }}
-  body {{ background: var(--voitta-bg); color: var(--voitta-text);
-          font-family: system-ui; padding: 24px; margin: 0; }}
-  h1 {{ color: var(--voitta-accent); }}
-  .muted {{ color: var(--voitta-text-muted); }}
-  .border {{ border: 1px solid var(--voitta-border); }}
-</style></head>
+{css_vars}  }}
+  body {{
+    margin: 0;
+    padding: 16px;
+    background: var(--voitta-bg, #fff);
+    color: var(--voitta-text, #111);
+    font-family: sans-serif;
+  }}
+  h1 {{ color: var(--voitta-accent, #5b5fc7); }}
+  .card {{
+    background: var(--voitta-card, #f5f5f5);
+    border: 1px solid var(--voitta-border, #e0e0e0);
+    border-radius: 8px;
+    padding: 16px;
+  }}
+</style>
+</head>
 <body>
-  <h1>Themed report</h1>
-  <p class="muted">Picks up host's plugin palette automatically.</p>
+  <h1>Themed Report</h1>
+  <div class="card">Content here</div>
 </body>
 </html>"""
 ```
 
-## Read individual values for matplotlib / plotly colors
+## Use tokens directly in Python (no CSS variables)
 
-```python
-t = ctx.theme()
-fg = t.get("--voitta-text", "#000")
-bg = t.get("--voitta-bg", "#fff")
-accent = t.get("--voitta-accent", "#0a84ff")
-ok = t.get("--voitta-ok-fg", "#10b981")
-warn = t.get("--voitta-warn-fg", "#f59e0b")
-
-# Pass into matplotlib:
-fig.patch.set_facecolor(bg)
-ax.tick_params(colors=fg)
-ax.plot(x, y, color=accent)
-```
-
-## Common variable names
-
-Plugin themes vary, but most expose at least:
-
-- `--voitta-bg` — page background
-- `--voitta-surface` — card / panel background
-- `--voitta-text` — primary text
-- `--voitta-text-muted` — secondary text
-- `--voitta-border` — neutral border
-- `--voitta-accent` — primary highlight color
-- `--voitta-link-fg` — link color
-- `--voitta-ok-fg` — success / positive
-- `--voitta-warn-fg` — warning / caution
-- `--voitta-error-fg` — error / danger
-
-Flow-chart specific (used by the design-template skins, see
-`../elk-design-templates.md`):
-
-- `--voitta-flow-edge-info`
-- `--voitta-flow-edge-success`
-- `--voitta-flow-edge-warning`
-- `--voitta-flow-edge-critical`
-- `--voitta-flow-node-bg`
-- `--voitta-flow-node-fg`
-- `--voitta-flow-node-border`
-
-**Don't assume any specific variable exists.** Use `.get(key,
-fallback)`. Different plugins ship different keys.
-
-## Finding the full variable list for the host plugin
+Some libraries (matplotlib, Plotly) need concrete color values, not CSS variable references:
 
 ```python
 def build(ctx):
     t = ctx.theme()
-    rows = "".join(
-        f'<tr><td><code>{k}</code></td>'
-        f'<td><span class="swatch" style="background:{v}"></span></td>'
-        f'<td><code>{v}</code></td></tr>'
-        for k, v in sorted(t.items())
-    )
-    return f"""<!doctype html>
-<html>
-<head><style>
-  body {{ font-family: system-ui; padding: 24px; }}
-  table {{ border-collapse: collapse; }}
-  td {{ padding: 6px 12px; border-bottom: 1px solid #eee; }}
-  .swatch {{ display: inline-block; width: 24px; height: 24px;
-            border: 1px solid #ccc; vertical-align: middle; }}
-  code {{ font-family: ui-monospace, monospace; font-size: 12px; }}
-</style></head>
-<body>
-  <h1>Theme tokens</h1>
-  <table>{rows}</table>
-</body>
-</html>"""
+    bg     = t.get("--voitta-bg",     "#ffffff")
+    text   = t.get("--voitta-text",   "#111111")
+    accent = t.get("--voitta-accent", "#5b5fc7")
+
+    # Pass directly to matplotlib / Plotly / ELK SVG attributes
 ```
 
-Run this against your target host to see exactly what's
-available.
-
-## Falling back gracefully
-
-`ctx.theme()` can return an empty dict if no plugin resolves
-(no host, no fallback) — always `.get()` with a fallback color.
-Or check upfront:
+## Dark/light detection
 
 ```python
-t = ctx.theme()
-if not t:
-    # No theme available; use defaults.
-    return "<!doctype html><html>...</html>"
+def build(ctx):
+    t = ctx.theme()
+    bg = t.get("--voitta-bg", "#ffffff")
+
+    # Rough detection: if background is dark, use dark variant
+    # (parse the hex and check luminance, or just heuristic)
+    is_dark = bg.startswith("#1") or bg.startswith("#0") or bg in ("#000", "#111", "#222")
+    mermaid_theme = "dark" if is_dark else "default"
+    plotly_template = "plotly_dark" if is_dark else "plotly_white"
 ```
+
+## When ctx.theme() returns empty
+
+`ctx.theme()` returns `{}` when:
+- No plugin matches the current host.
+- The default plugin has no `static/theme.css`.
+
+Always provide fallback values via `.get(key, fallback)`.

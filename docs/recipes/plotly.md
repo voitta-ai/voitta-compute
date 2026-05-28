@@ -2,89 +2,108 @@
 
 Embed an interactive Plotly chart inside an HTML report.
 
-## The full pattern
+## Basic pattern
 
 ```python
-import plotly.graph_objects as go
-import plotly.io as pio
 import json
 
 def build(ctx):
-    fig = go.Figure(go.Scatter(
-        x=[1, 2, 3, 4, 5],
-        y=[1, 4, 9, 16, 25],
-        mode="lines+markers",
-        name="squares",
-    ))
-    fig.update_layout(
-        title="Squares",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    # Build a JSON spec the FE Plotly can consume.
-    spec = pio.to_json(fig)
+    data = [
+        {"x": [1, 2, 3, 4], "y": [10, 15, 13, 17], "type": "scatter", "name": "Series A"},
+        {"x": [1, 2, 3, 4], "y": [16, 5, 11, 9],  "type": "scatter", "name": "Series B"},
+    ]
+    layout = {
+        "title": "My Chart",
+        "xaxis": {"title": "X"},
+        "yaxis": {"title": "Y"},
+        "autosize": True,
+    }
+    data_json = json.dumps(data)
+    layout_json = json.dumps(layout)
 
-    t = ctx.theme()
-    bg = t.get("--voitta-bg", "#fff")
-    fg = t.get("--voitta-text", "#000")
-
-    return f"""<!doctype html>
+    return f"""<!DOCTYPE html>
 <html>
 <head>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    body {{ background: {bg}; color: {fg}; font-family: system-ui;
-            margin: 0; padding: 16px; }}
-    #chart {{ width: 100%; height: 480px; }}
-  </style>
+<style>
+  body {{ margin: 0; padding: 8px; }}
+  #chart {{ width: 100%; height: 480px; }}
+</style>
 </head>
 <body>
-  <div id="chart"></div>
-  <script>
-    const spec = {spec};
-    Plotly.newPlot("chart", spec.data, spec.layout, {{
-      displayModeBar: false, responsive: true,
-    }});
-  </script>
+<div id="chart"></div>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script>
+  Plotly.newPlot('chart', {data_json}, {layout_json}, {{responsive: true}});
+</script>
 </body>
 </html>"""
+```
+
+## Responsive sizing
+
+Pass `{{responsive: true}}` in the config argument to `Plotly.newPlot`. This makes the chart resize with the iframe container.
+
+Do not set `height: 100vh` on the container — use an explicit pixel height.
+
+## Theming
+
+```python
+import json
+
+def build(ctx):
+    t = ctx.theme()
+    bg = t.get("--voitta-bg", "#ffffff")
+    text = t.get("--voitta-text", "#111111")
+    accent = t.get("--voitta-accent", "#5b5fc7")
+
+    data = [{"x": [1,2,3], "y": [1,4,2], "type": "bar", "marker": {"color": accent}}]
+    layout = {
+        "paper_bgcolor": bg,
+        "plot_bgcolor": bg,
+        "font": {"color": text},
+        "autosize": True,
+    }
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><style>body{{margin:0;background:{bg}}}#c{{width:100%;height:480px}}</style></head>
+<body>
+<div id="c"></div>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script>Plotly.newPlot('c',{json.dumps(data)},{json.dumps(layout)},{{responsive:true}})</script>
+</body></html>"""
+```
+
+## Building data server-side
+
+```python
+import json
+import pandas as pd
+
+def build(ctx):
+    df = ctx.dataframe("my-snapshot")
+    # Build Plotly traces from the DataFrame
+    traces = []
+    for col in df.columns:
+        if col == "date":
+            continue
+        traces.append({
+            "x": df["date"].astype(str).tolist(),
+            "y": df[col].tolist(),
+            "name": col,
+            "type": "scatter",
+        })
+    layout = {"title": "Time Series", "autosize": True}
+    return f"""<!DOCTYPE html>
+<html><head><style>body{{margin:0}}#c{{width:100%;height:500px}}</style></head>
+<body><div id="c"></div>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script>Plotly.newPlot('c',{json.dumps(traces)},{json.dumps(layout)},{{responsive:true}})</script>
+</body></html>"""
 ```
 
 ## Notes
 
-- `plotly.io.to_json(fig)` produces a JSON string with `data` +
-  `layout` keys. Drop it into the iframe verbatim.
-- The CDN URL above pins to 2.35.2; bump if you need a feature
-  from a newer version.
-- `displayModeBar: false` hides Plotly's toolbar — common for
-  embedded charts. Set `true` (the default) if you want pan/zoom
-  controls in the screenshot.
-- For Plotly to be screenshot-friendly: charts settle within the
-  default 1500ms wait. Big datasets may need `expand_settle_ms`
-  raised on the `screenshot_report` call.
-
-## Multiple charts
-
-```python
-return f"""<!doctype html>
-<html>
-<head>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>
-    body {{ margin: 0; padding: 16px; font-family: system-ui; }}
-    .row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-    .chart {{ height: 320px; }}
-  </style>
-</head>
-<body>
-  <div class="row">
-    <div class="chart" id="c1"></div>
-    <div class="chart" id="c2"></div>
-  </div>
-  <script>
-    Plotly.newPlot("c1", {spec_1}.data, {spec_1}.layout);
-    Plotly.newPlot("c2", {spec_2}.data, {spec_2}.layout);
-  </script>
-</body>
-</html>"""
-```
+- Plotly is ~3 MB from CDN; first load can take a second.
+- For reports that only need a static image, matplotlib is faster (server-side, no CDN).
+- `Plotly.react()` can update data in-place for interactive reports with controls.

@@ -1,123 +1,116 @@
 # Recipe: HTML tables and KPI cards
 
-Pure HTML/CSS — no library needed.
+Pure HTML/CSS — no JavaScript library needed.
 
-## Themed table
+## Basic themed table
 
 ```python
 def build(ctx):
-    rows = [
-        {"region": "EMEA", "revenue": 1.2, "growth": "+8%"},
-        {"region": "Americas", "revenue": 2.4, "growth": "+12%"},
-        {"region": "APAC", "revenue": 0.9, "growth": "+5%"},
-    ]
     t = ctx.theme()
+    bg     = t.get("--voitta-bg",      "#ffffff")
+    text   = t.get("--voitta-text",    "#111111")
+    border = t.get("--voitta-border",  "#e0e0e0")
+    accent = t.get("--voitta-accent",  "#5b5fc7")
 
-    body = "".join(
-        f'<tr><td>{r["region"]}</td>'
-        f'<td>${r["revenue"]}B</td>'
-        f'<td>{r["growth"]}</td></tr>'
-        for r in rows
+    rows = [
+        ("Alice", "Engineering", "$120k"),
+        ("Bob",   "Design",      "$110k"),
+        ("Carol", "Product",     "$130k"),
+    ]
+    trs = "".join(
+        f"<tr><td>{name}</td><td>{dept}</td><td>{sal}</td></tr>"
+        for name, dept, sal in rows
     )
 
-    return f"""<!doctype html>
+    return f"""<!DOCTYPE html>
 <html>
-<head><style>
-  body {{ background: {t.get("--voitta-bg", "#fff")};
-          color: {t.get("--voitta-text", "#000")};
-          font-family: system-ui; margin: 0; padding: 24px; }}
-  table {{ border-collapse: collapse; width: 100%; }}
-  th, td {{ padding: 12px 16px; text-align: left;
-            border-bottom: 1px solid {t.get("--voitta-border", "#ddd")}; }}
-  th {{ background: {t.get("--voitta-surface", "#f5f5f7")};
-        font-weight: 600; letter-spacing: 0.4px;
-        text-transform: uppercase; font-size: 11px; }}
-  tr:hover td {{ background: {t.get("--voitta-surface", "#f5f5f7")}; }}
-</style></head>
+<head>
+<style>
+  body {{ margin: 0; padding: 16px; background: {bg}; color: {text}; font-family: sans-serif; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th {{ background: {accent}; color: #fff; padding: 10px 12px; text-align: left; }}
+  td {{ padding: 8px 12px; border-bottom: 1px solid {border}; }}
+  tr:hover td {{ background: {border}; }}
+</style>
+</head>
 <body>
-  <table>
-    <thead>
-      <tr><th>Region</th><th>Revenue</th><th>YoY Growth</th></tr>
-    </thead>
-    <tbody>{body}</tbody>
-  </table>
-</body>
-</html>"""
+<table>
+  <thead><tr><th>Name</th><th>Department</th><th>Salary</th></tr></thead>
+  <tbody>{trs}</tbody>
+</table>
+</body></html>"""
 ```
 
-## KPI cards (CSS grid)
+## From a DataFrame
+
+```python
+def build(ctx):
+    df = ctx.dataframe("my-snapshot")
+    t = ctx.theme()
+    bg     = t.get("--voitta-bg",     "#fff")
+    text   = t.get("--voitta-text",   "#111")
+    border = t.get("--voitta-border", "#e0e0e0")
+    accent = t.get("--voitta-accent", "#5b5fc7")
+
+    headers = "".join(f"<th>{col}</th>" for col in df.columns)
+    rows = "".join(
+        "<tr>" + "".join(f"<td>{v}</td>" for v in row) + "</tr>"
+        for row in df.head(50).itertuples(index=False)
+    )
+
+    return f"""<!DOCTYPE html>
+<html><head>
+<style>
+  body{{margin:0;padding:16px;background:{bg};color:{text};font-family:sans-serif}}
+  table{{width:100%;border-collapse:collapse}}
+  th{{background:{accent};color:#fff;padding:8px 10px;text-align:left}}
+  td{{padding:6px 10px;border-bottom:1px solid {border}}}
+</style>
+</head><body>
+<table><thead><tr>{headers}</tr></thead><tbody>{rows}</tbody></table>
+</body></html>"""
+```
+
+## KPI cards
 
 ```python
 def build(ctx):
     t = ctx.theme()
-    accent = t.get("--voitta-accent", "#0a84ff")
-    ok = t.get("--voitta-ok-fg", "#10b981")
-    warn = t.get("--voitta-warn-fg", "#f59e0b")
+    bg     = t.get("--voitta-bg",     "#ffffff")
+    text   = t.get("--voitta-text",   "#111111")
+    card   = t.get("--voitta-card",   "#f5f5f5")
+    accent = t.get("--voitta-accent", "#5b5fc7")
 
-    return f"""<!doctype html>
-<html>
-<head><style>
-  body {{ background: {t.get("--voitta-bg", "#fff")};
-          color: {t.get("--voitta-text", "#000")};
-          font-family: system-ui; margin: 0; padding: 24px; }}
-  .grid {{ display: grid;
-           grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-           gap: 16px; }}
-  .card {{ background: {t.get("--voitta-surface", "#f5f5f7")};
-           border: 1px solid {t.get("--voitta-border", "#ddd")};
-           border-radius: 8px; padding: 20px; }}
-  .label {{ font-size: 11px; font-weight: 600;
-            letter-spacing: 0.8px; text-transform: uppercase;
-            color: {t.get("--voitta-text-muted", "#666")};
-            margin-bottom: 8px; }}
-  .value {{ font-size: 28px; font-weight: 700; margin-bottom: 4px; }}
-  .delta {{ font-size: 13px; font-weight: 500; }}
-  .delta-up {{ color: {ok}; }}
-  .delta-down {{ color: {warn}; }}
-</style></head>
-<body>
-  <div class="grid">
-    <div class="card">
-      <div class="label">Total Revenue</div>
-      <div class="value" style="color: {accent}">$4.5B</div>
-      <div class="delta delta-up">↑ 8.5% YoY</div>
-    </div>
-    <div class="card">
-      <div class="label">Active Customers</div>
-      <div class="value">12,430</div>
-      <div class="delta delta-up">↑ 240 this month</div>
-    </div>
-    <div class="card">
-      <div class="label">Churn Rate</div>
-      <div class="value">2.1%</div>
-      <div class="delta delta-down">↑ 0.3% (worse)</div>
-    </div>
-  </div>
-</body>
-</html>"""
+    kpis = [
+        ("Revenue",   "$1.2M",  "+12%"),
+        ("Users",     "84,200", "+5%"),
+        ("Churn",     "2.1%",   "-0.3%"),
+        ("NPS",       "62",     "+4"),
+    ]
+    cards = "".join(f"""
+      <div class="card">
+        <div class="label">{label}</div>
+        <div class="value">{value}</div>
+        <div class="delta">{delta}</div>
+      </div>""" for label, value, delta in kpis)
+
+    return f"""<!DOCTYPE html>
+<html><head>
+<style>
+  body {{ margin: 0; padding: 16px; background: {bg}; font-family: sans-serif; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }}
+  .card {{ background: {card}; border-radius: 8px; padding: 16px; }}
+  .label {{ font-size: 12px; color: {text}; opacity: 0.6; margin-bottom: 4px; }}
+  .value {{ font-size: 28px; font-weight: 700; color: {accent}; }}
+  .delta {{ font-size: 12px; color: {text}; margin-top: 4px; }}
+</style>
+</head><body>
+<div class="grid">{cards}</div>
+</body></html>"""
 ```
 
-## Mixing KPI cards + chart + table in one report
+## Notes
 
-```python
-return f"""<!doctype html>
-<html>
-<head>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
-  <style>... (theme + grid styles)</style>
-</head>
-<body>
-  <div class="grid">
-    <div class="card">...</div>
-    <div class="card">...</div>
-  </div>
-  <div id="chart" style="height: 320px; margin-top: 24px"></div>
-  <table>...</table>
-  <script>
-    Plotly.newPlot("chart", chart_spec.data, chart_spec.layout);
-  </script>
-</body>
-</html>"""
-```
-
-Composition is yours. One HTML doc, anything inside.
+- Limit DataFrame tables to ~50 rows — large tables make the iframe very tall.
+- For sortable/filterable tables consider Alpine.js (see `interactivity.md`).
+- KPI card grids use CSS Grid with `auto-fit` — they reflow cleanly at any iframe width.

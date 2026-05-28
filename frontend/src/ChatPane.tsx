@@ -8,43 +8,50 @@ import {
   useChatData,
   useChatInteract,
   useChatMessages,
-  useChatSession,
 } from "@chainlit/react-client";
 import { useEffect, useState } from "react";
 import MessageList from "./chat/MessageList";
 import Composer from "./chat/Composer";
 import type { ImageAttachment } from "./lib/image-attach";
 import { encodeFiles } from "./lib/attachments";
+import { useAuthConnect } from "./lib/useAuthConnect";
 
 interface Props {
   backendOrigin: string;
   hasApiKey: boolean;
+  threadId?: string | null;
 }
 
-export default function ChatPane({ backendOrigin, hasApiKey }: Props) {
-  const { connect, disconnect, session } = useChatSession();
+export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) {
+  const { connect, disconnect, session } = useAuthConnect(backendOrigin);
   const { messages } = useChatMessages();
   const { loading, elements } = useChatData();
   const { sendMessage, stopTask, uploadFile, windowMessage } = useChatInteract();
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
 
+  // Drawer sets threadIdToResumeState (and clears messages) BEFORE changing the key that
+  // remounts this component. So by the time this component mounts, the Recoil atom already
+  // holds the correct value and the `connect` closure captures it.
+  //
+  // Effect 1 (mount): just disconnect on cleanup.
+  // Effect 2 (connect changes): always call connect(). Fires on mount (initial value) and
+  // whenever the connect closure rebuilds (which won't happen here since the atom was set
+  // before mount and doesn't change again).
   useEffect(() => {
-    connect({ userEnv: {} });
-    return () => disconnect();
+    return () => { disconnect(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tell the backend which host the bookmarklet was injected into, so
-  // host-gated plugin tools (e.g. the voitta-enterprise MCP tools that
-  // declare ``host_patterns: ["enterprise.voitta.ai"]``) become visible
-  // to the LLM. Posted on every (re)connect of the underlying socket.
+  useEffect(() => {
+    connect({ userEnv: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connect]);
+
+  // Tell the backend which host the bookmarklet was injected into.
   useEffect(() => {
     const socket = session?.socket;
     if (!socket) return;
     const post = () => windowMessage(`host:${location.host}`);
-    // Post immediately whether the socket is already connected or not —
-    // on first mount session arrives after the socket has connected, so
-    // the "connect" event already fired and would never re-fire.
     post();
     socket.on("connect", post);
     return () => { socket.off("connect", post); };

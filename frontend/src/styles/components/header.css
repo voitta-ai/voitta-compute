@@ -48,6 +48,97 @@ header .hbtn.theme-toggle:hover {
   opacity: 1;
 }
 
+/* thread picker — conversation history dropdown */
+header .thread-picker {
+  position: relative;
+}
+header .thread-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--voitta-header-fg);
+  font: 10px/1 var(--voitta-font-sans);
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--voitta-radius-sm);
+  max-width: 120px;
+}
+header .thread-picker-btn:hover {
+  opacity: 1;
+  background: var(--voitta-header-btn-bg-hover);
+}
+header .thread-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+header .thread-picker-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+header .thread-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+header .thread-picker-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 9999;
+  min-width: 200px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--voitta-picker-bg, var(--voitta-header-bg));
+  border: 1px solid var(--voitta-picker-rule, var(--voitta-header-rule));
+  border-radius: var(--voitta-radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  padding: 4px 0;
+}
+header .thread-picker-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--voitta-picker-fg, var(--voitta-header-fg));
+  font: 11px/1.4 var(--voitta-font-sans);
+  text-align: left;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+header .thread-picker-item:hover {
+  background: var(--voitta-picker-hover, var(--voitta-header-btn-bg-hover));
+}
+header .thread-picker-item.active {
+  background: var(--voitta-picker-hover, var(--voitta-header-btn-bg-hover));
+  font-weight: 600;
+}
+header .thread-picker-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+header .thread-picker-item-date {
+  font-size: 10px;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+header .thread-picker-loading,
+header .thread-picker-empty {
+  font: 10px/1 var(--voitta-font-sans);
+  color: var(--voitta-picker-fg, var(--voitta-header-fg));
+  opacity: 0.4;
+  padding: 6px 12px;
+}
+
 /* provider chip — current provider name; click to open Settings */
 header .provider-chip {
   font: 600 10px/1 var(--voitta-font-sans);

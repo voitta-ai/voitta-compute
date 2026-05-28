@@ -1,61 +1,16 @@
 # Providers
 
-LLM providers are pluggable. The agent loop in
-[`agent.py`](../backend/app/agent.py) drives a `Provider` interface
-defined in [`services/llm/base.py`](../backend/app/services/llm/base.py);
-each backend lives in its own subpackage.
+## Supported providers
 
-Three providers wired today:
+| Provider | Default model |
+|---|---|
+| `anthropic` | `claude-sonnet-4-6` |
+| `openai` | `gpt-4o` |
+| `gemini` | `gemini-2.0-flash-exp` |
 
-| `ProviderId` | Module | Default model |
-|---|---|---|
-| `anthropic` | [`anthropic.py`](../backend/app/services/llm/anthropic.py) | `claude-sonnet-4-5-20250929` |
-| `openai`    | [`openai.py`](../backend/app/services/llm/openai.py)       | `gpt-4o` |
-| `gemini`    | [`gemini.py`](../backend/app/services/llm/gemini.py)       | `gemini-2.0-flash-exp` |
+## settings.json format
 
-(See [`services/llm/__init__.py`](../backend/app/services/llm/__init__.py)
-for the authoritative `DEFAULT_MODELS` map.)
-
-## The canonical block shape
-
-The Anthropic SDK's content-block shape is the **interchange format**.
-A `Message` has `role` (`"user"` or `"assistant"`) and `content` —
-either a string or a list of blocks:
-
-```python
-{"type": "text", "text": "..."}
-{"type": "tool_use", "id": "...", "name": "...", "input": {...}}
-{"type": "tool_result", "tool_use_id": "...", "content": "...", "is_error": false}
-{"type": "image", "source": {...}}
-```
-
-OpenAI and Gemini adapters convert in/out of this shape so the agent
-loop only ever sees Anthropic-flavoured blocks.
-
-## Sentinel-key convention
-
-Keys starting with `_` (`_name`, `_image`) are cross-provider internal
-sentinels — the orchestrator and adapters may read them, but they
-must NOT reach the wire. The Anthropic adapter strips them in
-`_strip_internal_keys` before send; OpenAI and Gemini access blocks
-by named key so unknown keys are naturally invisible.
-
-## Streaming events
-
-Providers yield a uniform stream of events from `stream_message`:
-
-- `BlockStart(index, block_type, …)`
-- `BlockDelta(index, delta)` — chunked text or input-json
-- `BlockStop(index)`
-- `MessageStop(stop_reason)` — `"end_turn"`, `"tool_use"`, `"max_tokens"`, etc.
-- `StreamError(message)` — fatal; orchestrator surfaces it to the user.
-
-The agent loop treats these uniformly. The provider absorbs vendor
-quirks.
-
-## Choosing a provider at runtime
-
-Settings JSON at `~/.config/voitta-compute/settings.json`:
+Located at `~/.config/voitta-compute/settings.json`.
 
 ```json
 {
@@ -63,14 +18,37 @@ Settings JSON at `~/.config/voitta-compute/settings.json`:
   "api_keys": {
     "anthropic": "sk-ant-...",
     "openai": "sk-...",
-    "gemini": "..."
+    "gemini": "AIza..."
   },
   "models": {
-    "anthropic": "claude-opus-4-5"
-  }
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
+    "gemini": "gemini-2.0-flash-exp"
+  },
+  "layout": "chat-right",
+  "theme": "auto",
+  "max_tool_iterations": 25,
+  "max_tokens": 24576
 }
 ```
 
-The model field is optional — `default_model_for(provider_id)` is
-used when absent. Settings are re-read on every turn so changes via
-the in-widget Settings panel take effect without a session restart.
+Only `provider` and the matching `api_keys` entry are required. All other fields have defaults.
+
+## Changing provider at runtime
+
+The Settings panel in the widget writes to `settings.json` via `PUT /api/settings`. Changes take effect on the next user message (the agent loop reads settings at the top of each `run_turn()` call).
+
+## Streaming
+
+All three providers stream. The agent loop uses `async for ev in provider.stream(request)` over `BlockStart / BlockDelta / BlockStop / MessageStop / StreamError` events defined in `app/services/llm/stream.py`. Text tokens are forwarded to Chainlit via `cl.Message.stream_token()`.
+
+## Tool results with images
+
+Only Anthropic supports inline image blocks in tool results. When a screenshot is captured and the active provider is not Anthropic, the agent injects a note: `"N image(s) captured but current provider doesn't accept inline images — switch to Anthropic to view them"`.
+
+## Agent-loop caps
+
+- `max_tool_iterations` — maximum tool-use cycles per user turn (default 25). When hit, the model sees a warning message.
+- `max_tokens` — max assistant tokens per LLM call (default 24576). When hit, Chainlit surfaces a truncation warning.
+
+Both are readable/writable from the Settings → Global tab.

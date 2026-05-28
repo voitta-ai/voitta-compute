@@ -1,106 +1,104 @@
-# Recipe: Matplotlib → base64 `<img>`
+# Recipe: matplotlib → base64 `<img>`
 
-Render the chart server-side, base64-encode, embed in HTML.
+matplotlib runs server-side. The `Agg` backend is pre-set by the sandbox before user code runs, so you never need to call `matplotlib.use("agg")` yourself.
 
-For any sampling / synthetic-data generation, use **numpy**, not
-stdlib `random`:
-
-```python
-import numpy as np
-rng = np.random.default_rng(42)
-y = rng.normal(size=200).cumsum()      # random walk
-ax.plot(y)
-```
-
-`numpy` is always available alongside `matplotlib` and `pandas`.
-See `06-reports.md` for why numpy beats stdlib `random` for data
-work (bounds-safe, reproducible, vectorised).
-
-## The full pattern
+## Basic pattern
 
 ```python
-import base64
-import io
-import matplotlib
-matplotlib.use("Agg")
+import io, base64
 import matplotlib.pyplot as plt
 
-def _fig_to_b64(fig, *, dpi=120) -> str:
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=dpi)
-    plt.close(fig)
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
 def build(ctx):
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot([1, 2, 3, 4, 5], [1, 4, 9, 16, 25], marker="o")
-    ax.set_title("Squares")
-    ax.set_xlabel("x")
-    ax.set_ylabel("x²")
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot([1, 2, 3, 4], [1, 4, 2, 3])
+    ax.set_title("My chart")
 
-    img_b64 = _fig_to_b64(fig)
-    t = ctx.theme()
-    bg = t.get("--voitta-bg", "#fff")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode()
 
-    return f"""<!doctype html>
-<html>
-<head><style>
-  body {{ background: {bg}; margin: 0; padding: 16px;
-          font-family: system-ui; }}
-  img {{ max-width: 100%; height: auto; }}
-</style></head>
-<body>
-  <img src="data:image/png;base64,{img_b64}" alt="Squares chart">
-</body>
-</html>"""
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:16px;background:#fff;">
+  <img src="data:image/png;base64,{b64}" style="max-width:100%;height:auto;">
+</body></html>"""
 ```
 
-## Themed plots
+## Using ctx.image instead
 
-Use `ctx.theme()` to pick matplotlib colors that match the host:
+If you want the chart in the chat rather than the report pane:
 
 ```python
-t = ctx.theme()
-fig, ax = plt.subplots()
-fig.patch.set_facecolor(t.get("--voitta-bg", "#fff"))
-ax.set_facecolor(t.get("--voitta-surface", "#fff"))
-ax.spines["top"].set_color(t.get("--voitta-border", "#1a2230"))
-ax.tick_params(colors=t.get("--voitta-text", "#000"))
-ax.plot(x, y, color=t.get("--voitta-accent", "#0a84ff"))
+def build(ctx):
+    import io, matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    ax.bar(["A", "B", "C"], [3, 7, 5])
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    ctx.image(buf.getvalue(), "image/png")
+    # return None — no report pane, chart lands inline in chat
 ```
 
 ## Multiple charts
 
 ```python
-fig1_b64 = _fig_to_b64(make_chart_1())
-fig2_b64 = _fig_to_b64(make_chart_2())
+def build(ctx):
+    import io, base64
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
 
-return f"""<!doctype html>
-<html>
-<head><style>
-  body {{ margin: 0; padding: 16px; font-family: system-ui; }}
-  .row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
-  .row img {{ max-width: 100%; }}
-</style></head>
-<body>
-  <div class="row">
-    <img src="data:image/png;base64,{fig1_b64}">
-    <img src="data:image/png;base64,{fig2_b64}">
-  </div>
-</body>
-</html>"""
+    fig = plt.figure(figsize=(12, 5))
+    gs = gridspec.GridSpec(1, 2)
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1])
+
+    ax1.plot([1, 2, 3], [1, 4, 2])
+    ax2.scatter([1, 2, 3], [3, 1, 4])
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    return f'<html><body style="margin:0"><img src="data:image/png;base64,{b64}" style="width:100%"></body></html>'
+```
+
+## Theming
+
+```python
+def build(ctx):
+    import io, base64
+    import matplotlib.pyplot as plt
+
+    t = ctx.theme()
+    bg = t.get("--voitta-bg", "#ffffff")
+    fg = t.get("--voitta-text", "#000000")
+    accent = t.get("--voitta-accent", "#5b5fc7")
+
+    plt.rcParams.update({
+        "figure.facecolor": bg,
+        "axes.facecolor": bg,
+        "axes.edgecolor": fg,
+        "text.color": fg,
+        "xtick.color": fg,
+        "ytick.color": fg,
+    })
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.plot([1, 2, 3], [1, 4, 2], color=accent, linewidth=2)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+
+    return f'<html><body style="margin:0;background:{bg}"><img src="data:image/png;base64,{b64}" style="width:100%"></body></html>'
 ```
 
 ## Notes
 
-- Always `matplotlib.use("Agg")` at import — avoids GUI backend
-  issues in a script context
-- Always `plt.close(fig)` after `savefig` — leaks Agg memory
-  otherwise
-- `bbox_inches="tight"` trims whitespace around the plot
-- `dpi=120` is a sensible default; raise to 200 for retina
-  quality (4× the bytes)
-- Base64 PNGs are large — a 1920x1200 dpi=200 chart can hit
-  500KB. The screenshot path is fine with this; just keep the
-  TOTAL HTML size reasonable (< 5MB)
+- Always call `plt.close(fig)` to avoid memory leaks between runs.
+- Use `dpi=150` for crisp images in the iframe.
+- `bbox_inches="tight"` prevents whitespace cropping issues.
+- numpy is available for data generation; don't use `random` module for reproducible charts.

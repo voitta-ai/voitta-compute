@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import chainlit as cl
+from chainlit.types import ThreadDict
 
 from app.agent import run_turn
 from app.plugins import for_host, load_all
@@ -21,6 +22,156 @@ from app.tools.registry import ToolCtx
 import app.tools.load  # noqa: F401  — registers core tools FIRST
 
 logger = logging.getLogger(__name__)
+
+
+# ── No-auth single-user resume_thread patch ───────────────────────────────
+# Chainlit's resume_thread requires session.user AND checks that the thread's
+# userIdentifier matches session.user.identifier. In no-auth mode both fail.
+# We replace resume_thread entirely with a version that skips user checks —
+# safe for a single-user local deployment.
+
+import json as _json
+import chainlit.socket as _cl_socket
+
+async def _patched_resume_thread(session):
+    from chainlit.data import get_data_layer
+    from chainlit.socket import user_sessions
+    data_layer = get_data_layer()
+    if not data_layer or not session.thread_id_to_resume:
+        return
+    thread = await data_layer.get_thread(thread_id=session.thread_id_to_resume)
+    if not thread:
+        logger.warning("resume_thread: thread %s not found", session.thread_id_to_resume)
+        return
+    logger.info("resume_thread: resuming thread %s userIdentifier=%s", thread.get("id"), thread.get("userIdentifier"))
+    metadata = thread.get("metadata") or {}
+    if isinstance(metadata, str):
+        metadata = _json.loads(metadata)
+    user_sessions[session.id] = metadata.copy()
+    if chat_profile := metadata.get("chat_profile"):
+        session.chat_profile = chat_profile
+    if chat_settings := metadata.get("chat_settings"):
+        session.chat_settings = chat_settings
+
+    # assistant_message steps are stored with a parentId pointing to a run-step
+    # UUID that is not present in the resumed thread. The react-client's e$()
+    # function tries to nest them under the missing parent and silently drops
+    # them. Clear parentId on assistant/user message steps so they render as
+    # top-level messages.
+    for step in thread.get("steps") or []:
+        if step.get("type") in ("assistant_message", "user_message"):
+            step["parentId"] = None
+
+    return thread
+
+_cl_socket.resume_thread = _patched_resume_thread
+
+def patch_sio_connect():
+    """Patch sio 'connect' and 'connection_successful' handlers.
+
+    - connect: update thread_id_to_resume on restored sessions from auth payload
+    - connection_successful: replace resume_thread call with our no-auth version
+      (patching _cl_socket.resume_thread doesn't work because connection_successful
+      calls it as a bare local name captured at definition time)
+
+    Must be called AFTER mount_chainlit. Called from main.py.
+    """
+    import sys
+    import asyncio
+    import chainlit.socket as cl_socket
+
+    # ── patch connect ──────────────────────────────────────────────────────
+    orig_connect = cl_socket.sio.handlers.get("/", {}).get("connect")
+    if not orig_connect:
+        logger.error("patch_sio_connect: no connect handler found")
+        return
+
+    async def _patched_connect(sid, environ, auth):
+        from chainlit.session import WebsocketSession
+        result = await orig_connect(sid, environ, auth)
+        thread_id = (auth.get("threadId") or None) if auth else None
+        session = WebsocketSession.get(sid)
+        if session and thread_id and thread_id != session.thread_id_to_resume:
+            session.thread_id_to_resume = thread_id
+            session.thread_id = thread_id
+        return result
+
+    cl_socket.sio.handlers["/"]["connect"] = _patched_connect
+
+    # ── patch connection_successful ────────────────────────────────────────
+    # Replace the whole handler so we can use _patched_resume_thread instead
+    # of the module-local resume_thread that ignores our monkey-patch.
+    orig_conn_successful = cl_socket.sio.handlers.get("/", {}).get("connection_successful")
+    if not orig_conn_successful:
+        logger.error("patch_sio_connect: no connection_successful handler found")
+        return
+
+    async def _patched_connection_successful(sid):
+        import traceback as _traceback
+        from chainlit.context import init_ws_context
+        from chainlit.config import config
+        from chainlit.chat_context import chat_context
+        from chainlit.message import Message
+
+        try:
+            context = init_ws_context(sid)
+            await context.emitter.task_end()
+            await context.emitter.clear("clear_ask")
+            await context.emitter.clear("clear_call_fn")
+
+            # Check thread_id_to_resume FIRST — a reconnect with a new threadId must
+            # always resume, even if the session was restored (same cookie) and
+            # has_first_interaction is still False from the previous connection.
+            if context.session.thread_id_to_resume and config.code.on_chat_resume:
+                thread = await _patched_resume_thread(context.session)
+                if thread:
+                    context.session.has_first_interaction = True
+                    await context.emitter.emit(
+                        "first_interaction",
+                        {"interaction": "resume", "thread_id": thread.get("id")},
+                    )
+                    await config.code.on_chat_resume(thread)
+                    for step in thread.get("steps", []):
+                        if "message" in step["type"]:
+                            chat_context.add(Message.from_dict(step))
+                    await context.emitter.resume_thread(thread)
+                    return
+                else:
+                    logger.warning("resume: thread %s not found", context.session.thread_id_to_resume)
+                    await context.emitter.send_resume_thread_error("Thread not found.")
+
+            # Restored session with no prior interaction: just ensure on_chat_start ran.
+            if context.session.restored and not context.session.has_first_interaction:
+                if config.code.on_chat_start and not context.session.chat_started:
+                    context.session.chat_started = True
+                    task = asyncio.create_task(config.code.on_chat_start())
+                    context.session.current_task = task
+                return
+
+            if config.code.on_chat_start and not context.session.chat_started:
+                context.session.chat_started = True
+                task = asyncio.create_task(config.code.on_chat_start())
+                context.session.current_task = task
+        except Exception:
+            logger.error("connection_successful failed for sid=%s:\n%s", sid, _traceback.format_exc())
+
+    cl_socket.sio.handlers["/"]["connection_successful"] = _patched_connection_successful
+    logger.info("patch_sio_connect: installed")
+
+
+# ── Persistence ────────────────────────────────────────────────────────────
+
+@cl.data_layer
+def data_layer():
+    """Return the SQLite-backed data layer (created once, reused)."""
+    from app.config import USER_DATA_ROOT
+    from app.data.local_storage import LocalStorageClient
+    from app.data.sqlite_layer import SQLiteDataLayer
+
+    upload_dir = USER_DATA_ROOT / "uploads"
+    db_path = str(USER_DATA_ROOT / "conversations.sqlite")
+    storage = LocalStorageClient(upload_dir=upload_dir)
+    return SQLiteDataLayer(db_path=db_path, storage_provider=storage)
 
 # Plugins are loaded AFTER core tools so plugin-contributed ToolSpecs
 # can rely on the registry being initialised. Re-import (uvicorn
@@ -92,6 +243,43 @@ async def on_chat_start() -> None:
             asyncio.create_task(refresh_all())
     except Exception:
         logger.exception("on_chat_start: MCP diagnostic failed")
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: ThreadDict) -> None:
+    """Restore session state when the user reopens an existing thread.
+
+    The UI already shows the stored steps from the database.  Here we
+    reconstruct the in-memory LLM message list so the agent has the
+    conversation context for the next user turn.
+    """
+    user_settings = load_user_settings()
+    provider = user_settings.get("provider", "anthropic")
+    api_keys = user_settings.get("api_keys") or {}
+    models = user_settings.get("models") or {}
+    cl.user_session.set("provider", provider)
+    cl.user_session.set("api_key", api_keys.get(provider))
+    cl.user_session.set("model", models.get(provider))
+
+    messages: list[LlmMessage] = []
+    for step in thread.get("steps") or []:
+        step_type = step.get("type")
+        output = (step.get("output") or "").strip()
+        if not output:
+            continue
+        if step_type == "user_message":
+            messages.append(
+                LlmMessage(role="user", content=[{"type": "text", "text": output}])
+            )
+        elif step_type == "assistant_message":
+            messages.append(
+                LlmMessage(role="assistant", content=[{"type": "text", "text": output}])
+            )
+
+    cl.user_session.set("messages", messages)
+    logger.info(
+        "on_chat_resume: thread=%s restored %d messages", thread.get("id"), len(messages)
+    )
 
 
 @cl.on_window_message

@@ -1,94 +1,99 @@
 # Recipe: Mermaid diagrams
 
-Mermaid renders flow/sequence/state/Gantt/ER/class diagrams from
-text. Good when you want a quick diagram without writing layout code.
+Mermaid renders flowcharts, sequence diagrams, ER diagrams, Gantt charts, and more from a text DSL.
 
-## The full pattern
+## Basic pattern
 
 ```python
 def build(ctx):
     diagram = """
-graph TD
-    A[Source] --> B[Process]
-    B --> C{Valid?}
-    C -->|Yes| D[Save]
-    C -->|No| E[Reject]
-    D --> F[End]
-    E --> F
+flowchart TD
+    A[Start] --> B{Decision}
+    B -- Yes --> C[Do thing]
+    B -- No --> D[Skip]
+    C --> E[End]
+    D --> E
 """
-    return f"""<!doctype html>
+    return f"""<!DOCTYPE html>
 <html>
 <head>
-  <script type="module">
-    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-    mermaid.initialize({{ startOnLoad: true, theme: "default" }});
-  </script>
-  <style>
-    body {{ margin: 0; padding: 16px; font-family: system-ui; }}
-    .mermaid {{ background: #fff; }}
-  </style>
+<style>
+  body {{ margin: 0; padding: 16px; background: #fff; }}
+  .mermaid {{ max-width: 100%; }}
+</style>
 </head>
 <body>
-  <pre class="mermaid">{diagram}</pre>
+<div class="mermaid">{diagram}</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
+</script>
 </body>
 </html>"""
-```
-
-## Themes
-
-Mermaid ships `default`, `dark`, `forest`, `neutral`. Pick based
-on the host palette:
-
-```python
-t = ctx.theme()
-# Crude "is the bg dark?" check
-is_dark = "0" in t.get("--voitta-bg", "#fff")[:3]
-mermaid_theme = "dark" if is_dark else "default"
 ```
 
 ## Diagram types
 
 ```
-graph TD       — flowchart top-down
-graph LR       — flowchart left-right
+flowchart TD    — top-down flowchart
+flowchart LR    — left-right flowchart
+sequenceDiagram — sequence diagram
+erDiagram       — entity-relationship
+gantt           — Gantt chart
+classDiagram    — class diagram
+stateDiagram-v2 — state machine
+pie             — pie chart
+```
+
+## Theming
+
+```python
+def build(ctx):
+    t = ctx.theme()
+    bg = t.get("--voitta-bg", "#ffffff")
+    # Mermaid themes: default, dark, forest, neutral, base
+    mermaid_theme = "dark" if bg.startswith("#1") or bg.startswith("#0") else "default"
+
+    diagram = """
 sequenceDiagram
-stateDiagram-v2
-gantt
-classDiagram
-erDiagram
-journey
-pie
-mindmap
-timeline
+    User->>Agent: Send message
+    Agent->>LLM: Stream request
+    LLM-->>Agent: Token stream
+    Agent-->>User: Chat response
+"""
+    return f"""<!DOCTYPE html>
+<html>
+<head><style>body{{margin:0;padding:16px;background:{bg}}}.mermaid{{max-width:100%}}</style></head>
+<body>
+<div class="mermaid">{diagram}</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:true,theme:'{mermaid_theme}'}})</script>
+</body></html>"""
 ```
 
 ## Multiple diagrams
 
 ```python
-return f"""<!doctype html>
-<html>
-<head>
-  <script type="module">
-    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-    mermaid.initialize({{ startOnLoad: true }});
-  </script>
-</head>
+def build(ctx):
+    diagrams = [
+        ("Architecture", "flowchart LR\n  A --> B --> C"),
+        ("Sequence",     "sequenceDiagram\n  A->>B: hello\n  B-->>A: hi"),
+    ]
+    blocks = "".join(
+        f"<h3>{title}</h3><div class='mermaid'>{src}</div>"
+        for title, src in diagrams
+    )
+    return f"""<!DOCTYPE html>
+<html><head><style>body{{margin:0;padding:16px;font-family:sans-serif}}</style></head>
 <body>
-  <h2>Flow</h2>
-  <pre class="mermaid">graph TD; A-->B</pre>
-  <h2>Sequence</h2>
-  <pre class="mermaid">sequenceDiagram; A->>B: hi; B->>A: hello</pre>
-</body>
-</html>"""
+{blocks}
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:true}})</script>
+</body></html>"""
 ```
 
-## When to use Mermaid vs ELK
+## Notes
 
-- **Mermaid**: quick diagrams, you don't care about exact layout
-  positioning, you want one of the diagram types Mermaid
-  natively supports (sequence/gantt/state).
-- **ELK** (see `elk.md`): you want orthogonal routing with
-  port-side hints, you want custom-painted nodes (gradients,
-  shadows, custom shapes), you want pixel control over layout.
-
-Mermaid is faster to write. ELK is more customisable.
+- Mermaid renders client-side in the iframe; there's a brief flash of the raw text before it renders.
+- For screenshots, the render completes before capture because the shim waits for `window.load` before signalling ready.
+- Avoid `&` in diagram labels — escape as `&amp;` in HTML context.

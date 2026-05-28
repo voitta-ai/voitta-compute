@@ -1,287 +1,139 @@
 # Recipe: ELK diagram via CDN
 
-Load elkjs in the iframe, lay out a graph, paint as SVG. You write
-the layout-then-paint code yourself — there's no fixed renderer.
+ELK (Eclipse Layout Kernel) computes graph layouts. You call its JS API to lay out nodes and edges, then paint the result as SVG.
 
-> **Looking for a full proven recipe** with theme, glyphs per
-> flow type, animated marching-dash edges, and grid-wrapped
-> layout? See [`elk-energy-monitor.md`](elk-energy-monitor.md).
-> The doc below is the minimal pattern — use it to learn the
-> shape, then graduate to the energy-monitor recipe for
-> production-quality diagrams.
-
-## ⚠️ Two screenshot-critical rules
-
-Read these BEFORE writing the recipe; they're the difference
-between a clean screenshot and an unreadable one:
-
-1. **Use INLINE SVG attributes, not CSS classes.** html-to-image
-   (the screenshot library) does not reliably inline `<style>`
-   rules into its SVG snapshot. Set `fill`, `stroke`, `stroke-width`,
-   `font-size`, `fill` on text — directly as attributes on each
-   element. Putting them in a `<style>` block looks fine in the
-   live render but produces black-box screenshots.
-
-2. **Set the SVG's width/height to its actual viewBox extent —
-   NOT `100%` × `100%`.** With `100%` width and `100%` height,
-   the iframe auto-sizing measures the SVG's intrinsic aspect
-   ratio against the desktop width and produces a multi-thousand-
-   pixel-tall screenshot. Set explicit pixel dimensions matching
-   the layout extent.
-
-3. **No `min-height: 100vh` on body or container.** Same failure
-   mode — the screenshot path resizes the iframe to ~8000 px
-   during the height-probe; any `100vh`-sized element grows to
-   fill it and the screenshot captures a giant near-empty canvas
-   with your diagram at the top. Let body height be natural;
-   the iframe auto-sizes to content.
-
-## The full pattern
+## Basic pattern
 
 ```python
 import json
 
 def build(ctx):
-    # 1. Build the abstract graph in Python.
+    # Define graph structure for ELK
     graph = {
         "id": "root",
         "layoutOptions": {
             "elk.algorithm": "layered",
-            "elk.direction": "DOWN",
-            "elk.edgeRouting": "ORTHOGONAL",
-            "elk.spacing.nodeNode": "80",
+            "elk.direction": "RIGHT",
+            "elk.spacing.nodeNode": "40",
         },
         "children": [
-            {"id": "a", "width": 160, "height": 60, "labels": [{"text": "Source"}]},
-            {"id": "b", "width": 160, "height": 60, "labels": [{"text": "Process"}]},
-            {"id": "c", "width": 160, "height": 60, "labels": [{"text": "Sink"}]},
+            {"id": "n1", "width": 100, "height": 40, "labels": [{"text": "Input"}]},
+            {"id": "n2", "width": 100, "height": 40, "labels": [{"text": "Process"}]},
+            {"id": "n3", "width": 100, "height": 40, "labels": [{"text": "Output"}]},
         ],
         "edges": [
-            {"id": "e1", "sources": ["a"], "targets": ["b"]},
-            {"id": "e2", "sources": ["b"], "targets": ["c"]},
+            {"id": "e1", "sources": ["n1"], "targets": ["n2"]},
+            {"id": "e2", "sources": ["n2"], "targets": ["n3"]},
         ],
     }
 
     t = ctx.theme()
-    bg = t.get("--voitta-bg", "#fff")
-    fg = t.get("--voitta-text", "#000")
-    border = t.get("--voitta-border", "#1a2230")
-    surface = t.get("--voitta-surface", "#fff")
+    bg     = t.get("--voitta-bg",     "#ffffff")
+    text   = t.get("--voitta-text",   "#111111")
+    accent = t.get("--voitta-accent", "#5b5fc7")
 
-    return f"""<!doctype html>
+    return f"""<!DOCTYPE html>
 <html>
 <head>
-  <script src="https://unpkg.com/elkjs@0.11.1/lib/elk.bundled.js"></script>
-  <style>
-    body {{ background: {bg}; color: {fg}; font-family: system-ui;
-            margin: 0; padding: 16px; }}
-    /* NO min-height: 100vh, NO height: 100% — those make the
-       screenshot path balloon the iframe to ~8000 px. Body height
-       stays natural; the iframe auto-sizes to content extent. */
-    /* SVG paint attributes do NOT live here — every fill/stroke/
-       font-size is set inline on each <rect>/<text>/<path> in the
-       JS below. html-to-image doesn't reliably inline <style> rules
-       into its SVG snapshot; inline attributes always work. */
-  </style>
+<style>
+  body {{ margin: 0; padding: 16px; background: {bg}; }}
+  svg {{ width: 100%; overflow: visible; }}
+  .node rect {{ fill: {accent}; rx: 6; ry: 6; }}
+  .node text {{ fill: #fff; font-size: 13px; font-family: sans-serif; dominant-baseline: middle; text-anchor: middle; }}
+  .edge path {{ stroke: {text}; stroke-width: 2; fill: none; marker-end: url(#arrow); }}
+</style>
 </head>
 <body>
-  <svg id="diagram"></svg>
-  <script>
-  // Embed paint values so the JS doesn't have to read CSS vars.
-  const PAINT = {{
-    node_fill: {json.dumps(surface)},
-    node_stroke: {json.dumps(border)},
-    node_text: {json.dumps(fg)},
-    edge_stroke: {json.dumps(border)},
-  }};
+<svg id="svg"><defs>
+  <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0, 10 3.5, 0 7" fill="{text}"/>
+  </marker>
+</defs></svg>
+<script src="https://cdn.jsdelivr.net/npm/elkjs@0.9.0/lib/elk.bundled.js"></script>
+<script>
+const elk = new ELK();
+const graph = {json.dumps(graph)};
 
-  const elk = new ELK();
-  const graph = {json.dumps(graph)};
-  elk.layout(graph).then(laid => {{
-    const svg = document.getElementById("diagram");
-
-    // Compute extent from laid nodes + edge bend points.
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of laid.children) {{
-      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
-      maxX = Math.max(maxX, n.x + n.width); maxY = Math.max(maxY, n.y + n.height);
-    }}
-    for (const e of laid.edges || []) {{
-      const sec = e.sections[0];
-      for (const p of [sec.startPoint, ...(sec.bendPoints || []), sec.endPoint]) {{
-        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-      }}
-    }}
-    const PAD = 40;
-    const vbW = maxX - minX + 2 * PAD;
-    const vbH = maxY - minY + 2 * PAD;
-    svg.setAttribute("viewBox", `${{minX - PAD}} ${{minY - PAD}} ${{vbW}} ${{vbH}}`);
-    // CRITICAL: set pixel dimensions matching the viewBox so the
-    // iframe doesn't blow up to a screen-fill measurement.
-    svg.setAttribute("width", vbW);
-    svg.setAttribute("height", vbH);
-
-    function el(tag, attrs) {{
-      const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
-      for (const k in attrs) e.setAttribute(k, attrs[k]);
-      return e;
-    }}
-
-    // Draw edges first so nodes paint on top.
-    for (const e of laid.edges || []) {{
-      const sec = e.sections[0];
-      const pts = [sec.startPoint, ...(sec.bendPoints || []), sec.endPoint];
-      const d = pts.map((p, i) => `${{i === 0 ? "M" : "L"}} ${{p.x}} ${{p.y}}`).join(" ");
-      // Every paint attribute INLINE.
-      svg.appendChild(el("path", {{
-        d, fill: "none",
-        stroke: PAINT.edge_stroke,
-        "stroke-width": 1.5,
-      }}));
-    }}
-
-    // Draw nodes.
-    for (const n of laid.children) {{
-      const g = el("g", {{ transform: `translate(${{n.x}}, ${{n.y}})` }});
-      g.appendChild(el("rect", {{
-        x: 0, y: 0, width: n.width, height: n.height, rx: 6,
-        fill: PAINT.node_fill,
-        stroke: PAINT.node_stroke,
-        "stroke-width": 2,
-      }}));
-      const text = el("text", {{
-        x: n.width / 2, y: n.height / 2,
-        "text-anchor": "middle",
-        "dominant-baseline": "central",
-        "font-size": 14,
-        "font-family": "system-ui, sans-serif",
-        fill: PAINT.node_text,
-      }});
-      text.textContent = (n.labels && n.labels[0] && n.labels[0].text) || n.id;
-      g.appendChild(text);
-      svg.appendChild(g);
-    }}
+elk.layout(graph).then(g => {{
+  const svg = document.getElementById('svg');
+  const PAD = 20;
+  // Compute bounds
+  let maxX = 0, maxY = 0;
+  g.children.forEach(n => {{
+    maxX = Math.max(maxX, n.x + n.width);
+    maxY = Math.max(maxY, n.y + n.height);
   }});
-  </script>
-</body>
-</html>"""
+  svg.setAttribute('viewBox', `${{-PAD}} ${{-PAD}} ${{maxX + PAD*2}} ${{maxY + PAD*2}}`);
+  svg.setAttribute('height', maxY + PAD*2);
+
+  // Draw edges
+  g.edges.forEach(edge => {{
+    const pts = edge.sections?.[0];
+    if (!pts) return;
+    const start = pts.startPoint;
+    const end = pts.endPoint;
+    const bends = pts.bendPoints || [];
+    let d = `M ${{start.x}} ${{start.y}}`;
+    bends.forEach(p => d += ` L ${{p.x}} ${{p.y}}`);
+    d += ` L ${{end.x}} ${{end.y}}`;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    el.setAttribute('class', 'edge');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    el.appendChild(path);
+    svg.appendChild(el);
+  }});
+
+  // Draw nodes
+  g.children.forEach(node => {{
+    const g_el = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g_el.setAttribute('class', 'node');
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', node.x); rect.setAttribute('y', node.y);
+    rect.setAttribute('width', node.width); rect.setAttribute('height', node.height);
+    rect.setAttribute('rx', 6);
+    const label = node.labels?.[0]?.text || node.id;
+    const text_el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text_el.setAttribute('x', node.x + node.width/2);
+    text_el.setAttribute('y', node.y + node.height/2);
+    text_el.textContent = label;
+    g_el.appendChild(rect);
+    g_el.appendChild(text_el);
+    svg.appendChild(g_el);
+  }});
+}});
+</script>
+</body></html>"""
 ```
 
-## What you control
+## ELK layout algorithms
 
-Everything. ELK lays out positions; you decide how each node and
-edge is painted. Want diamond decisions? Append a `<polygon>` instead
-of a `<rect>` for nodes whose data says so. Want arrowheads? Compute
-the final segment direction, append a `<polygon>` at the tip. Want
-gradient fills? Define `<linearGradient>` in `<defs>` (give each
-unique id), reference via `fill="url(#g_node_a)"`.
+```javascript
+// Layered (default) — good for DAGs, pipelines
+"elk.algorithm": "layered"
 
-See `../elk-design-templates.md` for three coordinated style families
-(schematic, energy-monitor, hybrid) and standalone patterns (dashed
-connectors, gradient fills, KPI cards, `<foreignObject>` HTML).
+// Force-directed — good for general graphs
+"elk.algorithm": "force"
 
-## ELK algorithm options
+// Tree — good for hierarchies
+"elk.algorithm": "mrtree"
 
-- `"elk.algorithm": "layered"` — Sugiyama-style hierarchical
-  (default). Orthogonal routing, honors `elk.layered.*` options.
-- `"elk.algorithm": "stress"` — force-directed organic layout
-- `"elk.algorithm": "mrtree"` — pure tree (fastest)
-
-Full ELK option reference: `rag_query corpus="code" query="elk
-layered options"` — the full Eclipse ELK Java source is indexed.
-
-## Port-side hints (layered only)
-
-```python
-node = {
-    "id": "a", "width": 160, "height": 60,
-    "ports": [
-        {"id": "a_in",  "layoutOptions": {"port.side": "NORTH"}},
-        {"id": "a_out", "layoutOptions": {"port.side": "SOUTH"}},
-    ],
-    "properties": {"portConstraints": "FIXED_SIDE"},
-}
-edge = {"id": "e1", "sources": ["a_out"], "targets": ["b_in"]}
+// Radial
+"elk.algorithm": "radial"
 ```
 
-## Settle time
+## Direction
 
-elkjs runs synchronously after the bundle loads, but if your
-report is large the layout can take a moment. The screenshot path
-waits for `networkidle` + 1500ms, which covers all but huge graphs.
-For >200-node graphs, raise `expand_settle_ms` on `screenshot_report`.
-
-## Adding zoom / pan / fit-all controls
-
-Zoom/pan/fit-all buttons work fine **as long as you keep body at
-natural height and read `window.innerWidth/Height` for fit
-calculations**. Using `100vh` + `viewport.clientHeight` breaks
-screenshots (see [screenshot-friendly.md](../screenshot-friendly.md)
-for the full explanation and summary table).
-
-Drop this pattern in after the `elk.layout().then(...)` block:
-
-```html
-<body style="margin:0; padding:16px; background:#0b0f14">
-  <!-- position:relative wrapper lets the toolbar use position:absolute -->
-  <div id="wrap" style="position:relative; display:inline-block">
-    <svg id="diagram"></svg>
-    <!-- position:absolute (NOT fixed) — moves with content during probe,
-         appears in screenshots at the correct position -->
-    <div id="toolbar" style="
-      position:absolute; top:10px; right:10px; z-index:10;
-      display:flex; gap:4px">
-      <button onclick="zoom(1.2)">+</button>
-      <button onclick="zoom(1/1.2)">−</button>
-      <!-- fit-all icon: dashed square ⬚ (U+2B1A) -->
-      <button onclick="fitAll()" title="Fit all">⬚</button>
-    </div>
-  </div>
-</body>
+```javascript
+"elk.direction": "RIGHT"   // left-to-right (default for layered)
+"elk.direction": "DOWN"    // top-to-bottom
+"elk.direction": "LEFT"    // right-to-left
+"elk.direction": "UP"      // bottom-to-top
 ```
 
-```js
-let scale = 1, tx = 0, ty = 0, dgW, dgH;
-const svg = document.getElementById("diagram");
+## Notes
 
-function applyTransform() {
-  svg.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
-  svg.style.transformOrigin = "0 0";
-}
-function zoom(factor) { scale *= factor; applyTransform(); }
-function fitAll() {
-  // Use window.innerWidth/Height — NOT clientHeight of any container.
-  // clientHeight would read the probe height (~8000px) and scale the
-  // diagram down to a thumbnail in the screenshot.
-  scale = Math.min(window.innerWidth / dgW, window.innerHeight / dgH) * 0.92;
-  tx = (window.innerWidth - dgW * scale) / 2;
-  ty = 20;
-  applyTransform();
-}
-
-elk.layout(graph).then(laid => {
-  // ... compute vbW, vbH from extent, paint edges + nodes ...
-  dgW = vbW; dgH = vbH;
-  svg.setAttribute("width", vbW);
-  svg.setAttribute("height", vbH);
-  fitAll();  // synchronous — no requestAnimationFrame needed
-});
-```
-
-**Key rules:**
-- `position: absolute` on the toolbar (never `position: fixed`)
-- `window.innerWidth/Height` for fit scale (never `container.clientHeight`)
-- Call `fitAll()` directly in the `.then()` callback — no `rAF` delay needed
-- Fit-all button icon: dashed square **⬚** (`U+2B1A`) or an inline SVG
-  `<rect stroke-dasharray="3 2">` for more control over appearance
-
-## Common screenshot failure modes
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| All nodes black, no text visible | `<style>` block holds paint; html-to-image dropped it | Set fill/stroke/font as inline attrs |
-| Screenshot is 2000px+ tall but live render is short | SVG `width=100% height=100%` blew up the iframe measurement | Set explicit pixel `width`/`height` on `<svg>` matching the viewBox extent |
-| Diagram is tiny thumbnail in top-left of huge canvas | `fitAll()` read `clientHeight` during 8000 px probe | Use `window.innerHeight` instead; keep body at natural height |
-| Text is the wrong font | Cross-origin web font failed to inline | Use `font-family: system-ui` or self-host the WOFF2 |
-| 3D canvas inside `<foreignObject>` is blank | three.js renderer without `preserveDrawingBuffer: true` | Pass that flag to `new THREE.WebGLRenderer({...})` |
+- ELK computes layout only — drawing is your responsibility.
+- For complex graphs, build the `children` and `edges` arrays in Python before embedding as JSON.
+- For SVG screenshots: use inline `fill` attributes on `<rect>` elements, not CSS `fill` (see `../screenshot-friendly.md`).
+- See `knowledge-graph.md` for a full networkx → ELK pipeline.

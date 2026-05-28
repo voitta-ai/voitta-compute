@@ -4,14 +4,15 @@
 // the persisted settings cache.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useChatInteract, useChatSession } from "@chainlit/react-client";
 import { useSetRecoilState } from "recoil";
+import { threadIdToResumeState, useChatInteract } from "@chainlit/react-client";
 import { useSettings } from "./lib/useSettings";
 import { saveSettings } from "./lib/settings";
 import ChatPane from "./ChatPane";
 import SettingsView from "./SettingsView";
 import CallFnRouter from "./lib/CallFnRouter";
 import ReportPane from "./report/ReportPane";
+import ThreadPicker from "./ThreadPicker";
 import { activeTabState, reportCollapsedState, workspaceTabOpenState } from "./report/state";
 
 type View = "chat" | "settings";
@@ -43,11 +44,18 @@ interface Props {
 
 export default function Drawer({ backendOrigin }: Props) {
   const settings = useSettings();
-  const { clear } = useChatInteract();
-  const { connect } = useChatSession();
   const setWorkspaceOpen = useSetRecoilState(workspaceTabOpenState);
   const setActiveTab = useSetRecoilState(activeTabState);
   const setReportCollapsed = useSetRecoilState(reportCollapsedState);
+
+  // selectedThreadId drives which thread ChatPane mounts into.
+  // null = new/current session. Changing it re-keys ChatPane so it remounts
+  // cleanly (same pattern as stirista-conversational-agent).
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [newConvKey, setNewConvKey] = useState(0);
+  const setThreadIdToResume = useSetRecoilState(threadIdToResumeState);
+  const { clear } = useChatInteract();
+
   const [open, setOpen] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem(STORE_OPEN) !== "0";
@@ -183,6 +191,16 @@ export default function Drawer({ backendOrigin }: Props) {
           >
             {providerChip}
           </button>
+          <ThreadPicker
+            backendOrigin={backendOrigin}
+            selectedThreadId={selectedThreadId}
+            onThreadSelect={(id) => {
+              // Set idToResume BEFORE key changes so ChatPane mounts with correct atom value.
+              if (id === null) { clear(); setThreadIdToResume(undefined); setNewConvKey((k) => k + 1); }
+              else { setThreadIdToResume(id as any); }
+              setSelectedThreadId(id);
+            }}
+          />
           <span className="spacer" />
           {view === "chat" && (
             <>
@@ -241,15 +259,6 @@ export default function Drawer({ backendOrigin }: Props) {
                     );
                 })()}
               </button>
-              <button
-                className="hbtn"
-                type="button"
-                title="Clear conversation"
-                aria-label="Clear conversation"
-                onClick={() => { clear(); connect({ userEnv: {} }); }}
-              >
-                ↻
-              </button>
             </>
           )}
           <button
@@ -272,9 +281,14 @@ export default function Drawer({ backendOrigin }: Props) {
           </button>
         </header>
 
-        {/* Keep ChatPane mounted so the composer's draft text survives view switches */}
+        {/* Key forces a clean remount on thread switches or new-conversation. */}
         <div className="chat-wrap" style={view !== "chat" ? { display: "none" } : undefined}>
-          <ChatPane backendOrigin={backendOrigin} hasApiKey={currentHasKey} />
+          <ChatPane
+            key={selectedThreadId ?? `new-${newConvKey}`}
+            backendOrigin={backendOrigin}
+            hasApiKey={currentHasKey}
+            threadId={selectedThreadId}
+          />
         </div>
         {view === "settings" && (
           <SettingsView backendOrigin={backendOrigin} onClose={() => setView("chat")} />

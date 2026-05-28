@@ -1,80 +1,143 @@
 # Recipe: Interactivity
 
-Vanilla JS, htmx, Alpine.js — anything that runs in the browser
-works. The iframe is yours; the screenshot happens at one moment
-so interactivity is for the user's exploration, not what gets
-captured.
+Vanilla JS, Alpine.js, and other lightweight patterns work in the iframe. The screenshot captures one frame, so interactivity is for the user's exploration — not what gets frozen in the screenshot.
 
-## Vanilla JS
+## Vanilla JS: toggle
 
 ```python
-return """<!doctype html>
-<html>
-<body>
-  <button id="btn">Click me</button>
-  <p id="msg"></p>
-  <script>
-    const counter = { n: 0 };
-    document.getElementById("btn").addEventListener("click", () => {
-      counter.n++;
-      document.getElementById("msg").textContent = `Clicked ${counter.n}`;
-    });
-  </script>
-</body>
-</html>"""
-```
-
-## Alpine.js — declarative, no build step
-
-```python
-return """<!doctype html>
+def build(ctx):
+    return """<!DOCTYPE html>
 <html>
 <head>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+<style>
+  body { font-family: sans-serif; padding: 16px; }
+  .section { display: none; border: 1px solid #ddd; padding: 12px; margin-top: 8px; border-radius: 4px; }
+  .section.active { display: block; }
+  button { margin-right: 8px; padding: 6px 12px; cursor: pointer; }
+</style>
 </head>
 <body>
-  <div x-data="{ open: false, options: ['layered', 'stress', 'mrtree'], selected: 'layered' }">
-    <button @click="open = !open" x-text="selected"></button>
-    <ul x-show="open" @click.outside="open = false">
-      <template x-for="o in options">
-        <li @click="selected = o; open = false" x-text="o"></li>
-      </template>
-    </ul>
-    <p>You picked: <strong x-text="selected"></strong></p>
+<button onclick="show('a')">Section A</button>
+<button onclick="show('b')">Section B</button>
+<div id="a" class="section active"><p>Content A</p></div>
+<div id="b" class="section"><p>Content B</p></div>
+<script>
+  function show(id) {
+    document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+</script>
+</body></html>"""
+```
+
+## Alpine.js: reactive UI
+
+Alpine.js is ~15 KB and lets you write reactive components inline.
+
+```python
+import json
+
+def build(ctx):
+    items = [
+        {"name": "Widget A", "status": "active",   "value": 142},
+        {"name": "Widget B", "status": "inactive", "value": 87},
+        {"name": "Widget C", "status": "active",   "value": 231},
+    ]
+    items_json = json.dumps(items)
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+<style>
+  body {{ font-family: sans-serif; padding: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ padding: 8px; border-bottom: 1px solid #eee; text-align: left; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; }}
+  .active {{ background: #d1fae5; color: #065f46; }}
+  .inactive {{ background: #fee2e2; color: #991b1b; }}
+</style>
+</head>
+<body>
+<div x-data="{{
+  items: {items_json},
+  filter: 'all',
+  get filtered() {{
+    if (this.filter === 'all') return this.items;
+    return this.items.filter(i => i.status === this.filter);
+  }}
+}}">
+  <div style="margin-bottom:12px">
+    Filter:
+    <select x-model="filter">
+      <option value="all">All</option>
+      <option value="active">Active</option>
+      <option value="inactive">Inactive</option>
+    </select>
   </div>
-</body>
-</html>"""
+  <table>
+    <thead><tr><th>Name</th><th>Status</th><th>Value</th></tr></thead>
+    <tbody>
+      <template x-for="item in filtered" :key="item.name">
+        <tr>
+          <td x-text="item.name"></td>
+          <td><span class="badge" :class="item.status" x-text="item.status"></span></td>
+          <td x-text="item.value"></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</div>
+</body></html>"""
 ```
 
-## htmx — server-side interactivity
-
-For reports that need to fetch fresh data on user interaction.
-The BE doesn't have a per-report state endpoint, so this is
-limited — htmx is best when you have a separate API the iframe
-can call.
+## Vanilla JS: sortable table
 
 ```python
-return """<!doctype html>
+import json
+
+def build(ctx):
+    rows = [["Alice", 95], ["Bob", 72], ["Carol", 88], ["Dave", 61]]
+    rows_json = json.dumps(rows)
+
+    return f"""<!DOCTYPE html>
 <html>
 <head>
-  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+<style>
+  body {{ font-family: sans-serif; padding: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th {{ cursor: pointer; background: #f0f0f0; padding: 8px; text-align: left; user-select: none; }}
+  th:hover {{ background: #e0e0e0; }}
+  td {{ padding: 8px; border-bottom: 1px solid #eee; }}
+</style>
 </head>
 <body>
-  <button hx-get="https://api.example.com/data"
-          hx-target="#result">Load data</button>
-  <div id="result"></div>
-</body>
-</html>"""
+<table id="t">
+  <thead><tr>
+    <th onclick="sort(0)">Name ↕</th>
+    <th onclick="sort(1)">Score ↕</th>
+  </tr></thead>
+  <tbody></tbody>
+</table>
+<script>
+  var data = {rows_json};
+  var asc = [true, true];
+  function render() {{
+    document.querySelector('#t tbody').innerHTML =
+      data.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('');
+  }}
+  function sort(col) {{
+    data.sort((a, b) => asc[col] ? (a[col] > b[col] ? 1 : -1) : (a[col] < b[col] ? 1 : -1));
+    asc[col] = !asc[col];
+    render();
+  }}
+  render();
+</script>
+</body></html>"""
 ```
 
-## What gets screenshotted
+## Notes
 
-- The screenshot is a single rasterised frame
-- Interactive state at screenshot time is captured (e.g. a
-  dropdown if open)
-- The LLM only sees the screenshot — not the interactivity
-- The USER sees + uses the interactivity in the chat
-
-So: build interactive things for the user to explore. Build
-screenshot-friendly content (settled, static-frame) for the LLM
-to verify.
+- The iframe is yours — any JavaScript that works in a browser works here.
+- htmx works too, but requests go to the page origin, not the backend. Use carefully.
+- Keep heavy dependencies (React, Vue) off report iframes — they add load time and complexity. Alpine.js is usually sufficient.
