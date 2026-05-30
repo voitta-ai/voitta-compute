@@ -17,6 +17,15 @@ from pathlib import Path
 HOST = "127.0.0.1"
 PORT = 12358
 
+# Plain-HTTP sibling listener. The main port (PORT) serves TLS so the
+# bookmarklet works over https on ordinary sites. But on hardened pages
+# (e.g. Salesforce Lightning) a strict CSP `connect-src` forbids the page
+# from reaching localhost at all, so the widget is loaded + bridged through
+# a popup window served from this plain-http port. http://127.0.0.1 is a
+# secure context, so the popup needs no trusted cert (zero local admin).
+# Serves the SAME ASGI app as PORT — see desktop.py / start.sh.
+PLAINTEXT_PORT = 12359
+
 # When running as a packaged .app the launcher sets VOITTA_PROJECT_ROOT to
 # ~/Library/Application Support/Voitta Compute/backend so all derived paths
 # (certs, rag, plugins, docs) resolve into the writable user data dir rather

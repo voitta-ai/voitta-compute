@@ -40,6 +40,7 @@ from pathlib import Path
 from app.config import (  # noqa: E402
     HOST,
     PORT,
+    PLAINTEXT_PORT,
     PROJECT_ROOT,
     TLS_CERT_PATH,
     TLS_KEY_PATH,
@@ -56,6 +57,8 @@ import rumps  # noqa: E402
 
 _uvicorn_server: "uvicorn.Server | None" = None  # set on first start
 _uvicorn_thread: threading.Thread | None = None
+_uvicorn_plaintext_server: "uvicorn.Server | None" = None  # bridge listener
+_uvicorn_plaintext_thread: threading.Thread | None = None
 _uvicorn_lock = threading.Lock()
 _installing: bool = False  # True while the first-time setup is running
 
@@ -209,6 +212,35 @@ def _bookmarklet_text() -> str:
     )
 
 
+def _bridge_bookmarklet_text() -> str:
+    """Bookmarklet for hardened-CSP pages (e.g. Salesforce Lightning).
+
+    The page's ``script-src``/``connect-src`` block both loading widget.js and
+    reaching localhost, so instead this opens a popup served from the backend's
+    plain-http origin and bootstraps the widget through it via ``postMessage``
+    (neither ``window.open`` nor ``postMessage`` is governed by CSP). See
+    ``app.bridge`` for the relay/shim that the popup and page run.
+    """
+    backend = f"http://{HOST}:{PLAINTEXT_PORT}"
+    return (
+        "javascript:(()=>{"
+        f"const B='{backend}';"
+        # Idempotent: if the bridge is already active and its popup is still
+        # open, just focus it. Re-opening would reload the popup (same window
+        # name), killing the live socket and orphaning the mounted widget.
+        "if(window.__voittaBridge&&window.__voittaBridgePopup&&!window.__voittaBridgePopup.closed){try{window.__voittaBridgePopup.focus();}catch(_){}return;}"
+        "const p=window.open(B+'/bridge','voitta-bridge','width=440,height=680');"
+        "if(!p){alert('Voitta: please allow pop-ups for this site, then click the bookmark again.');return;}"
+        "window.__voittaBackendOrigin=B;window.__voittaBridgePopup=p;window.__voittaBridge=true;"
+        "window.addEventListener('message',function h(e){"
+        "if(e.source!==p||!e.data||e.data.v!=='voitta-bridge')return;"
+        "if(e.data.t==='ready'){p.postMessage({v:'voitta-bridge',t:'hello',origin:location.origin},B);}"
+        "else if(e.data.t==='boot'){window.removeEventListener('message',h);(0,eval)(e.data.code);}"
+        "});"
+        "})();"
+    )
+
+
 def _copy_to_clipboard(text: str) -> bool:
     try:
         from AppKit import NSPasteboard, NSPasteboardTypeString
@@ -263,6 +295,43 @@ def _start_uvicorn(log: logging.Logger) -> threading.Thread:
     t.start()
     with _uvicorn_lock:
         _uvicorn_thread = t
+
+    # Sibling plain-HTTP listener for the hardened-site bridge popup. Same
+    # ASGI app, no TLS, on PLAINTEXT_PORT. Runs in the same process so it
+    # shares all in-memory state (sessions, sockets) with the TLS listener.
+    _start_uvicorn_plaintext(log)
+
+    return t
+
+
+def _start_uvicorn_plaintext(log: logging.Logger) -> threading.Thread:
+    """Launch a second uvicorn (plain http, no TLS) on PLAINTEXT_PORT.
+
+    The bridge popup loads from http://127.0.0.1:PLAINTEXT_PORT so it needs
+    no trusted cert. Daemon thread; failures are logged but non-fatal — the
+    ordinary https bookmarklet keeps working regardless.
+    """
+    global _uvicorn_plaintext_server, _uvicorn_plaintext_thread
+    import uvicorn
+
+    config = uvicorn.Config(
+        "app.main:app", host=HOST, port=PLAINTEXT_PORT, log_level="warning"
+    )
+    server = uvicorn.Server(config)
+    with _uvicorn_lock:
+        _uvicorn_plaintext_server = server
+
+    def _run() -> None:
+        log.info("starting bridge listener on http://%s:%s", HOST, PLAINTEXT_PORT)
+        try:
+            server.run()
+        except Exception:
+            log.exception("bridge listener died")
+
+    t = threading.Thread(target=_run, name="voitta-uvicorn-bridge", daemon=True)
+    t.start()
+    with _uvicorn_lock:
+        _uvicorn_plaintext_thread = t
     return t
 
 
@@ -341,6 +410,7 @@ class VoittaMenuBarApp(rumps.App):
             None,  # separator
             rumps.MenuItem("Open in browser", callback=self.open_browser),
             rumps.MenuItem("Copy bookmarklet", callback=self.copy_bookmarklet),
+            rumps.MenuItem("Copy bookmarklet (Salesforce/strict CSP)", callback=self.copy_bridge_bookmarklet),
             rumps.MenuItem("Settings…", callback=self.show_settings),
             None,
             self._server_status_item,
@@ -434,10 +504,13 @@ class VoittaMenuBarApp(rumps.App):
         def _do_restart() -> None:
             with _uvicorn_lock:
                 srv = _uvicorn_server
+                bridge_srv = _uvicorn_plaintext_server
             if srv is not None:
                 log.info("restart_server: signalling uvicorn to exit")
                 srv.should_exit = True
-                # Give it a moment to free the port before restarting.
+                if bridge_srv is not None:
+                    bridge_srv.should_exit = True
+                # Give it a moment to free the ports before restarting.
                 time.sleep(1.5)
             log.info("restart_server: starting fresh uvicorn")
             _start_uvicorn(log)
@@ -457,6 +530,20 @@ class VoittaMenuBarApp(rumps.App):
                     title=APP_NAME,
                     subtitle="Bookmarklet copied",
                     message="Paste into your bookmarks bar.",
+                )
+            except Exception:
+                pass
+        else:
+            _alert(title=APP_NAME, message="Couldn't access the clipboard.", ok="OK")
+
+    def copy_bridge_bookmarklet(self, _sender) -> None:
+        text = _bridge_bookmarklet_text()
+        if _copy_to_clipboard(text):
+            try:
+                rumps.notification(
+                    title=APP_NAME,
+                    subtitle="Salesforce bookmarklet copied",
+                    message="For pages with a strict CSP. Opens a small popup; keep it open.",
                 )
             except Exception:
                 pass
@@ -611,8 +698,11 @@ class VoittaMenuBarApp(rumps.App):
             return
         with _uvicorn_lock:
             srv = _uvicorn_server
+            bridge_srv = _uvicorn_plaintext_server
         if srv is not None:
             srv.should_exit = True
+        if bridge_srv is not None:
+            bridge_srv.should_exit = True
 
         from app.installer import force_rebuild_stamps
         force_rebuild_stamps()
@@ -675,6 +765,7 @@ def main() -> None:
     # FILES_DIRECTORY. Inside a frozen .app getcwd() returns "/" (read-only),
     # so set it early — before any chainlit import can happen.
     os.environ.setdefault("CHAINLIT_APP_ROOT", str(PROJECT_ROOT.parent))
+
 
     # The frozen .app bundles the frontend under voitta_compute/resources/.
     # Set VOITTA_FRONTEND_DIST so app.config.FRONTEND_DIST resolves correctly

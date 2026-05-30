@@ -510,11 +510,20 @@ async function evalJs(args: Record<string, unknown>): Promise<unknown> {
 
   const t0 = performance.now();
   try {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const AsyncFn = (async function () {}).constructor as new (body: string) => () => Promise<unknown>;
-    const fn = new AsyncFn(js);
+    // Run the body as an async IIFE through *indirect* eval rather than the
+    // AsyncFunction constructor. Both honour top-level ``return`` and
+    // ``await`` and execute in global scope — but Salesforce Lightning Web
+    // Security distorts the Function/AsyncFunction constructor into a no-op
+    // (the body silently never runs, the call returns undefined) while
+    // leaving indirect eval working. Indirect eval is how the widget itself
+    // is injected on hardened pages, so it's the portable path. Both are
+    // gated by CSP ``'unsafe-eval'`` identically, so there's no regression on
+    // ordinary sites.
+    const indirectEval = eval; // assigning to a var makes the call indirect (global scope)
+    const wrapped = `(async () => {\n${js}\n})()`;
     const result = await Promise.race([
-      Promise.resolve().then(() => fn()),
+      // eslint-disable-next-line no-eval
+      Promise.resolve().then(() => indirectEval(wrapped)),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`eval timed out after ${awaitMs}ms`)), awaitMs),
       ),

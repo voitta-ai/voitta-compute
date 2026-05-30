@@ -146,6 +146,7 @@ class _PNAMiddleware:
 app.add_middleware(_PNAMiddleware)
 
 
+from app.bridge import router as bridge_router
 from app.routes.google import router as google_router
 from app.routes.html_report import router as html_report_router
 from app.routes.plugins import router as plugins_router
@@ -159,6 +160,9 @@ app.include_router(settings_router)
 app.include_router(plugins_router)
 app.include_router(google_router)
 app.include_router(workspace_router)
+# Hardened-site bridge (/bridge, /bridge/relay.js, /bridge/boot.js). Must be
+# registered before the catch-all frontend route so it isn't shadowed.
+app.include_router(bridge_router)
 
 
 @app.get("/health")
@@ -166,11 +170,54 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# ── /chainlit/project/threads override ───────────────────────────────────
+# Chainlit's built-in handler requires an authenticated user (401 otherwise).
+# The widget runs cross-site (bookmarklet on third-party pages) so JWT cookies
+# are blocked by SameSite=Lax and we have no authenticated current_user.
+# This route is registered BEFORE mount_chainlit so it shadows the upstream
+# handler and serves thread history without auth.
+
+@app.post("/chainlit/project/threads")
+async def project_threads(request: Request) -> dict:
+    from chainlit.data import get_data_layer
+    from chainlit.types import Pagination, ThreadFilter
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw_pagination = body.get("pagination") or {}
+    raw_filter = body.get("filter") or {}
+    pagination = Pagination(
+        first=raw_pagination.get("first", 20),
+        cursor=raw_pagination.get("cursor"),
+    )
+    filters = ThreadFilter(
+        feedback=raw_filter.get("feedback"),
+        userId=raw_filter.get("userId"),
+        search=raw_filter.get("search"),
+    )
+    data_layer = get_data_layer()
+    if data_layer is None:
+        return {"data": [], "pageInfo": {"hasNextPage": False, "startCursor": None, "endCursor": None}}
+    result = await data_layer.list_threads(pagination, filters)
+    if result is None:
+        return {"data": [], "pageInfo": {"hasNextPage": False, "startCursor": None, "endCursor": None}}
+    # PaginatedResponse is a dataclass — serialise to dict
+    try:
+        return result.dict() if hasattr(result, "dict") else {"data": result.data, "pageInfo": result.pageInfo}
+    except Exception:
+        return {"data": [], "pageInfo": {"hasNextPage": False, "startCursor": None, "endCursor": None}}
+
+
 # Mount Chainlit at /chainlit. Its socket.io lives at
 # /chainlit/ws/socket.io. MUST be mounted before the static FE catch-all
 # below so it isn't shadowed.
 _chainlit_target = Path(__file__).with_name("chainlit_app.py")
 mount_chainlit(app=app, target=str(_chainlit_target), path="/chainlit")
+
+# Patch sio connect handler AFTER mount_chainlit so the handler exists.
+from app.chainlit_app import patch_sio_connect as _patch_sio_connect
+_patch_sio_connect()
 
 
 # Embedded FastMCP debugging server at /mcp. Gated by the
@@ -1298,7 +1345,15 @@ async def screenshot_stash_put(request: Request) -> dict[str, Any]:
     return {"ok": True, "id": sid}
 
 
-from app.config import FRONTEND_DIST as _FE_DIST
+from app.config import FRONTEND_DIST as _FE_DIST, USER_DATA_ROOT as _USER_DATA_ROOT
+
+# Serve locally-stored element uploads (images, files attached to messages).
+# The directory is created by LocalStorageClient on first use; we also
+# ensure it here so StaticFiles doesn't fail on a fresh install.
+_uploads_dir = _USER_DATA_ROOT / "uploads"
+_uploads_dir.mkdir(parents=True, exist_ok=True)
+from fastapi.staticfiles import StaticFiles as _StaticFiles
+app.mount("/api/uploads", _StaticFiles(directory=str(_uploads_dir)), name="uploads")
 
 
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}

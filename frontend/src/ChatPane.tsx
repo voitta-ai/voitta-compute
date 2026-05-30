@@ -43,7 +43,12 @@ export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) 
   }, []);
 
   useEffect(() => {
-    connect({ userEnv: {} });
+    // On the hardened-site bridge, all backend traffic is tunnelled through
+    // the popup. Force socket.io to the WebSocket transport only — its
+    // XHR-polling fallback isn't covered by the WebSocket shim (and would hit
+    // the page CSP's connect-src wall). On ordinary pages, leave the default.
+    const bridge = (window as unknown as { __voittaBridge?: boolean }).__voittaBridge;
+    connect(bridge ? { userEnv: {}, transports: ["websocket"] } : { userEnv: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connect]);
 

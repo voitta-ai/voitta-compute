@@ -3,6 +3,7 @@
 
 import { type IMessageElement, type IStep } from "@chainlit/react-client";
 import Markdown from "./Markdown";
+import BridgeImg from "./BridgeImg";
 
 interface Props {
   step: IStep;
@@ -18,10 +19,11 @@ export default function StepView({ step, elements, backendOrigin }: Props) {
         {images.length > 0 && (
           <div className="msg-attachments">
             {images.map((el) => (
-              <img
+              <BridgeImg
                 key={el.id}
                 className="msg-attachment"
-                src={resolveUrl(el.url, backendOrigin)}
+                url={el.url}
+                backendOrigin={backendOrigin}
                 alt={el.name || ""}
               />
             ))}
@@ -96,7 +98,7 @@ function ElementView({
   if (element.type === "image" && element.url) {
     return (
       <figure className="rich-image">
-        <img src={resolveUrl(element.url, backendOrigin)} alt={element.name || ""} />
+        <BridgeImg url={element.url} backendOrigin={backendOrigin} alt={element.name || ""} />
         {element.name ? <figcaption>{element.name}</figcaption> : null}
       </figure>
     );
@@ -108,11 +110,4 @@ function ElementView({
     return null;
   }
   return null;
-}
-
-function resolveUrl(url: string | undefined, backendOrigin: string): string {
-  if (!url) return "";
-  if (/^(https?:|data:|blob:)/i.test(url)) return url;
-  const base = backendOrigin.replace(/\/$/, "");
-  return base + (url.startsWith("/") ? url : "/" + url);
 }

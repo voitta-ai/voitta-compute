@@ -6,6 +6,7 @@ cd "$(dirname "$0")/backend"
 
 HOST="${VOITTA_HOST:-127.0.0.1}"
 PORT="${VOITTA_PORT:-12358}"
+BRIDGE_PORT="${VOITTA_BRIDGE_PORT:-12359}"
 CERT="certs/127.0.0.1+1.pem"
 KEY="certs/127.0.0.1+1-key.pem"
 
@@ -24,4 +25,11 @@ else
   echo "[start.sh] http://$HOST:$PORT  (no TLS cert)"
 fi
 
-exec ./.venv/bin/uvicorn "${ARGS[@]}"
+# Plain-http sibling listener for the hardened-site bridge popup (same app,
+# no TLS). Backgrounded; killed when this script exits.
+echo "[start.sh] bridge http://$HOST:$BRIDGE_PORT"
+./.venv/bin/uvicorn app.main:app --host "$HOST" --port "$BRIDGE_PORT" --log-level warning &
+BRIDGE_PID=$!
+trap 'kill "$BRIDGE_PID" 2>/dev/null || true' EXIT INT TERM
+
+./.venv/bin/uvicorn "${ARGS[@]}"

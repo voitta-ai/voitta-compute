@@ -45,6 +45,8 @@ _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("chromadb",   "chromadb>=0.5.20"),  # biggest: pulls onnxruntime + grpc
     ("rdflib",     "rdflib>=7.0"),
     ("networkx",   "networkx>=3.0"),
+    ("aiosqlite",  "aiosqlite>=0.17"),
+    ("sqlalchemy", "sqlalchemy[asyncio]>=2.0"),
 ]
 
 

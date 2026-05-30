@@ -31,6 +31,9 @@ dependencies = [
   # Pillow — used by the agent loop to downsize captured screenshots
   # to webp before sending them to the LLM as inline images.
   "Pillow>=10",
+  # Async SQLite driver + SQLAlchemy async core for conversation persistence.
+  "aiosqlite>=0.17",
+  "sqlalchemy[asyncio]>=2.0",
 ]
 
 [project.optional-dependencies]

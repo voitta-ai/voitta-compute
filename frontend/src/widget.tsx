@@ -22,6 +22,13 @@ import.meta.glob("../../plugins/**/frontend/widget.ts", { eager: true });
 const HOST_ID = "voitta-compute-host";
 
 function deriveBackendOrigin(): string {
+  // Hardened-site bridge path: the bookmarklet eval's the bundle (no
+  // <script> element, so document.currentScript is null) and sets the
+  // backend origin explicitly. Honour it first.
+  const injected = (window as unknown as { __voittaBackendOrigin?: string })
+    .__voittaBackendOrigin;
+  if (injected) return injected;
+
   const cur = document.currentScript as HTMLScriptElement | null;
   if (cur?.src) {
     try {
