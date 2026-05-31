@@ -1103,7 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo",
         help=(
             "(code only) Comma-separated list of repo names under "
-            "lib-sources/ to index (e.g. 'panel' or 'panel,three.js'). "
+            "lib-sources/ to index (e.g. 'elk' or 'elk,three.js'). "
             "Default = all repos. NOTE: each run is a full rewrite, so "
             "this REPLACES the code corpus with chunks from only the "
             "named repos — useful for fast iteration / testing, not for "

@@ -51,7 +51,7 @@ CORPORA: dict[str, CorpusConfig] = {
         collection_name="code",
         description=(
             "source code of vendored libraries under lib-sources/ "
-            "(holoviews, panel, elkjs, three.js). "
+            "(elk, elkjs, jinja, three.js). "
             "Python chunks are AST-bounded (module / class / function / "
             "method); JS/TS chunks are regex-bounded at top-level "
             "function and class boundaries. Each chunk carries repo, "

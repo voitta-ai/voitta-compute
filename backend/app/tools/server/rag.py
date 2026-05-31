@@ -19,7 +19,7 @@ _CORPUS_SCHEMA = {
     "description": (
         "Which corpus to search. 'docs' = project documentation (default). "
         "'code' = source code of vendored libraries under lib-sources/ "
-        "(holoviews, panel, elkjs, three.js)."
+        "(elk, elkjs, jinja, three.js)."
     ),
 }
 
@@ -60,7 +60,7 @@ registry.register(
             "  • 'docs' (default) — this project's documentation (docs/ + "
             "every plugin's docs/).\n"
             "  • 'code'           — source of vendored libraries under "
-            "lib-sources/: holoviews, panel, elkjs, three.js. "
+            "lib-sources/: elk, elkjs, jinja, three.js. "
             "Python is AST-chunked (module / class / function / "
             "method); JS/TS is regex-chunked at top-level boundaries.\n"
             "\n"

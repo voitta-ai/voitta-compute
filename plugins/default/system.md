@@ -8,7 +8,7 @@ some run in the user's page. Use them when relevant. Be concise.
 has its own report DSL, its own `ctx` shape, its own component
 registry, its own layout footguns. The LLM corpus you were
 trained on does NOT contain any of this. Without an RAG lookup,
-you WILL write code that uses wrong field names, made-up Panel
+you WILL write code that uses wrong field names, made-up `ctx`
 kwargs, hallucinated component IDs, or theme keys that don't
 exist — and it will fail at smoke-test time. **Every single
 report session in the recent history has shown this.**
@@ -292,9 +292,9 @@ LinkedIn, …).
 
 Source of vendored libraries under `lib-sources/`:
 
-- **holoviews** (Python) — declarative plotting elements
-- **panel** (Python) — dashboard widgets and layouts
-- **elkjs** (TypeScript) — graph layout engine (used by `kind="elk"`)
+- **elk** (Java) — Eclipse Layout Kernel; the layout algorithms behind `kind="elk"`
+- **elkjs** (TypeScript) — JS port of ELK, the graph layout engine (used by `kind="elk"`)
+- **jinja** (Python) — templating engine
 - **three.js** (JavaScript) — 3D rendering primitives
 
 Each chunk carries `repo`, `path`, `folder`, `lang`, `kind`

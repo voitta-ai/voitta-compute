@@ -205,7 +205,7 @@ handle = snap["handle"]
 #    not a path — load the GLB via dynamic-import GLTFLoader, base64-
 #    inline so the sandboxed iframe (null origin) can read it.
 #    Full recipe + the wrong patterns that fail noisily:
-#    docs/panel-three-scene.md "Loading a CAD GLB into the scene"
+#    docs/recipes/three.md "Loading a CAD GLB into the scene"
 #    into ctx.three_scene".
 ```
 
@@ -246,7 +246,7 @@ gives the LLM the vocabulary for both view types.
 > ```
 >
 > Then compute the bounding box, centre, and scale. See
-> [docs/panel-three-scene.md](../../../docs/panel-three-scene.md)
+> [docs/recipes/three.md](../../../docs/recipes/three.md)
 > for the full ordering and a cheat sheet covering Rhino / Revit /
 > Blender.
 
@@ -299,7 +299,7 @@ Renderable via:
 **"Show me the upper deck of this lift."**
 1. `vre_search("upper deck", folder_ids=[42])` → top hit's chunk contains slug `4-post-lift/upper-deck-assembly`.
 2. `vre_request_asset(file_id, "cad_mesh", slug="4-post-lift/upper-deck-assembly")` → GLB URL.
-3. `fetch_to_python_storage` → `ctx.three_scene` (see the recipe above and [docs/panel-three-scene.md](../../../docs/panel-three-scene.md) for the full pattern).
+3. `fetch_to_python_storage` → `ctx.three_scene` (see the recipe above and [docs/recipes/three.md](../../../docs/recipes/three.md) for the full pattern).
 
 **"Render all four scissor arms side by side."**
 1. `vre_search("scissor arm")` → chunks for the four feature slugs.
