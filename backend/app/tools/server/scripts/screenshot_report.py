@@ -1,10 +1,9 @@
 """``screenshot_report(name?)`` — capture the current report pane as PNG.
 
 Hybrid wrapper that round-trips to the FE's ``screenshot_report``
-primitive. The primitive uses html-to-image against the closed shadow
-root (for elk / pyplot / plotly) or postMessages html2canvas inside
-the Panel iframe (for kind="panel"/"html"). It returns a base64
-image which we pass back to the model via the ``_image`` sentinel.
+primitive. The primitive postMessages html2canvas inside the report
+iframe (every report is HTML). It returns a base64 image which we pass
+back to the model via the ``_image`` sentinel.
 
 The optional ``name`` argument is purely informational — the FE
 captures whatever's currently mounted in the pane.

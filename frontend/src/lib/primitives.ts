@@ -17,20 +17,13 @@ function shadowRoot(): ShadowRoot | null {
 // ─────────────────────────────────────────────────────────────────────
 // screenshot_report — rasterise the active report pane.
 //
-// Two paths based on report kind:
-//
-//   • Panel iframe (``payload.kind === "panel"``): the iframe is
-//     same-origin with our backend and hosts html2canvas via the Panel
-//     shim. We resize the iframe with two-phase auto-sizing (probe at
-//     small + large heights to discriminate natural-max vs stretch-fill
-//     content), then postMessage ``voittaAction:screenshot`` and await
-//     the response. The shim composites nested three_scene canvases
-//     via the ``voitta_three_capture`` protocol.
-//
-//   • Everything else (pyplot / plotly / elk): fall back to
-//     html-to-image on the shadow-DOM ``.report-pane`` element. These
-//     panes live entirely inside the closed shadow root, so
-//     html-to-image works as it always has.
+// Every report is an HTML iframe (``iframe.report-panel-iframe``),
+// same-origin with our backend, hosting html2canvas via the report
+// shim. We resize the iframe with two-phase auto-sizing (probe at
+// small + large heights to discriminate natural-max vs stretch-fill
+// content), then postMessage ``voittaAction:screenshot`` and await the
+// response. The shim composites nested three_scene canvases via the
+// ``voitta_three_capture`` protocol.
 //
 // The result envelope uses the ``_image`` sentinel the BE looks for —
 // see ``app.agent``'s image-block injection — so the rendered PNG

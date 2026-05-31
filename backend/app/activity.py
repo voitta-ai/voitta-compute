@@ -166,7 +166,7 @@ def classify(tool_name: str) -> str:
         return "code_edit"
     if n.startswith("rag_"):
         return "rag"
-    if n in ("show_holoviz_report", "screenshot_report") or "report" in n:
+    if n in ("show_html_report", "screenshot_report") or "report" in n:
         return "report"
     if n in ("run_compute", "buffer_eval"):
         return "compute"

@@ -682,7 +682,8 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
     _inflight[file_id] = fut
     try:
         result = await _do_drive_download(
-            file_id, name_override=name_override, started=started
+            file_id, name_override=name_override, started=started,
+            folder_name=folder_name,
         )
         fut.set_result(result)
         return result
@@ -696,6 +697,7 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
 
 async def _do_drive_download(
     file_id: str, *, name_override: str | None, started: float,
+    folder_name: str | None = None,
 ) -> dict[str, Any]:
     # Need the metadata to know the filename + reject Google native formats.
     try:
@@ -1486,8 +1488,9 @@ def _adopt_from_path(
             out["next_action"] = (
                 f"File is already parsed — {parse_summary.get('n_items')} "
                 f"curves into `dat_curves.json` + `curves.pkl` in the "
-                f"snapshot dir. To visualise: "
-                f"`show_holoviz_report(name=\"dat_curves\")`. "
+                f"snapshot dir. To visualise: write a report with "
+                f"`define_script` whose `build(ctx)` reads `curves.pkl` and "
+                f"returns HTML, then `run_script`. "
                 f"DO NOT re-parse with a custom compute script."
             )
         else:
@@ -1568,9 +1571,9 @@ registry.register(
             "(.dat / .wfm / .res), the canonical parser runs immediately "
             "and the response includes `parse_summary` (curve_kinds, "
             "serials, units) plus a `next_action` directive. **Do not "
-            "write a custom byte decoder** — `dat_parse` and the "
-            "`dat_curves` Panel report are the only supported analysis "
-            "paths."
+            "write a custom byte decoder** — `dat_parse` and a "
+            "`build(ctx)`→HTML report over `curves.pkl` are the only "
+            "supported analysis paths."
         ),
         input_schema={
             "type": "object",

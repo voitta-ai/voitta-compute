@@ -1,11 +1,11 @@
-// HTML report iframe pane.
+// HTML report iframe pane. The only report kind.
 //
-// Same wire shape as PanelPane (server pre-renders HTML, FE just
-// mounts an iframe at the URL) — but the iframe loads a fully
-// pre-rasterised Jinja-rendered document from /api/html-report.
+// The server pre-renders HTML and the FE just mounts an iframe at the
+// URL — a fully pre-rasterised Jinja-rendered document from
+// /api/html-report.
 //
-// No Bokeh layout engine inside, so the iframe geometry only matters
-// for the screenshot path (where the existing primitive resizes it
+// The iframe geometry only matters for the screenshot path (where the
+// existing primitive resizes it
 // to a desktop-class width before capture).
 
 import { useMemo } from "react";

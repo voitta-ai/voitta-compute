@@ -242,7 +242,7 @@ if _mcp_asgi is not None:
 # call_fn wakes up, and handles measure / reflow / screenshot
 # postMessages from the parent's screenshot_report primitive.
 _PANEL_SHIM_JS = """(function () {
-  // Voitta Panel iframe shim — lean chainlit-build variant.
+  // Voitta report iframe shim — lean chainlit-build variant.
   //
   // Responsibilities:
   //   1. Signal "ready" once Bokeh's document has finished building.
@@ -254,7 +254,7 @@ _PANEL_SHIM_JS = """(function () {
   //      parent ReportPane forwards them to /api/report-render-events.
   //
   // The shim POSTs DIRECTLY to ``/api/report-render-events`` because
-  // the Panel iframe is same-origin with the backend — no parent
+  // the report iframe is same-origin with the backend — no parent
   // round-trip needed. (Legacy build went through the parent so the
   // shim could handle the on-prem case; not relevant in chainlit-
   // local mode.)
@@ -290,7 +290,7 @@ _PANEL_SHIM_JS = """(function () {
       name: SLUG,
       kind: "ready",
       render_id: RENDER_ID,
-      message: "panel iframe ready",
+      message: "report iframe ready",
       detail: {},
     });
   }
@@ -1223,11 +1223,10 @@ def _serve_node_module(rel_path: str, package_label: str) -> FileResponse:
 
 @app.get("/api/_html2canvas.js")
 async def html2canvas_js():
-    """Serve the html2canvas library into the Panel iframe.
+    """Serve the html2canvas library into the report iframe.
 
-    Loaded by ``panel_app.py`` via the ``js_files`` mechanism. The
-    shim calls ``window.html2canvas(...)`` for the canonical capture
-    path. ~200 KB.
+    Loaded by the report iframe's shim, which calls
+    ``window.html2canvas(...)`` for the canonical capture path. ~200 KB.
     """
     return _serve_node_module(
         "html2canvas/dist/html2canvas.min.js", "html2canvas",
@@ -1236,7 +1235,7 @@ async def html2canvas_js():
 
 @app.get("/api/_html_to_image.js")
 async def html_to_image_js():
-    """Serve the html-to-image library into the Panel iframe.
+    """Serve the html-to-image library into the report iframe.
 
     Alternate capture technique that uses SVG foreignObject snapshots
     instead of canvas re-paint. Often handles CSS features

@@ -5,8 +5,8 @@ in default colours on top of a host page with its own palette. The widget
 already solves this for its own shadow DOM: ``frontend/src/theme.css``
 holds the canonical token set, and a plugin's ``theme.css`` overrides
 specific tokens (see ``docs/INTEGRATION.md`` "Branding and theming").
-Reports run *server-side* inside a Bokeh / Panel iframe, so they can't
-read those CSS custom properties at runtime. This tool surfaces them in
+Reports render as *server-side* HTML mounted in an iframe, so they
+can't read those CSS custom properties at runtime. This tool surfaces them in
 a form the LLM can paste straight into matplotlib rcParams, Plotly
 ``layout``, Three.js material configs, or a raw ``<style>`` block.
 
