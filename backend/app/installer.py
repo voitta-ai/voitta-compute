@@ -24,7 +24,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 # (import-name, pip-spec)
 _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
@@ -500,3 +500,74 @@ def install_all(progress_cb: ProgressCb) -> bool:
         progress_cb(i + 1, total, f"Installed {import_name}", None)
 
     return True
+
+
+def pip_install_runtime(specs: list[str]) -> dict[str, Any]:
+    """Install pip specs into the live runtime, ad-hoc, mid-session.
+
+    Reuses install_all's in-process pip + the same writable user-site (the
+    default install scheme this process is configured with) and the same
+    App-Translocation-safe TMPDIR + bundled-wheel find-links. The package is
+    importable in-process immediately — ``importlib.invalidate_caches()`` is
+    called, and the user-site is already on ``sys.path``, so no restart.
+
+    Blocking (pip is sync) — call from a worker thread, not the event loop.
+    Returns a structured envelope; never raises. Backs the ``pip_install``
+    tool. NOTE: only packages with compatible prebuilt wheels (macOS arm64 /
+    CPython 3.12) install reliably — the bundle has no compiler for source
+    builds. Packages land in the userbase, which a version-bump deploy wipes;
+    for permanence add to ``_CORE_HEAVY_PACKAGES`` instead.
+    """
+    specs = [s.strip() for s in specs if isinstance(s, str) and s.strip()]
+    if not specs:
+        return {"ok": False, "error": "no_packages", "message": "no packages given"}
+
+    if not _can_reach_pypi():
+        return {
+            "ok": False, "error": "offline", "specs": specs,
+            "message": "Could not reach pypi.org — pip install needs internet.",
+        }
+
+    from pip._internal.cli.main import main as pip_main
+
+    # Translocation-safe tempdir (see install_all for the why).
+    import tempfile
+    from app.config import USER_DATA_ROOT
+    build_tmp = USER_DATA_ROOT / "build-tmp"
+    build_tmp.mkdir(parents=True, exist_ok=True)
+    os.environ["TMPDIR"] = str(build_tmp)
+    tempfile.tempdir = str(build_tmp)
+
+    args = ["install", "--no-warn-script-location"]
+    try:
+        import voitta_compute
+        _whl = Path(voitta_compute.__file__).resolve().parent / "resources" / "wheels"
+    except Exception:  # noqa: BLE001
+        _whl = Path(__file__).resolve().parent.parent.parent / "wheels"
+    if _whl.is_dir():
+        args += ["--find-links", str(_whl)]
+    args += specs
+
+    out_buf = io.StringIO()
+    err_buf = io.StringIO()
+    try:
+        with (
+            contextlib.redirect_stdout(out_buf),
+            contextlib.redirect_stderr(err_buf),
+        ):
+            rc = pip_main(args)
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else 1
+    except Exception as exc:  # noqa: BLE001
+        tail = _tail_lines(err_buf.getvalue() or out_buf.getvalue() or str(exc), 20)
+        return {
+            "ok": False, "error": "pip_crashed", "specs": specs,
+            "message": f"{type(exc).__name__}: {exc}", "output": tail,
+        }
+
+    importlib.invalidate_caches()
+    output = _tail_lines(out_buf.getvalue() or err_buf.getvalue(), 20)
+    if rc != 0:
+        return {"ok": False, "error": "pip_failed", "specs": specs,
+                "returncode": rc, "output": output}
+    return {"ok": True, "specs": specs, "returncode": rc, "output": output}
