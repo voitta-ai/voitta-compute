@@ -40,6 +40,7 @@ _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("Stemmer",    "PyStemmer>=2.2.0"),
     ("scipy",      "scipy>=1.11"),
     ("pandas",     "pandas"),
+    ("h5py",       "h5py>=3.10"),
     ("matplotlib", "matplotlib>=3.8"),
     ("plotly",     "plotly>=5.20"),
     ("chromadb",   "chromadb>=0.5.20"),  # biggest: pulls onnxruntime + grpc
@@ -102,6 +103,7 @@ PACKAGE_BLURBS: dict[str, str] = {
     "pypdf":       "pypdf: PDF reading…",
     "scipy":       "scipy: numerical computing — FFT, stats, linear algebra…",
     "pandas":      "pandas: data tables and time series…",
+    "h5py":        "h5py: HDF5 (.h5) reading and writing…",
     "matplotlib":  "matplotlib: static and animated plots…",
     "plotly":      "plotly: interactive WebGL charts…",
     "chromadb":    "chromadb: vector database for RAG search (biggest download)…",
