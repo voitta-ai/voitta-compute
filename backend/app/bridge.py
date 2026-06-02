@@ -479,15 +479,15 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
 
   /* hero — white, navy serif headline, illustration as a bordered exhibit */
   .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center;
-          padding: 64px 0 72px; }
+          padding: 44px 0 48px; }
   .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
              color: var(--accent); }
   .eyebrow::before { content: ""; display: inline-block; width: 24px; height: 1px;
              background: var(--accent); vertical-align: middle; margin-right: 12px; }
-  h1 { font-family: var(--serif); font-weight: 600; font-size: 50px; line-height: 1.08;
-       letter-spacing: -0.005em; margin: 22px 0 18px; color: var(--navy); }
+  h1 { font-family: var(--serif); font-weight: 600; font-size: 50px; line-height: 1.06;
+       letter-spacing: -0.005em; margin: 16px 0 14px; color: var(--navy); }
   h1 .accent { font-style: italic; color: var(--accent); }
-  .lede { font-size: 18px; line-height: 1.6; color: var(--muted); margin: 0 0 32px; max-width: 30em; }
+  .lede { font-size: 18px; line-height: 1.55; color: var(--muted); margin: 0 0 26px; max-width: 30em; }
 
   .hero-art { justify-self: center; }
   .hero-art img { display: block; width: 100%; max-width: 420px; height: auto;
@@ -496,10 +496,10 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
 
   /* install cards — white, single hairline border, no colored edges */
   .cards { display: grid; gap: 14px; max-width: 560px; }
-  .card { border: 1px solid var(--line); border-radius: 4px; padding: 20px 22px; background: #fff; }
+  .card { border: 1px solid var(--line); border-radius: 4px; padding: 16px 20px; background: #fff; }
   .card h3 { margin: 0 0 4px; font-size: 16px; font-weight: 700; color: var(--navy); }
   .card .dim { color: var(--faint); font-weight: 400; }
-  .card p { margin: 0 0 16px; font-size: 14px; color: var(--muted); }
+  .card p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
   .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .bm { display: inline-flex; align-items: center; gap: 9px; padding: 11px 18px; background: var(--navy);
         color: #fff; border-radius: 3px; text-decoration: none; font-weight: 600; font-size: 14px;
@@ -517,9 +517,9 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .copy svg { width: 15px; height: 15px; }
 
   /* steps — exhibit columns: navy top rule, serif numeral, hairline rhythm */
-  .steps-section { border-top: 1px solid var(--line); padding: 56px 0 8px; }
+  .steps-section { border-top: 1px solid var(--line); padding: 40px 0 4px; }
   .kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
-            color: var(--accent); margin-bottom: 30px; }
+            color: var(--accent); margin-bottom: 24px; }
   .kicker::before { content: ""; display: inline-block; width: 24px; height: 1px;
             background: var(--accent); vertical-align: middle; margin-right: 12px; }
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 44px; }
@@ -529,7 +529,7 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .step b { color: var(--navy); display: block; font-size: 16px; margin-bottom: 5px; font-weight: 600; }
 
   /* footer — slim navy band closes the page */
-  footer.foot { margin-top: 64px; background: var(--navy); color: #9fb1bc; }
+  footer.foot { margin-top: 44px; background: var(--navy); color: #9fb1bc; }
   footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 24px 32px;
                       font-size: 13px; letter-spacing: 0.02em; }
   footer.foot img { width: 20px; height: 20px; border-radius: 5px; }
