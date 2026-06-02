@@ -3,6 +3,8 @@
 // The guard is server-mode only; on desktop/dev the backend reports
 // { enabled: false } and the app renders as usual without any login step.
 
+import { createContext, useContext } from "react";
+
 export interface AuthState {
   enabled: boolean;
   authenticated: boolean;
@@ -10,6 +12,22 @@ export interface AuthState {
 }
 
 const OPEN: AuthState = { enabled: false, authenticated: false, email: null };
+
+// Identity + logout exposed to the app tree by AuthGate. On desktop/dev
+// enabled=false and email=null, so consumers simply hide the user UI.
+export interface AuthInfo {
+  enabled: boolean;
+  email: string | null;
+  logout: () => Promise<void>;
+}
+
+export const AuthContext = createContext<AuthInfo>({
+  enabled: false,
+  email: null,
+  logout: async () => {},
+});
+
+export const useAuth = () => useContext(AuthContext);
 
 export async function checkAuth(backendOrigin: string): Promise<AuthState> {
   try {
@@ -23,6 +41,20 @@ export async function checkAuth(backendOrigin: string): Promise<AuthState> {
   // If the probe itself fails, fail open to the pre-auth behaviour rather
   // than hard-locking the UI — guarded data endpoints still 401 on their own.
   return OPEN;
+}
+
+// Clear the session cookie (server-side). The next sign-in re-prompts for
+// account selection (build_authorize_url uses prompt=select_account), so this
+// is a clean app logout without nuking the user's global Google session.
+export async function logout(backendOrigin: string): Promise<void> {
+  try {
+    await fetch(`${backendOrigin}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch (err) {
+    console.warn("[voitta] logout failed", err);
+  }
 }
 
 // Open the Google sign-in flow in a popup and resolve once it completes

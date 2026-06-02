@@ -8,6 +8,7 @@ import { useSetRecoilState } from "recoil";
 import { threadIdToResumeState, useChatInteract } from "@chainlit/react-client";
 import { useSettings } from "./lib/useSettings";
 import { saveSettings } from "./lib/settings";
+import { useAuth } from "./lib/auth";
 import ChatPane from "./ChatPane";
 import SettingsView from "./SettingsView";
 import CallFnRouter from "./lib/CallFnRouter";
@@ -37,6 +38,53 @@ const DEFAULT_WIDTH_PX = 420;
 const MIN_WIDTH_PX = 280;
 const MAX_WIDTH_VW = 92;
 
+// Provider chip shows a single letter rather than the full id.
+const PROVIDER_LETTER: Record<string, string> = {
+  anthropic: "A",
+  gemini: "G",
+  openai: "O",
+};
+
+function providerLetter(provider: string | undefined): string {
+  if (!provider) return "—";
+  return PROVIDER_LETTER[provider.toLowerCase()] ?? provider[0].toUpperCase();
+}
+
+// Logged-in email + logout dropdown (server mode only — hidden when no email).
+function UserMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="user-menu">
+      <button
+        className="user-menu-btn"
+        type="button"
+        title={email}
+        aria-label="Account menu"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="user-menu-email">{email}</span>
+        <svg className="user-menu-caret" viewBox="0 0 12 12" width="9" height="9" aria-hidden="true">
+          <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <>
+          <div className="user-menu-backdrop" onClick={() => setOpen(false)} />
+          <div className="user-menu-menu">
+            <button
+              className="user-menu-item"
+              type="button"
+              onClick={() => { setOpen(false); onLogout(); }}
+            >
+              Log out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function clampWidth(px: number): number {
   const max = Math.floor(window.innerWidth * (MAX_WIDTH_VW / 100));
   return Math.max(MIN_WIDTH_PX, Math.min(max, px));
@@ -58,6 +106,7 @@ interface Props {
 
 export default function Drawer({ backendOrigin }: Props) {
   const settings = useSettings();
+  const auth = useAuth();
   const setWorkspaceOpen = useSetRecoilState(workspaceTabOpenState);
   const setActiveTab = useSetRecoilState(activeTabState);
   const setReportCollapsed = useSetRecoilState(reportCollapsedState);
@@ -171,7 +220,7 @@ export default function Drawer({ backendOrigin }: Props) {
     setView((v) => (v === target ? "chat" : target));
   }
 
-  const providerChip = settings.provider || "—";
+  const providerChip = providerLetter(settings.provider);
 
   return (
     <div
@@ -211,9 +260,6 @@ export default function Drawer({ backendOrigin }: Props) {
           onDoubleClick={onResizeDblClick}
         />
         <header>
-          <span className="brand-mark" aria-hidden="true">
-            ●
-          </span>
           <span className="brand-name">Voitta</span>
           <button
             className="provider-chip"
@@ -234,6 +280,7 @@ export default function Drawer({ backendOrigin }: Props) {
             }}
           />
           <span className="spacer" />
+          {auth.email && <UserMenu email={auth.email} onLogout={auth.logout} />}
           {view === "chat" && (
             <>
               <button

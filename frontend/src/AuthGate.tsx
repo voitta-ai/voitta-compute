@@ -4,7 +4,7 @@
 // immediately — no login step.
 
 import { useCallback, useEffect, useState } from "react";
-import { checkAuth, startGoogleLogin, type AuthState } from "./lib/auth";
+import { AuthContext, checkAuth, logout, startGoogleLogin, type AuthState } from "./lib/auth";
 
 interface Props {
   backendOrigin: string;
@@ -33,11 +33,27 @@ export default function AuthGate({ backendOrigin, children }: Props) {
     }
   }, [backendOrigin, refresh]);
 
+  // Logout clears the session then re-probes; refresh() flips state to
+  // unauthenticated, which re-renders this gate back to the login screen.
+  const onLogout = useCallback(async () => {
+    await logout(backendOrigin);
+    await refresh();
+  }, [backendOrigin, refresh]);
+
   // Still probing.
   if (state === null) return null;
 
-  // Guard off (desktop/dev) or already signed in → show the app.
-  if (!state.enabled || state.authenticated) return <>{children}</>;
+  // Guard off (desktop/dev) or already signed in → show the app, exposing
+  // identity + logout to the tree (email is null on desktop).
+  if (!state.enabled || state.authenticated) {
+    return (
+      <AuthContext.Provider
+        value={{ enabled: state.enabled, email: state.email, logout: onLogout }}
+      >
+        {children}
+      </AuthContext.Provider>
+    );
+  }
 
   return (
     <div className="root" data-theme="dark">

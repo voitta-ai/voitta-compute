@@ -9,11 +9,6 @@ header {
   border-bottom: 1px solid var(--voitta-header-rule);
   flex-shrink: 0;
 }
-header .brand-mark {
-  color: var(--voitta-header-icon);
-  font-size: 14px;
-  line-height: 1;
-}
 header .brand-name {
   font-family: var(--voitta-font-display);
   font-weight: 600;
@@ -139,18 +134,86 @@ header .thread-picker-empty {
   padding: 6px 12px;
 }
 
-/* provider chip — current provider name; click to open Settings */
+/* provider chip — single letter (A / G / O); click to open Settings */
 header .provider-chip {
-  font: 600 10px/1 var(--voitta-font-sans);
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
+  font: 600 11px/1 var(--voitta-font-sans);
+  text-transform: uppercase;
   background: var(--voitta-header-btn-bg);
   color: var(--voitta-header-fg);
   border: 1px solid var(--voitta-header-btn-bg-hover);
   border-radius: 999px;
-  padding: 2px 8px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   cursor: pointer;
 }
 header .provider-chip:hover {
   background: var(--voitta-header-btn-bg-hover);
+}
+
+/* user menu — logged-in email + logout dropdown (server mode) */
+header .user-menu {
+  position: relative;
+}
+header .user-menu-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--voitta-header-fg);
+  font: 11px/1 var(--voitta-font-sans);
+  opacity: 0.7;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--voitta-radius-sm);
+  max-width: 180px;
+}
+header .user-menu-btn:hover {
+  opacity: 1;
+  background: var(--voitta-header-btn-bg-hover);
+}
+header .user-menu-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+header .user-menu-caret {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+header .user-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+header .user-menu-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 9999;
+  min-width: 140px;
+  background: var(--voitta-picker-bg, var(--voitta-header-bg));
+  border: 1px solid var(--voitta-picker-rule, var(--voitta-header-rule));
+  border-radius: var(--voitta-radius-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  padding: 4px 0;
+}
+header .user-menu-item {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--voitta-picker-fg, var(--voitta-header-fg));
+  font: 12px/1.4 var(--voitta-font-sans);
+  text-align: left;
+  padding: 6px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+header .user-menu-item:hover {
+  background: var(--voitta-picker-hover, var(--voitta-header-btn-bg-hover));
 }
