@@ -478,8 +478,8 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   header.nav a.ghost:hover { color: var(--navy); }
 
   /* hero — white, navy serif headline, illustration as a bordered exhibit */
-  .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 52px; align-items: center;
-          padding: 32px 0 36px; }
+  .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center;
+          padding: 24px 0 28px; }
   .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
              color: var(--accent); }
   .eyebrow::before { content: ""; display: inline-block; width: 24px; height: 1px;
@@ -517,7 +517,7 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .copy svg { width: 15px; height: 15px; }
 
   /* steps — exhibit columns: navy top rule, serif numeral, hairline rhythm */
-  .steps-section { border-top: 1px solid var(--line); padding: 30px 0 4px; }
+  .steps-section { border-top: 1px solid var(--line); padding: 24px 0 4px; }
   .kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
             color: var(--accent); margin-bottom: 20px; }
   .kicker::before { content: ""; display: inline-block; width: 24px; height: 1px;
@@ -529,8 +529,8 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .step b { color: var(--navy); display: block; font-size: 15px; margin-bottom: 4px; font-weight: 600; }
 
   /* footer — slim navy band closes the page */
-  footer.foot { margin-top: 32px; background: var(--navy); color: #9fb1bc; }
-  footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 24px 32px;
+  footer.foot { margin-top: 24px; background: var(--navy); color: #9fb1bc; }
+  footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 18px 32px;
                       font-size: 13px; letter-spacing: 0.02em; }
   footer.foot img { width: 20px; height: 20px; border-radius: 5px; }
   footer.foot .name { color: #fff; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
