@@ -40,6 +40,9 @@ class ToolCtx:
 
     session_id: str | None = None
     host: str | None = None
+    # Authenticated user email in server mode (None on desktop/dev). Identity
+    # for per-user data isolation; see app.services.current_user.
+    email: str | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 

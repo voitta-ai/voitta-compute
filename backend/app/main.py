@@ -114,8 +114,18 @@ class _AuthGuard:
 
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
         cookie_header = headers.get(b"cookie", b"").decode("latin-1")
-        if _login_auth.email_from_cookie_header(cookie_header):
-            await self._app(scope, receive, send)
+        email = _login_auth.email_from_cookie_header(cookie_header)
+        if email:
+            # Carry the identity into the request so per-user data paths
+            # (uploads serving, workspace routes, threads) resolve under this
+            # user's folder. Same task as the downstream handler, so the
+            # contextvar propagates; reset after to avoid cross-request bleed.
+            from app.services.current_user import set_current_email, reset_current_email
+            token = set_current_email(email)
+            try:
+                await self._app(scope, receive, send)
+            finally:
+                reset_current_email(token)
             return
 
         # Unauthenticated, guarded request.
@@ -1415,12 +1425,26 @@ async def screenshot_stash_put(request: Request) -> dict[str, Any]:
 from app.config import FRONTEND_DIST as _FE_DIST, USER_DATA_ROOT as _USER_DATA_ROOT
 
 # Serve locally-stored element uploads (images, files attached to messages).
-# The directory is created by LocalStorageClient on first use; we also
-# ensure it here so StaticFiles doesn't fail on a fresh install.
-_uploads_dir = _USER_DATA_ROOT / "uploads"
-_uploads_dir.mkdir(parents=True, exist_ok=True)
-from fastapi.staticfiles import StaticFiles as _StaticFiles
-app.mount("/api/uploads", _StaticFiles(directory=str(_uploads_dir)), name="uploads")
+# Per-user in server mode: the directory resolves under the current user's
+# folder (user_data_root()/uploads), so a user can only fetch their own
+# attachments — the request's auth cookie sets the contextvar in _AuthGuard
+# before this handler runs. Desktop/dev resolves to USER_DATA_ROOT/uploads,
+# unchanged. A dynamic route (not a static mount) is required because the
+# directory is per-request, not fixed at startup.
+from fastapi import HTTPException as _HTTPException
+
+
+@app.get("/api/uploads/{key:path}", include_in_schema=False)
+async def serve_upload(key: str) -> FileResponse:
+    from app.services.current_user import user_data_root
+    base = (user_data_root() / "uploads").resolve()
+    target = (base / key).resolve()
+    # Path-traversal guard: target must stay inside this user's uploads dir.
+    if not str(target).startswith(str(base) + "/") and target != base:
+        raise _HTTPException(status_code=404)
+    if not target.is_file():
+        raise _HTTPException(status_code=404)
+    return FileResponse(str(target))
 
 
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}

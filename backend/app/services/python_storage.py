@@ -56,20 +56,24 @@ from typing import Any
 META_VALUE_CAP = 20
 
 
-# Mirror app.config.PROJECT_ROOT so packaged (.app) and dev modes agree
-# on where mutable state lives. See app/config.py for the env-var override.
-from app.config import USER_DATA_ROOT  # noqa: E402
-
 # Snapshot cache lives under ``python_storage/cache/``. The parent
 # ``python_storage/`` is the unified state dir; sibling subdirs
 # (``compute/`` / ``reports/`` / ``flows/`` — see services/scripts.py)
 # hold persisted LLM-authored code. Keeping snapshots in a named
 # subdir means the namespace at the top is meaningful (cache vs
 # durable code) rather than a soup of mixed kinds.
-STORAGE_ROOT = USER_DATA_ROOT / "python_storage" / "cache"
+#
+# These are UserPath proxies: in server mode they resolve under the
+# current user's folder (USER_DATA_ROOT/users/<slug>/…) per request/turn;
+# in desktop/dev (no current user) they resolve to plain USER_DATA_ROOT,
+# unchanged. Every ``STORAGE_ROOT / x`` / ``.mkdir()`` / ``.iterdir()``
+# call site keeps working untouched. See app.services.current_user.
+from app.services.current_user import UserPath, user_data_root  # noqa: E402
+
+STORAGE_ROOT = UserPath(lambda: user_data_root() / "python_storage" / "cache")
 
 # Folder container inside the cache root.
-FOLDERS_ROOT = STORAGE_ROOT / "folders"
+FOLDERS_ROOT = UserPath(lambda: user_data_root() / "python_storage" / "cache" / "folders")
 
 
 def _validate_folder_name(name: str) -> None:
