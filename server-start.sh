@@ -56,6 +56,29 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
+# ---- 1b. NVIDIA GPU acceleration for embeddings ----------------------------
+# chromadb pulls CPU `onnxruntime` transitively, so build.sh/the installer
+# clobber any onnxruntime-gpu. On a CUDA box we (re)install onnxruntime-gpu
+# AFTER build.sh, add the cuDNN9/cuBLAS wheels, and put the wheel-provided
+# CUDA libs on LD_LIBRARY_PATH — otherwise onnxruntime "sees" CUDA but fails
+# to load libcudnn.so.9 and silently falls back to CPU. The exported
+# LD_LIBRARY_PATH carries through to the uvicorn exec so runtime RAG rebuilds
+# also hit the GPU. Skipped entirely when no NVIDIA GPU is present (e.g. mac).
+if command -v nvidia-smi >/dev/null 2>&1; then
+  SITE="$("$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+  if ! "$PY" -c 'import onnxruntime as o,sys; sys.exit(0 if "CUDAExecutionProvider" in o.get_available_providers() else 1)' 2>/dev/null; then
+    echo "[server-start] NVIDIA GPU detected — installing onnxruntime-gpu + cuDNN"
+    "$PY" -m pip uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+    "$PY" -m pip install -q onnxruntime-gpu "nvidia-cudnn-cu12>=9,<10" nvidia-cublas-cu12
+  else
+    echo "[server-start] NVIDIA GPU detected — onnxruntime-gpu already present"
+  fi
+  for d in "$SITE"/nvidia/*/lib; do
+    [ -d "$d" ] && LD_LIBRARY_PATH="$d:${LD_LIBRARY_PATH:-}"
+  done
+  export LD_LIBRARY_PATH
+fi
+
 # ---- 2. RAG indexes (idempotent) ------------------------------------------
 # is_built() lives in app.rag_build; run from backend/ so app.* imports resolve.
 RAG_BUILT="$( (cd backend && "$PY" -c 'from app.rag_build import is_built; print(int(is_built()))') 2>/dev/null || echo 0)"
