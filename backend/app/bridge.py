@@ -46,7 +46,10 @@ app, so the routes exist on both listeners.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import html
+import os
+
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter()
@@ -422,3 +425,64 @@ async def bridge_relay_js() -> Response:
 @router.get("/bridge/boot.js", include_in_schema=False)
 async def bridge_boot_js() -> Response:
     return Response(content=_BOOT_JS, media_type="application/javascript", headers=_JS_HEADERS)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Bookmarklet copy page — the server equivalent of the tray's "Copy
+# bookmarklet" menu items (there's no tray on a headless server). Renders two
+# draggable links built from the public origin. The macOS build still uses the
+# tray; this page is for server deployments.
+# ───────────────────────────────────────────────────────────────────────────
+
+_BOOKMARKLETS_PAGE = """<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voitta bookmarklets</title>
+<style>
+  body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a1a; }}
+  h1 {{ font-size: 22px; }}
+  .bm {{ display: inline-block; margin: 6px 0; padding: 8px 16px; background: #1a1a1a; color: #fff;
+        border-radius: 8px; text-decoration: none; font-weight: 600; cursor: grab; }}
+  .row {{ margin: 22px 0; padding: 16px; border: 1px solid #e2e2e2; border-radius: 10px; }}
+  .hint {{ color: #666; font-size: 13px; margin-top: 6px; }}
+  code {{ background: #f3f3f3; padding: 1px 5px; border-radius: 4px; }}
+</style></head>
+<body>
+  <h1>Voitta bookmarklets</h1>
+  <p>Drag a button to your bookmarks bar. Then open it on any page to launch Voitta.</p>
+  <div class="row">
+    <a class="bm" href="{normal}">Voitta</a>
+    <div class="hint">For ordinary pages. Injects the widget directly.</div>
+  </div>
+  <div class="row">
+    <a class="bm" href="{bridge}">Voitta (Salesforce / strict CSP)</a>
+    <div class="hint">For hardened pages (Salesforce Lightning, etc.) that block the direct widget.
+      Opens a small popup window — keep it open while you use Voitta.</div>
+  </div>
+  <p class="hint">Backend origin: <code>{origin}</code></p>
+</body></html>
+"""
+
+
+def _public_origin(request: Request) -> str:
+    """The origin the bookmarklets point at: VOITTA_PUBLIC_BASE_URL when set
+    (server deployments behind a reverse proxy), else the request's own
+    scheme+host so the page still works when hit directly."""
+    base = (os.getenv("VOITTA_PUBLIC_BASE_URL") or "").rstrip("/")
+    if base:
+        return base
+    return str(request.base_url).rstrip("/")
+
+
+@router.get("/bookmarklets", include_in_schema=False)
+async def bookmarklets_page(request: Request) -> HTMLResponse:
+    from app.bookmarklets import bridge_bookmarklet, normal_bookmarklet
+
+    origin = _public_origin(request)
+    # The href carries the javascript: URL verbatim (browsers require that for a
+    # draggable bookmarklet); only the visible origin text is HTML-escaped.
+    page = _BOOKMARKLETS_PAGE.format(
+        normal=normal_bookmarklet(origin),
+        bridge=bridge_bookmarklet(origin),
+        origin=html.escape(origin),
+    )
+    return HTMLResponse(content=page, headers={"Cache-Control": "no-store"})

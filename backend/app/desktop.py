@@ -196,49 +196,18 @@ def _server_url() -> str:
 
 
 def _bookmarklet_text() -> str:
-    """Return the ``javascript:`` URL the user pastes into a browser
-    bookmark. The minimal bookmarklet just injects a ``<script>`` tag
-    pointing at the backend's widget.js."""
-    url = f"{_server_url()}/widget.js"
-    return (
-        "javascript:(()=>{"
-        f"const u='{url}';"
-        "const s=document.createElement('script');"
-        "if(window.trustedTypes&&window.trustedTypes.createPolicy){"
-        "try{s.src=window.trustedTypes.createPolicy('voitta-inject#'+Math.random(),{createScriptURL:x=>x}).createScriptURL(u);}catch(e){s.src=u;}"
-        "}else{s.src=u;}"
-        "document.head.appendChild(s);"
-        "})();"
-    )
+    """Return the ``javascript:`` URL the user pastes into a browser bookmark.
+    Origin is the tray's local server URL — unchanged from before; the string
+    builder now lives in app.bookmarklets so the server can reuse it."""
+    from app.bookmarklets import normal_bookmarklet
+    return normal_bookmarklet(_server_url())
 
 
 def _bridge_bookmarklet_text() -> str:
-    """Bookmarklet for hardened-CSP pages (e.g. Salesforce Lightning).
-
-    The page's ``script-src``/``connect-src`` block both loading widget.js and
-    reaching localhost, so instead this opens a popup served from the backend's
-    plain-http origin and bootstraps the widget through it via ``postMessage``
-    (neither ``window.open`` nor ``postMessage`` is governed by CSP). See
-    ``app.bridge`` for the relay/shim that the popup and page run.
-    """
-    backend = f"http://{HOST}:{PLAINTEXT_PORT}"
-    return (
-        "javascript:(()=>{"
-        f"const B='{backend}';"
-        # Idempotent: if the bridge is already active and its popup is still
-        # open, just focus it. Re-opening would reload the popup (same window
-        # name), killing the live socket and orphaning the mounted widget.
-        "if(window.__voittaBridge&&window.__voittaBridgePopup&&!window.__voittaBridgePopup.closed){try{window.__voittaBridgePopup.focus();}catch(_){}return;}"
-        "const p=window.open(B+'/bridge','voitta-bridge','width=440,height=680');"
-        "if(!p){alert('Voitta: please allow pop-ups for this site, then click the bookmark again.');return;}"
-        "window.__voittaBackendOrigin=B;window.__voittaBridgePopup=p;window.__voittaBridge=true;"
-        "window.addEventListener('message',function h(e){"
-        "if(e.source!==p||!e.data||e.data.v!=='voitta-bridge')return;"
-        "if(e.data.t==='ready'){p.postMessage({v:'voitta-bridge',t:'hello',origin:location.origin},B);}"
-        "else if(e.data.t==='boot'){window.removeEventListener('message',h);(0,eval)(e.data.code);}"
-        "});"
-        "})();"
-    )
+    """Bookmarklet for hardened-CSP pages (e.g. Salesforce Lightning). Origin is
+    the tray's plain-http loopback sibling — unchanged from before."""
+    from app.bookmarklets import bridge_bookmarklet
+    return bridge_bookmarklet(f"http://{HOST}:{PLAINTEXT_PORT}")
 
 
 def _copy_to_clipboard(text: str) -> bool:
