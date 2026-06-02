@@ -40,7 +40,7 @@ const MIN_WIDTH_PX = 280;
 const MAX_WIDTH_VW = 92;
 // Below this pane width the "Voitta" wordmark yields to the dog mascot so the
 // header's thread picker, account menu, and buttons keep their room.
-const BRAND_COLLAPSE_PX = 380;
+const BRAND_COLLAPSE_PX = 410;
 
 // Provider chip shows a single letter rather than the full id.
 const PROVIDER_LETTER: Record<string, string> = {
