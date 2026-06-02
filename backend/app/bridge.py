@@ -440,44 +440,129 @@ async def bridge_boot_js() -> Response:
 # drag the pill to the bookmarks bar, OR click Copy and paste into a new
 # bookmark's URL field (handy when the bookmarks bar is hidden).
 _BOOKMARKLETS_PAGE = """<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Voitta bookmarklets</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voitta — your AI assistant on every page</title>
+<meta name="description" content="Voitta is an AI assistant you launch on any web page from a bookmark. Drag the bookmarklet to your bar and go.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
-  body { font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a1a; }
-  h1 { font-size: 22px; }
-  .row { margin: 22px 0; padding: 16px; border: 1px solid #e2e2e2; border-radius: 10px; }
-  .actions { display: flex; align-items: center; gap: 8px; }
-  .bm { display: inline-block; padding: 8px 16px; background: #1a1a1a; color: #fff;
-        border-radius: 8px; text-decoration: none; font-weight: 600; cursor: grab; }
-  .copy { display: inline-flex; align-items: center; gap: 5px; padding: 7px 11px; background: #fff;
-          color: #1a1a1a; border: 1px solid #cfcfcf; border-radius: 8px; font: 600 13px system-ui;
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --ink: #0f172a; --muted: #5b6675; --line: #e6ebf3;
+    --accent: #2563eb; --accent-ink: #1d4ed8;
+    --card: #ffffff; --bg1: #f4f8ff; --bg2: #ffffff;
+  }
+  html, body { margin: 0; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    color: var(--ink);
+    background: radial-gradient(1200px 600px at 80% -10%, #e7f0ff 0%, rgba(231,240,255,0) 60%), linear-gradient(180deg, var(--bg1), var(--bg2) 70%);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  header.nav { display: flex; align-items: center; gap: 10px; padding: 22px 0; }
+  header.nav img { width: 28px; height: 28px; border-radius: 7px; }
+  header.nav .name { font-weight: 700; font-size: 18px; letter-spacing: 0.01em; }
+  header.nav .spacer { flex: 1; }
+  header.nav a.ghost { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 600; }
+  header.nav a.ghost:hover { color: var(--ink); }
+
+  .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 40px; align-items: center;
+          padding: 40px 0 24px; }
+  .eyebrow { display: inline-block; font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
+             text-transform: uppercase; color: var(--accent-ink);
+             background: #e8f0ff; border: 1px solid #d6e4ff; padding: 5px 11px; border-radius: 999px; }
+  h1 { font-size: 42px; line-height: 1.1; letter-spacing: -0.02em; margin: 18px 0 12px; }
+  h1 .grad { background: linear-gradient(90deg, #2563eb, #7c3aed); -webkit-background-clip: text;
+             background-clip: text; color: transparent; }
+  .lede { font-size: 18px; color: var(--muted); margin: 0 0 26px; max-width: 30em; }
+  .hero-art { justify-self: center; }
+  .hero-art img { width: 100%; max-width: 440px; height: auto;
+                  filter: drop-shadow(0 30px 50px rgba(37,99,235,0.14)); }
+
+  .cards { display: grid; gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px;
+          box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 12px 28px rgba(15,23,42,0.05); }
+  .card h3 { margin: 0 0 4px; font-size: 16px; }
+  .card p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+  .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bm { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px;
+        background: linear-gradient(180deg, #2563eb, #1d4ed8); color: #fff; border-radius: 10px;
+        text-decoration: none; font-weight: 700; cursor: grab; box-shadow: 0 6px 16px rgba(37,99,235,0.3);
+        user-select: none; }
+  .bm:active { cursor: grabbing; }
+  .bm .grip { opacity: 0.7; }
+  .card.alt .bm { background: linear-gradient(180deg, #475569, #334155); box-shadow: 0 6px 16px rgba(51,65,85,0.28); }
+  .copy { display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; background: #fff;
+          color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: 600 14px inherit;
           cursor: pointer; }
-  .copy:hover { background: #f3f3f3; }
-  .copy svg { width: 14px; height: 14px; }
-  .hint { color: #666; font-size: 13px; margin-top: 10px; }
-  code { background: #f3f3f3; padding: 1px 5px; border-radius: 4px; }
+  .copy:hover { background: #f6f9ff; border-color: #d3deec; }
+  .copy svg { width: 15px; height: 15px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 44px 0 8px; }
+  .step { font-size: 14px; color: var(--muted); }
+  .step .n { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+             border-radius: 999px; background: #e8f0ff; color: var(--accent-ink); font-weight: 700;
+             font-size: 13px; margin-bottom: 8px; }
+  .step b { color: var(--ink); display: block; font-size: 15px; }
+  footer { color: var(--muted); font-size: 13px; padding: 36px 0 48px; border-top: 1px solid var(--line);
+           margin-top: 36px; }
+  code { background: #eef2f9; padding: 2px 7px; border-radius: 6px; font-size: 12.5px; }
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 8px; padding-top: 18px; }
+    .hero-art { order: -1; }
+    .hero-art img { max-width: 320px; }
+    h1 { font-size: 34px; }
+    .steps { grid-template-columns: 1fr; gap: 12px; }
+  }
 </style></head>
 <body>
-  <h1>Voitta bookmarklets</h1>
-  <p>Drag a button to your bookmarks bar — or click <b>Copy</b> and paste it into a new bookmark's URL.
-     Then open the bookmark on any page to launch Voitta.</p>
-  <div class="row">
-    <div class="actions">
-      <a class="bm" href="__NORMAL_HREF__">Voitta</a>
-      <button class="copy" data-bm="normal" type="button"></button>
-    </div>
-    <div class="hint">For ordinary pages. Injects the widget directly.</div>
+  <div class="wrap">
+    <header class="nav">
+      <img src="/favicon.svg" alt="">
+      <span class="name">Voitta</span>
+      <span class="spacer"></span>
+      <a class="ghost" href="https://voitta.ai">voitta.ai</a>
+    </header>
+
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Bookmarklet · works on any site</span>
+        <h1>Your AI assistant, <span class="grad">on every page</span>.</h1>
+        <p class="lede">Voitta rides along in your browser. Drag a bookmark to your bar, click it on
+          any page, and a chat assistant with real compute slides in — no extension, no install.</p>
+        <div class="cards">
+          <div class="card">
+            <h3>Voitta</h3>
+            <p>For ordinary pages. Injects the assistant directly.</p>
+            <div class="actions">
+              <a class="bm" href="__NORMAL_HREF__"><span class="grip">⠿</span>Voitta</a>
+              <button class="copy" data-bm="normal" type="button"></button>
+            </div>
+          </div>
+          <div class="card alt">
+            <h3>Voitta for Salesforce <span style="font-weight:400;color:var(--muted)">· strict CSP</span></h3>
+            <p>For hardened pages (Salesforce Lightning, etc.) that block the direct widget. Opens a small
+              popup — keep it open while you work.</p>
+            <div class="actions">
+              <a class="bm" href="__BRIDGE_HREF__"><span class="grip">⠿</span>Voitta (Salesforce)</a>
+              <button class="copy" data-bm="bridge" type="button"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-art">
+        <img src="/hero.png" alt="Isometric illustration: a web page with the Voitta chat assistant docked alongside it" loading="eager" width="440" height="440">
+      </div>
+    </section>
+
+    <section class="steps">
+      <div class="step"><span class="n">1</span><b>Add the bookmark</b>Drag a button above to your bookmarks bar, or Copy &amp; paste it into a new bookmark's URL.</div>
+      <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
+      <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
+    </section>
+
+    <footer>Signed in via Google · backend <code>__ORIGIN__</code></footer>
   </div>
-  <div class="row">
-    <div class="actions">
-      <a class="bm" href="__BRIDGE_HREF__">Voitta (Salesforce / strict CSP)</a>
-      <button class="copy" data-bm="bridge" type="button"></button>
-    </div>
-    <div class="hint">For hardened pages (Salesforce Lightning, etc.) that block the direct widget.
-      Opens a small popup window — keep it open while you use Voitta.</div>
-  </div>
-  <p class="hint">Backend origin: <code>__ORIGIN__</code></p>
+
   <script>
     var BM = __BM_JSON__;
     var COPY_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"/></svg>';
