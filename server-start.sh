@@ -79,16 +79,38 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   export LD_LIBRARY_PATH
 fi
 
-# ---- 2. RAG indexes (idempotent) ------------------------------------------
-# is_built() lives in app.rag_build; run from backend/ so app.* imports resolve.
-RAG_BUILT="$( (cd backend && "$PY" -c 'from app.rag_build import is_built; print(int(is_built()))') 2>/dev/null || echo 0)"
+# ---- 2. RAG indexes (change-detected — same mechanism as the desktop app) -
+# build_all() is the desktop installer's entry point: it hashes the docs
+# content + checks the lib-sources submodule SHAs against stamp files, skips
+# whichever corpus is unchanged, and (re)writes the stamps. Calling it here
+# (instead of the raw build_rag.py, which never wrote stamps) gives the server
+# the identical "only re-index what changed" behaviour on every start.
+# --rebuild-rag clears the stamps first to force a full rebuild.
+echo "[server-start] RAG: checking docs/source for changes…"
+( cd backend && VC_FORCE_RAG="$REBUILD_RAG" "$PY" - <<'PY'
+import os, sys
+from app import rag_build
 
-if [ "$REBUILD_RAG" = "1" ] || [ "$RAG_BUILT" != "1" ]; then
-  echo "[server-start] building RAG indexes (this can take ~1 min for the code corpus)"
-  "$PY" scripts/build_rag.py
-else
-  echo "[server-start] RAG indexes already built — skipping (use --rebuild-rag to force)"
-fi
+# build_all() redirects sys.stdout/stderr to capture the build script's output
+# and feed it to this callback — so the callback must write to the ORIGINAL
+# stream (sys.__stdout__), or print() would re-enter the capture infinitely.
+_out = sys.__stdout__
+def log(line):
+    _out.write("  " + line + "\n")
+    _out.flush()
+
+if os.environ.get("VC_FORCE_RAG") == "1":
+    for p in (rag_build._docs_stamp_path(), rag_build._deployed_stamp_path()):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+    log("--rebuild-rag: cleared stamps, forcing full rebuild")
+
+ok = rag_build.build_all(log)
+sys.exit(0 if ok else 1)
+PY
+) || { echo "[server-start] RAG build failed" >&2; exit 1; }
 
 # ---- 3. serve (plain HTTP, single process) --------------------------------
 # Mirror start.sh's known-good layout: run from backend/ so chainlit + app.*
