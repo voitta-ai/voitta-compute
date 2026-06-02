@@ -841,18 +841,22 @@ def reset_dirs(cfg: CorpusConfig) -> None:
 
 
 def _make_embedding_fn():
-    """Return a chromadb embedding function that uses CoreML (Apple Neural Engine)
-    when available, falling back to CPU onnxruntime.
+    """Return a chromadb embedding function that uses the best available
+    onnxruntime execution provider: CUDA (NVIDIA GPU) on Linux servers,
+    CoreML (Apple Neural Engine) on Apple Silicon, CPU otherwise.
 
-    CoreML can be 4–8× faster than CPU on Apple Silicon for MiniLM inference.
-    We try to activate it by passing preferred_providers to onnxruntime; if
-    onnxruntime-extensions or the CoreML EP is absent we fall back silently.
+    CUDA requires the ``onnxruntime-gpu`` package + a matching CUDA/cuDNN
+    runtime; CoreML can be 4–8× faster than CPU on Apple Silicon for MiniLM.
+    We activate one by passing preferred_providers to onnxruntime; if the
+    accelerated EP is absent we fall back silently to CPU.
     """
     try:
         import onnxruntime as ort
-        available = [ep for ep in ort.get_available_providers()
-                     if ep in ("CoreMLExecutionProvider", "CPUExecutionProvider")]
-        if "CoreMLExecutionProvider" in available:
+        available = ort.get_available_providers()
+        if "CUDAExecutionProvider" in available:
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            print("  embedder: onnxruntime CUDA (NVIDIA GPU)")
+        elif "CoreMLExecutionProvider" in available:
             providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
             print("  embedder: onnxruntime CoreML (Neural Engine / GPU)")
         else:
