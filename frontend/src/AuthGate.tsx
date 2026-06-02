@@ -41,20 +41,29 @@ export default function AuthGate({ backendOrigin, children }: Props) {
 
   return (
     <div className="root" data-theme="dark">
+      {/* Docked panel mirroring the drawer's geometry — confined to the
+          widget's pane, NOT a full-page overlay. The shadow host is
+          pointer-events:none; this panel re-enables them for itself. */}
       <div
         style={{
           position: "fixed",
-          inset: 0,
+          top: 0,
+          right: 0,
+          height: "100vh",
+          width: "min(420px, 92vw)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "#070a14",
-          color: "#f1f5f9",
+          background: "var(--voitta-bg)",
+          color: "var(--voitta-text)",
+          borderLeft: "1px solid var(--voitta-border)",
+          boxShadow: "var(--voitta-shadow)",
           font: "14px system-ui, sans-serif",
+          pointerEvents: "auto",
           zIndex: 2147483647,
         }}
       >
-        <div style={{ textAlign: "center", maxWidth: 320 }}>
+        <div style={{ textAlign: "center", maxWidth: 280, padding: "0 24px" }}>
           <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Voitta</div>
           <div style={{ opacity: 0.7, marginBottom: 24 }}>
             Sign in with Google to continue.
