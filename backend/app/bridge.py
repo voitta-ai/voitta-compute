@@ -437,6 +437,7 @@ async def bridge_boot_js() -> Response:
 _BOOKMARKLETS_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voitta bookmarklets</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
   body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a1a; }}
   h1 {{ font-size: 22px; }}
