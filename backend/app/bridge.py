@@ -459,7 +459,7 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
     min-height: 100vh;
   }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-  header.nav { display: flex; align-items: center; gap: 10px; padding: 22px 0; }
+  header.nav { display: flex; align-items: center; gap: 10px; padding: 18px 0; }
   header.nav img { width: 28px; height: 28px; border-radius: 7px; }
   header.nav .name { font-weight: 700; font-size: 18px; letter-spacing: 0.01em; }
   header.nav .spacer { flex: 1; }
@@ -467,7 +467,7 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   header.nav a.ghost:hover { color: var(--ink); }
 
   .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 40px; align-items: center;
-          padding: 40px 0 24px; }
+          padding: 24px 0 8px; }
   .eyebrow { display: inline-block; font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
              text-transform: uppercase; color: var(--accent-ink);
              background: #e8f0ff; border: 1px solid #d6e4ff; padding: 5px 11px; border-radius: 999px; }
@@ -497,15 +497,12 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
           cursor: pointer; }
   .copy:hover { background: #f6f9ff; border-color: #d3deec; }
   .copy svg { width: 15px; height: 15px; }
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 44px 0 8px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 28px 0 40px; }
   .step { font-size: 14px; color: var(--muted); }
   .step .n { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
              border-radius: 999px; background: #e8f0ff; color: var(--accent-ink); font-weight: 700;
              font-size: 13px; margin-bottom: 8px; }
   .step b { color: var(--ink); display: block; font-size: 15px; }
-  footer { color: var(--muted); font-size: 13px; padding: 36px 0 48px; border-top: 1px solid var(--line);
-           margin-top: 36px; }
-  code { background: #eef2f9; padding: 2px 7px; border-radius: 6px; font-size: 12.5px; }
   @media (max-width: 860px) {
     .hero { grid-template-columns: 1fr; gap: 8px; padding-top: 18px; }
     .hero-art { order: -1; }
@@ -559,8 +556,6 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
       <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
       <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
     </section>
-
-    <footer>Signed in via Google · backend <code>__ORIGIN__</code></footer>
   </div>
 
   <script>
