@@ -133,7 +133,7 @@ def save(patch: dict[str, Any]) -> UserSettings:
     keeps the anthropic key. Pass an explicit ``""`` to clear a single
     entry.
     """
-    current = user_settings.read() if user_settings.SETTINGS_PATH.exists() else {}
+    current = user_settings.read()
 
     if isinstance(patch.get("provider"), str):
         current["provider"] = patch["provider"]
@@ -177,7 +177,7 @@ def save_dotted(patches: dict[str, Any]) -> dict[str, Any]:
     save() handles api_keys). ``None`` values also delete. Other values
     are written verbatim.
     """
-    current = user_settings.read() if user_settings.SETTINGS_PATH.exists() else {}
+    current = user_settings.read()
     for path, value in patches.items():
         if not isinstance(path, str) or not path:
             continue

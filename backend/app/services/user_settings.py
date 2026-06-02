@@ -32,8 +32,26 @@ from typing import Any
 # rather than clobbering / inheriting the legacy bookmarklet's blob.
 from app.config import USER_CONFIG_DIR, USER_SETTINGS_PATH
 
-SETTINGS_DIR = USER_CONFIG_DIR
-SETTINGS_PATH = USER_SETTINGS_PATH
+
+def _settings_dir() -> Path:
+    """Directory holding the active settings.json.
+
+    Server mode (a user is authenticated — the current-user contextvar is
+    set by the HTTP guard / chat handlers): the user's own data folder, so
+    API keys, provider, models, plugin config and Drive/Sheets OAuth are all
+    per-user. Desktop / dev (no current user): the shared XDG config dir,
+    unchanged. Resolved per call so it tracks the contextvar.
+    """
+    from app.services.current_user import get_current_email, data_root_for_email
+
+    email = get_current_email()
+    if email:
+        return data_root_for_email(email)
+    return USER_CONFIG_DIR
+
+
+def _settings_path() -> Path:
+    return _settings_dir() / "settings.json"
 
 
 def mcp_debug_enabled() -> bool:
@@ -69,15 +87,16 @@ def read() -> dict[str, Any]:
     *corrupt* file (invalid JSON or non-object root) raises so the
     caller knows manual intervention is needed.
     """
-    if not SETTINGS_PATH.exists():
+    path = _settings_path()
+    if not path.exists():
         return {}
-    raw = SETTINGS_PATH.read_text(encoding="utf-8")
+    raw = path.read_text(encoding="utf-8")
     if not raw.strip():
         return {}
     data = json.loads(raw)
     if not isinstance(data, dict):
         raise ValueError(
-            f"settings file at {SETTINGS_PATH} is not a JSON object"
+            f"settings file at {path} is not a JSON object"
         )
     return data
 
@@ -92,21 +111,23 @@ def write(blob: dict[str, Any]) -> None:
     """
     if not isinstance(blob, dict):
         raise TypeError("settings must be a dict")
-    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+    settings_dir = _settings_dir()
+    settings_path = settings_dir / "settings.json"
+    settings_dir.mkdir(parents=True, exist_ok=True)
     # Lock down the dir too — same user-only intent.
     try:
-        os.chmod(SETTINGS_DIR, 0o700)
+        os.chmod(settings_dir, 0o700)
     except OSError:
         pass
 
     fd, tmp_path = tempfile.mkstemp(
-        prefix=".settings.", suffix=".json.tmp", dir=str(SETTINGS_DIR)
+        prefix=".settings.", suffix=".json.tmp", dir=str(settings_dir)
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(blob, fh, ensure_ascii=False, indent=2)
         os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, SETTINGS_PATH)
+        os.replace(tmp_path, settings_path)
     except Exception:
         try:
             os.unlink(tmp_path)

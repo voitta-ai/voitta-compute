@@ -80,14 +80,20 @@ class _PendingState:
 _pending: dict[str, _PendingState] = {}
 _PENDING_TTL_S = 10 * 60
 
-# In-memory token cache — avoids blocking file I/O on the event loop
-# every time get_access_token() is called from a coroutine.
-_token_cache: dict | None = None
+# In-memory token cache — avoids blocking file I/O on the event loop every
+# time get_access_token() is called from a coroutine. Keyed by the active
+# settings file path so each user's Drive/Sheets tokens are cached separately
+# (in server mode settings.json is per-user). Desktop has a single key.
+_token_cache: dict[str, dict | None] = {}
+
+
+def _cache_key() -> str:
+    from app.services import user_settings
+    return str(user_settings._settings_path())
 
 
 def _invalidate_token_cache() -> None:
-    global _token_cache
-    _token_cache = None
+    _token_cache.pop(_cache_key(), None)
 
 
 def _gc_pending() -> None:
@@ -162,20 +168,20 @@ async def set_client_credentials(client_id: str, client_secret: str) -> None:
 
 
 def _get_tokens() -> dict | None:
-    global _token_cache
-    if _token_cache is not None:
-        return _token_cache
+    key = _cache_key()
+    cached = _token_cache.get(key)
+    if cached is not None:
+        return cached
     oauth = _settings().get("googleOAuth") or {}
     tok = oauth.get("tokens")
     if not isinstance(tok, dict):
         return None
-    _token_cache = tok
+    _token_cache[key] = tok
     return tok
 
 
 def _set_tokens(tokens: dict) -> None:
-    global _token_cache
-    _token_cache = tokens
+    _token_cache[_cache_key()] = tokens
     s = _settings()
     oauth = s.get("googleOAuth") or {}
     oauth["tokens"] = tokens
@@ -184,8 +190,7 @@ def _set_tokens(tokens: dict) -> None:
 
 
 def _clear_tokens() -> None:
-    global _token_cache
-    _token_cache = None
+    _token_cache.pop(_cache_key(), None)
     s = _settings()
     oauth = s.get("googleOAuth") or {}
     oauth.pop("tokens", None)

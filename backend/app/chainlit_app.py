@@ -191,6 +191,24 @@ def data_layer():
 load_all()
 
 
+def _apply_current_user() -> str | None:
+    """Set the current-user contextvar from Chainlit's authenticated session
+    user (server mode) so per-user paths AND per-user settings.json resolve
+    correctly for this handler. Returns the email (None on desktop/dev).
+
+    Called at the top of every chat entry point — on_chat_start / _resume read
+    settings before on_message runs, so setting it only in on_message would
+    make those earlier reads hit the shared settings file in server mode."""
+    from app.services.current_user import set_current_email
+    try:
+        user = cl.user_session.get("user")
+        email = getattr(user, "identifier", None) if user else None
+    except Exception:
+        email = None
+    set_current_email(email)
+    return email
+
+
 @cl.on_chat_start
 async def on_chat_start() -> None:
     """Initialise per-session state.
@@ -206,6 +224,7 @@ async def on_chat_start() -> None:
         sid = "?"
     logger.info("on_chat_start: sid=%s", sid)
 
+    _apply_current_user()
     user_settings = load_user_settings()
     provider = user_settings.get("provider", "anthropic")
     api_keys = user_settings.get("api_keys") or {}
@@ -265,6 +284,7 @@ async def on_chat_resume(thread: ThreadDict) -> None:
     reconstruct the in-memory LLM message list so the agent has the
     conversation context for the next user turn.
     """
+    _apply_current_user()
     user_settings = load_user_settings()
     provider = user_settings.get("provider", "anthropic")
     api_keys = user_settings.get("api_keys") or {}
@@ -322,6 +342,21 @@ async def on_window_message(message: str) -> None:
 @cl.on_message
 async def on_message(user_msg: cl.Message) -> None:
     """One user turn → agent loop → streamed Chainlit primitives."""
+    # Set the current-user contextvar FIRST: the per-turn settings read below
+    # (provider/api_key) and all file paths must resolve under this user in
+    # server mode. asyncio.to_thread copies the context into the compute
+    # sandbox, so tool file writes land in the right folder too. Reset in
+    # finally to avoid bleed across turns sharing this task's context.
+    from app.services.current_user import set_current_email
+    email = _apply_current_user()
+
+    try:
+        await _run_message_turn(user_msg, email)
+    finally:
+        set_current_email(None)
+
+
+async def _run_message_turn(user_msg: cl.Message, email: str | None) -> None:
     messages: list[LlmMessage] = cl.user_session.get("messages", [])
     snapshot = len(messages)
 
@@ -377,20 +412,8 @@ async def on_message(user_msg: cl.Message) -> None:
     except Exception:
         session_id = None
 
-    # Authenticated email from Chainlit's native auth (server mode; the user
-    # is a PersistedUser whose identifier is the email). None on desktop/dev.
-    # Set it on the contextvar for the whole turn so per-user file paths
-    # (python_storage, scripts, uploads) resolve under this user's folder —
-    # including inside the compute sandbox, since asyncio.to_thread copies the
-    # context into the worker thread.
-    from app.services.current_user import set_current_email, reset_current_email
-    try:
-        _user = cl.user_session.get("user")
-        email = getattr(_user, "identifier", None) if _user else None
-    except Exception:
-        email = None
-    _email_token = set_current_email(email)
-
+    # email is the authenticated user (server mode) or None (desktop/dev);
+    # the contextvar was already set by the on_message wrapper.
     ctx = ToolCtx(session_id=session_id, host=host, email=email)
 
     try:
@@ -408,8 +431,6 @@ async def on_message(user_msg: cl.Message) -> None:
         del messages[snapshot:]
         cl.user_session.set("messages", messages)
         await cl.Message(content=f"⚠️ {type(exc).__name__}: {exc}").send()
-    finally:
-        reset_current_email(_email_token)
 
 
 # ----- helpers ------------------------------------------------------------
