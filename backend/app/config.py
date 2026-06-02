@@ -33,9 +33,18 @@ PLAINTEXT_PORT = 12359
 _env_root = os.environ.get("VOITTA_PROJECT_ROOT")
 PROJECT_ROOT = Path(_env_root) if _env_root else Path(__file__).resolve().parents[1]
 
-# Mutable user data (scripts, python_storage) always lives in Application
-# Support — never inside the source tree or the read-only .app bundle.
-USER_DATA_ROOT = Path.home() / "Library" / "Application Support" / "Voitta Compute" / "backend"
+# Mutable user data (scripts, python_storage, uploads, conversations DB).
+# Resolved like PROJECT_ROOT: VOITTA_DATA_ROOT wins if set (Linux/server
+# deployments point it at e.g. /var/lib/voitta), otherwise it defaults to
+# the macOS Application Support dir. Never inside the source tree or the
+# read-only .app bundle. The macOS launcher sets VOITTA_DATA_ROOT explicitly
+# (see src/voitta_compute/__main__.py) so the default is just a dev fallback.
+_env_data = os.environ.get("VOITTA_DATA_ROOT")
+USER_DATA_ROOT = (
+    Path(_env_data)
+    if _env_data
+    else Path.home() / "Library" / "Application Support" / "Voitta Compute" / "backend"
+)
 TLS_CERT_PATH = PROJECT_ROOT / "certs" / "127.0.0.1+1.pem"
 TLS_KEY_PATH = PROJECT_ROOT / "certs" / "127.0.0.1+1-key.pem"
 

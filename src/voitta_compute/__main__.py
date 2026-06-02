@@ -185,6 +185,11 @@ def main() -> int:
     #   DOCS_DIR         = <user>/docs
     os.environ["VOITTA_PROJECT_ROOT"] = str(user / "backend")
 
+    # USER_DATA_ROOT resolves from VOITTA_DATA_ROOT (see app.config). In the
+    # bundle it's the same <user>/backend dir as PROJECT_ROOT; set it
+    # explicitly so the config default (a bare macOS path) is never relied on.
+    os.environ["VOITTA_DATA_ROOT"] = str(user / "backend")
+
     # Route pip installs to userbase/ — prefix layout so pip's resolver
     # sees already-bundled packages and skips them (saves ~300 MB vs --target).
     py_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
