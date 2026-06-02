@@ -444,83 +444,113 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
 <title>Voitta — your AI assistant on every page</title>
 <meta name="description" content="Voitta is an AI assistant you launch on any web page from a bookmark. Drag the bookmarklet to your bar and go.">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
 <style>
+  /* Design language sampled from McKinsey Quarterly: deep navy + electric
+     cyan, a high-contrast Didone display serif (Playfair stands in for Bower)
+     over navy, a clean grotesque for body, hairline rules and generous space. */
   *, *::before, *::after { box-sizing: border-box; }
   :root {
-    --ink: #0f172a; --muted: #5b6675; --line: #e6ebf3;
-    --accent: #2563eb; --accent-ink: #1d4ed8;
-    --card: #ffffff; --bg1: #f4f8ff; --bg2: #ffffff;
+    --navy: #051C2C; --navy2: #08283f; --ink: #0a1f2c; --muted: #5a6b78;
+    --cyan: #00a9f4; --cyan-soft: #6dd0f7; --royal: #1b3d86;
+    --line: #e4e9ef; --card: #ffffff;
+    --serif: "Playfair Display", Georgia, "Times New Roman", serif;
+    --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
   html, body { margin: 0; }
-  body {
-    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    color: var(--ink);
-    background: radial-gradient(1200px 600px at 80% -10%, #e7f0ff 0%, rgba(231,240,255,0) 60%), linear-gradient(180deg, var(--bg1), var(--bg2) 70%);
-    min-height: 100vh;
-  }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-  header.nav { display: flex; align-items: center; gap: 10px; padding: 18px 0; }
-  header.nav img { width: 28px; height: 28px; border-radius: 7px; }
-  header.nav .name { font-weight: 700; font-size: 18px; letter-spacing: 0.01em; }
+  body { font: 16px/1.65 var(--sans); color: var(--ink); background: #fff; min-height: 100vh;
+         overflow-x: hidden; }
+  h1, .lede { overflow-wrap: break-word; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+
+  /* nav — white, navy ink, cyan tick, hairline underline */
+  header.nav { border-bottom: 1px solid var(--line); }
+  header.nav .wrap { display: flex; align-items: center; gap: 11px; padding: 20px 32px; }
+  header.nav img { width: 26px; height: 26px; border-radius: 6px; }
+  header.nav .name { font-weight: 700; font-size: 18px; letter-spacing: 0.04em; color: var(--navy);
+                     text-transform: uppercase; }
+  header.nav .tick { width: 22px; height: 2px; background: var(--cyan); }
   header.nav .spacer { flex: 1; }
-  header.nav a.ghost { color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 600; }
-  header.nav a.ghost:hover { color: var(--ink); }
+  header.nav a.ghost { color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
+                       letter-spacing: 0.04em; text-transform: uppercase; }
+  header.nav a.ghost:hover { color: var(--navy); }
 
-  .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 40px; align-items: center;
-          padding: 24px 0 8px; }
-  .eyebrow { display: inline-block; font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
-             text-transform: uppercase; color: var(--accent-ink);
-             background: #e8f0ff; border: 1px solid #d6e4ff; padding: 5px 11px; border-radius: 999px; }
-  h1 { font-size: 42px; line-height: 1.1; letter-spacing: -0.02em; margin: 18px 0 12px; }
-  h1 .grad { background: linear-gradient(90deg, #2563eb, #7c3aed); -webkit-background-clip: text;
-             background-clip: text; color: transparent; }
-  .lede { font-size: 18px; color: var(--muted); margin: 0 0 26px; max-width: 30em; }
+  /* hero — full-bleed navy band, white serif headline, framed exhibit art */
+  .hero-band { background:
+      radial-gradient(900px 500px at 88% -8%, rgba(0,169,244,0.22), rgba(0,169,244,0) 60%),
+      linear-gradient(160deg, var(--navy) 0%, var(--navy2) 70%, #0c3350 100%);
+    color: #eaf1f6; }
+  .hero { display: grid; grid-template-columns: 1.04fr 0.96fr; gap: 52px; align-items: center;
+          padding: 64px 0 70px; }
+  .eyebrow { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: 0.18em;
+             text-transform: uppercase; color: var(--cyan-soft); }
+  .eyebrow::before { content: ""; display: inline-block; width: 26px; height: 1px;
+             background: var(--cyan); vertical-align: middle; margin-right: 10px; }
+  h1 { font-family: var(--serif); font-weight: 600; font-size: 54px; line-height: 1.06;
+       letter-spacing: -0.01em; margin: 20px 0 16px; color: #fff; }
+  h1 .grad { font-style: italic; color: var(--cyan-soft); }
+  .lede { font-size: 18px; line-height: 1.6; color: #b9cbd6; margin: 0 0 30px; max-width: 31em; }
+
   .hero-art { justify-self: center; }
-  .hero-art img { width: 100%; max-width: 440px; height: auto;
-                  filter: drop-shadow(0 30px 50px rgba(37,99,235,0.14)); }
+  .hero-art .frame { background: #fff; border-radius: 4px; padding: 14px;
+                     box-shadow: 0 40px 80px rgba(0,0,0,0.35); }
+  .hero-art img { display: block; width: 100%; max-width: 410px; height: auto; border-radius: 2px; }
 
-  .cards { display: grid; gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 18px;
-          box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 12px 28px rgba(15,23,42,0.05); }
-  .card h3 { margin: 0 0 4px; font-size: 16px; }
-  .card p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+  .cards { display: grid; gap: 14px; }
+  .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
+          border-left: 2px solid var(--cyan); border-radius: 3px; padding: 16px 18px; }
+  .card.alt { border-left-color: var(--royal); }
+  .card h3 { margin: 0 0 3px; font-size: 15px; font-weight: 600; color: #fff; letter-spacing: 0.01em; }
+  .card p { margin: 0 0 13px; font-size: 13.5px; color: #9fb4c2; }
+  .card .dim { color: #7c93a3; font-weight: 400; }
   .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .bm { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px;
-        background: linear-gradient(180deg, #2563eb, #1d4ed8); color: #fff; border-radius: 10px;
-        text-decoration: none; font-weight: 700; cursor: grab; box-shadow: 0 6px 16px rgba(37,99,235,0.3);
-        user-select: none; }
+  .bm { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px;
+        background: var(--cyan); color: var(--navy); border-radius: 3px; text-decoration: none;
+        font-weight: 700; font-size: 14px; letter-spacing: 0.02em; cursor: grab; user-select: none; }
+  .bm:hover { background: var(--cyan-soft); }
   .bm:active { cursor: grabbing; }
-  .bm .grip { opacity: 0.7; }
-  .card.alt .bm { background: linear-gradient(180deg, #475569, #334155); box-shadow: 0 6px 16px rgba(51,65,85,0.28); }
-  .copy { display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; background: #fff;
-          color: var(--ink); border: 1px solid var(--line); border-radius: 10px; font: 600 14px inherit;
-          cursor: pointer; }
-  .copy:hover { background: #f6f9ff; border-color: #d3deec; }
+  .bm .grip { opacity: 0.55; }
+  .card.alt .bm { background: #cdd9ec; color: var(--royal); }
+  .card.alt .bm:hover { background: #e2e9f5; }
+  .copy { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; background: transparent;
+          color: #cfe0ea; border: 1px solid rgba(255,255,255,0.25); border-radius: 3px;
+          font: 600 13px var(--sans); cursor: pointer; }
+  .copy:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.45); color: #fff; }
   .copy svg { width: 15px; height: 15px; }
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 28px 0 40px; }
+
+  /* steps — white, navy serif numerals, hairline divider above */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; padding: 48px 0 56px; }
   .step { font-size: 14px; color: var(--muted); }
-  .step .n { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
-             border-radius: 999px; background: #e8f0ff; color: var(--accent-ink); font-weight: 700;
-             font-size: 13px; margin-bottom: 8px; }
-  .step b { color: var(--ink); display: block; font-size: 15px; }
+  .step .n { font-family: var(--serif); font-size: 30px; font-weight: 600; color: var(--cyan);
+             line-height: 1; display: block; margin-bottom: 12px; }
+  .step b { color: var(--navy); display: block; font-size: 16px; margin-bottom: 4px; font-weight: 600; }
+
   @media (max-width: 860px) {
-    .hero { grid-template-columns: 1fr; gap: 8px; padding-top: 18px; }
+    .wrap { padding: 0 22px; }
+    header.nav .wrap { padding: 16px 22px; }
+    .hero { grid-template-columns: 1fr; gap: 26px; padding: 40px 0 46px; }
     .hero-art { order: -1; }
-    .hero-art img { max-width: 320px; }
-    h1 { font-size: 34px; }
-    .steps { grid-template-columns: 1fr; gap: 12px; }
+    .hero-art img { max-width: 300px; }
+    h1 { font-size: 32px; }
+    .lede { font-size: 16px; }
+    .steps { grid-template-columns: 1fr; gap: 26px; padding: 36px 0 44px; }
   }
 </style></head>
 <body>
-  <div class="wrap">
-    <header class="nav">
+  <header class="nav">
+    <div class="wrap">
       <img src="/favicon.svg" alt="">
       <span class="name">Voitta</span>
+      <span class="tick"></span>
       <span class="spacer"></span>
       <a class="ghost" href="https://voitta.ai">voitta.ai</a>
-    </header>
+    </div>
+  </header>
 
-    <section class="hero">
+  <section class="hero-band">
+    <div class="wrap hero">
       <div>
         <span class="eyebrow">Bookmarklet · works on any site</span>
         <h1>Your AI assistant, <span class="grad">on every page</span>.</h1>
@@ -536,7 +566,7 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
             </div>
           </div>
           <div class="card alt">
-            <h3>Voitta for Salesforce <span style="font-weight:400;color:var(--muted)">· strict CSP</span></h3>
+            <h3>Voitta for Salesforce <span class="dim">· strict CSP</span></h3>
             <p>For hardened pages (Salesforce Lightning, etc.) that block the direct widget. Opens a small
               popup — keep it open while you work.</p>
             <div class="actions">
@@ -547,16 +577,18 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
         </div>
       </div>
       <div class="hero-art">
-        <img src="/hero.png" alt="Isometric illustration: a web page with the Voitta chat assistant docked alongside it" loading="eager" width="440" height="440">
+        <div class="frame">
+          <img src="/hero.png" alt="Isometric illustration: a web page with the Voitta chat assistant docked alongside it" loading="eager" width="410" height="410">
+        </div>
       </div>
-    </section>
+    </div>
+  </section>
 
-    <section class="steps">
-      <div class="step"><span class="n">1</span><b>Add the bookmark</b>Drag a button above to your bookmarks bar, or Copy &amp; paste it into a new bookmark's URL.</div>
-      <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
-      <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
-    </section>
-  </div>
+  <section class="wrap steps">
+    <div class="step"><span class="n">1</span><b>Add the bookmark</b>Drag a button above to your bookmarks bar, or Copy &amp; paste it into a new bookmark's URL.</div>
+    <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
+    <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
+  </section>
 
   <script>
     var BM = __BM_JSON__;
