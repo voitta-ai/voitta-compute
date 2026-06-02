@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 _LOCAL_USER_ID = "00000000-0000-0000-0000-000000000001"
 _LOCAL_USER_IDENTIFIER = "local"
 
+
+def _auth_enabled() -> bool:
+    """True in server mode (Chainlit native auth on). When True, Chainlit
+    supplies the real authenticated user id on every thread read/write, so
+    the local-user fallbacks below must NOT fire (they would defeat per-user
+    isolation by collapsing everyone onto the single 'local' user)."""
+    from chainlit.auth import require_login
+
+    return require_login()
+
 _SCHEMA_STMTS = [
     """
     CREATE TABLE IF NOT EXISTS users (
@@ -172,9 +182,12 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
         metadata: Optional[Dict] = None,
         tags: Optional[List[str]] = None,
     ) -> None:
-        """Upsert thread, always linking to the local user when no user given."""
+        """Upsert thread. In no-auth (desktop) mode, link to the hardcoded
+        local user when none is given. In server mode Chainlit passes the
+        authenticated user's id, so we leave it untouched for native
+        per-user ownership."""
         await self.ensure_schema()
-        if user_id is None:
+        if user_id is None and not _auth_enabled():
             user_id = self._local_user_id
         await super().update_thread(
             thread_id=thread_id,
@@ -192,8 +205,10 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
         thread_id: Optional[str] = None,
     ) -> Optional[List[Dict[str, Any]]]:
         await self.ensure_schema()
-        # Default to the local user when no user_id / thread_id is specified.
-        if user_id is None and thread_id is None:
+        # No-auth (desktop): default to the local user when nothing specified.
+        # Server mode: Chainlit passes the authenticated user's id, so a None
+        # here means "all" only in desktop — leave it for Chainlit otherwise.
+        if user_id is None and thread_id is None and not _auth_enabled():
             user_id = self._local_user_id
         threads = await super().get_all_user_threads(
             user_id=user_id, thread_id=thread_id
@@ -214,8 +229,10 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
         pagination: Pagination,
         filters: ThreadFilter,
     ) -> PaginatedResponse:
-        """List threads — always scoped to the local user."""
+        """List threads. No-auth (desktop): scope to the local user. Server
+        mode: Chainlit's native route already sets filters.userId to the
+        authenticated user, so we don't override it."""
         await self.ensure_schema()
-        if not filters.userId:
+        if not filters.userId and not _auth_enabled():
             filters.userId = self._local_user_id
         return await super().list_threads(pagination, filters)

@@ -6,6 +6,11 @@ import contextlib
 import logging
 from pathlib import Path
 
+# Import app.config BEFORE any chainlit import: in server mode it sets the
+# CHAINLIT_CUSTOM_AUTH / CHAINLIT_AUTH_SECRET / CHAINLIT_COOKIE_SAMESITE env
+# vars that chainlit.auth reads at its own import time. (Loads .env too.)
+import app.config as app_config  # side effects (auth env) MUST precede chainlit
+
 from chainlit.utils import mount_chainlit
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -248,14 +253,16 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-# ── /chainlit/project/threads override ───────────────────────────────────
+# ── /chainlit/project/threads override (DESKTOP / no-auth only) ───────────
 # Chainlit's built-in handler requires an authenticated user (401 otherwise).
-# The widget runs cross-site (bookmarklet on third-party pages) so JWT cookies
-# are blocked by SameSite=Lax and we have no authenticated current_user.
-# This route is registered BEFORE mount_chainlit so it shadows the upstream
-# handler and serves thread history without auth.
+# In desktop/dev there is no login, so we shadow it to serve the local user's
+# thread history without auth.
+#
+# In SERVER MODE this override is NOT registered — Chainlit's native handler
+# runs instead and filters threads by the authenticated user's id (and
+# enforces is_thread_author on per-thread/resume reads). That is the native,
+# per-user isolation we want; replicating it here would just risk drift.
 
-@app.post("/chainlit/project/threads")
 async def project_threads(request: Request) -> dict:
     from chainlit.data import get_data_layer
     from chainlit.types import Pagination, ThreadFilter
@@ -285,6 +292,10 @@ async def project_threads(request: Request) -> dict:
         return result.dict() if hasattr(result, "dict") else {"data": result.data, "pageInfo": result.pageInfo}
     except Exception:
         return {"data": [], "pageInfo": {"hasNextPage": False, "startCursor": None, "endCursor": None}}
+
+
+if not app_config.SERVER_MODE:
+    app.add_api_route("/chainlit/project/threads", project_threads, methods=["POST"])
 
 
 # Mount Chainlit at /chainlit. Its socket.io lives at

@@ -94,18 +94,6 @@ def patch_sio_connect():
         if session and thread_id and thread_id != session.thread_id_to_resume:
             session.thread_id_to_resume = thread_id
             session.thread_id = thread_id
-        # Capture the authenticated email from the handshake cookie (server
-        # mode). Stashed on the session so per-user data routing works for
-        # this connection's threads, steps, uploads, and tool file writes.
-        # In desktop/dev the guard is off and this is None — no isolation.
-        if session is not None:
-            try:
-                from app.services import login_auth
-                session.voitta_email = login_auth.email_from_cookie_header(
-                    (environ or {}).get("HTTP_COOKIE")
-                )
-            except Exception:
-                session.voitta_email = None
         return result
 
     cl_socket.sio.handlers["/"]["connect"] = _patched_connect
@@ -173,52 +161,29 @@ def patch_sio_connect():
 
 # ── Persistence ────────────────────────────────────────────────────────────
 
-# Per-user data layers, keyed by the resolved user data root. Each user gets
-# their own conversations.sqlite + uploads/ under their folder, so threads,
-# steps, and attachments are isolated. Desktop/dev (no current user) resolves
-# to the plain USER_DATA_ROOT, identical to the previous single-layer setup.
-_data_layers: dict[str, Any] = {}
-
-
-def _layer_for_root(root) -> Any:
-    from app.data.local_storage import LocalStorageClient
-    from app.data.sqlite_layer import SQLiteDataLayer
-
-    key = str(root)
-    layer = _data_layers.get(key)
-    if layer is None:
-        upload_dir = root / "uploads"
-        db_path = str(root / "conversations.sqlite")
-        storage = LocalStorageClient(upload_dir=upload_dir)
-        layer = SQLiteDataLayer(db_path=db_path, storage_provider=storage)
-        _data_layers[key] = layer
-    return layer
-
-
-class _RoutingDataLayer:
-    """Chainlit data layer that delegates to a per-user backend chosen at call
-    time from the current-user contextvar. Chainlit calls the factory once and
-    caches this single object; every method access routes to the right user's
-    SQLite + uploads via :func:`app.services.current_user.user_data_root`."""
-
-    def __getattr__(self, name: str):
-        from app.services.current_user import data_root_for_email, get_current_email
-        # Prefer the request/turn contextvar; fall back to the email captured
-        # on the socket session at connect, so data-layer calls made outside a
-        # turn (resume, background persistence) still route to the right user.
-        email = get_current_email()
-        if not email:
-            try:
-                email = getattr(cl.context.session, "voitta_email", None)
-            except Exception:
-                email = None
-        return getattr(_layer_for_root(data_root_for_email(email)), name)
-
-
 @cl.data_layer
 def data_layer():
-    """Return the routing data layer (created once, reused)."""
-    return _RoutingDataLayer()
+    """SQLite-backed data layer (created once, reused).
+
+    ONE shared conversations DB. In server mode Chainlit enforces per-user
+    isolation natively: authenticate_user creates a users row per email,
+    threads are stamped with the authenticated user's id, and list/get/resume
+    are filtered + ownership-checked by Chainlit. In desktop/dev (no auth) the
+    SQLiteDataLayer falls back to a single hardcoded local user.
+
+    Uploaded file bytes ARE per-user: upload_dir is a UserPath that resolves
+    under the current user's folder (Chainlit doesn't manage that storage), so
+    attachments never mix on disk.
+    """
+    from app.config import USER_DATA_ROOT
+    from app.data.local_storage import LocalStorageClient
+    from app.data.sqlite_layer import SQLiteDataLayer
+    from app.services.current_user import UserPath, user_data_root
+
+    upload_dir = UserPath(lambda: user_data_root() / "uploads")
+    db_path = str(USER_DATA_ROOT / "conversations.sqlite")
+    storage = LocalStorageClient(upload_dir=upload_dir)
+    return SQLiteDataLayer(db_path=db_path, storage_provider=storage)
 
 # Plugins are loaded AFTER core tools so plugin-contributed ToolSpecs
 # can rely on the registry being initialised. Re-import (uvicorn
@@ -412,14 +377,16 @@ async def on_message(user_msg: cl.Message) -> None:
     except Exception:
         session_id = None
 
-    # Authenticated email captured at socket connect (server mode; None on
-    # desktop/dev). Set it on the contextvar for the whole turn so per-user
-    # data paths (python_storage, scripts, uploads) resolve under this user's
-    # folder — including inside the compute sandbox, since asyncio.to_thread
-    # copies the context into the worker thread.
+    # Authenticated email from Chainlit's native auth (server mode; the user
+    # is a PersistedUser whose identifier is the email). None on desktop/dev.
+    # Set it on the contextvar for the whole turn so per-user file paths
+    # (python_storage, scripts, uploads) resolve under this user's folder —
+    # including inside the compute sandbox, since asyncio.to_thread copies the
+    # context into the worker thread.
     from app.services.current_user import set_current_email, reset_current_email
     try:
-        email = getattr(cl.context.session, "voitta_email", None)
+        _user = cl.user_session.get("user")
+        email = getattr(_user, "identifier", None) if _user else None
     except Exception:
         email = None
     _email_token = set_current_email(email)

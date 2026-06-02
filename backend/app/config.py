@@ -63,6 +63,52 @@ TLS_KEY_PATH = PROJECT_ROOT / "certs" / "127.0.0.1+1-key.pem"
 USER_CONFIG_DIR = Path.home() / ".config" / "voitta-compute"
 USER_SETTINGS_PATH = USER_CONFIG_DIR / "settings.json"
 
+
+def _persisted_auth_secret() -> str:
+    """JWT signing secret: VOITTA_AUTH_SECRET if set, else a random value
+    persisted at USER_DATA_ROOT/auth_secret so logins survive restarts
+    without manual config. Single owner of the secret (Chainlit signs the
+    JWT with it; our guard verifies the same JWT)."""
+    env = os.environ.get("VOITTA_AUTH_SECRET")
+    if env:
+        return env
+    import secrets
+
+    path = USER_DATA_ROOT / "auth_secret"
+    try:
+        if path.exists():
+            val = path.read_text(encoding="ascii").strip()
+            if val:
+                return val
+        path.parent.mkdir(parents=True, exist_ok=True)
+        val = secrets.token_urlsafe(48)
+        path.write_text(val, encoding="ascii")
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        return val
+    except Exception:
+        return secrets.token_urlsafe(48)
+
+
+# Server mode = the dedicated Google login client creds are present (.env).
+# In that case configure Chainlit's native auth so conversation isolation is
+# enforced by Chainlit itself: CHAINLIT_CUSTOM_AUTH flips require_login() on,
+# the shared JWT secret signs/verifies the access_token cookie, and
+# SameSite=None lets that cookie ride cross-site requests from the bookmarklet.
+# These MUST be set before chainlit.auth is imported, so this runs at config
+# import (app.main imports app.config first). Desktop/dev sets none of them →
+# require_login() stays False → unchanged single-user behaviour.
+SERVER_MODE = bool(
+    os.environ.get("VOITTA_GOOGLE_AUTH_CLIENT_ID")
+    and os.environ.get("VOITTA_GOOGLE_AUTH_CLIENT_SECRET")
+)
+if SERVER_MODE:
+    os.environ.setdefault("CHAINLIT_CUSTOM_AUTH", "true")
+    os.environ.setdefault("CHAINLIT_AUTH_SECRET", _persisted_auth_secret())
+    os.environ.setdefault("CHAINLIT_COOKIE_SAMESITE", "none")
+
 # Plugins live at the REPO root (sibling of backend/ and frontend/), not
 # inside backend/. Both the BE loader (here) and the FE Vite glob read
 # from the same tree so plugin authors have a single source of truth.

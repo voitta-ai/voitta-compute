@@ -1,15 +1,22 @@
-"""Server-mode login guard — "Sign in with Google".
+"""Server-mode login — "Sign in with Google".
 
 Distinct from ``app.services.google_oauth`` (that one grants the LLM
 Drive/Sheets data access and stores tokens in settings.json). This module
 only answers one question: *is the caller a Google account that completed
-sign-in?* It mints a short, HMAC-signed session cookie carrying the email;
-no Google tokens are stored.
+sign-in?* On success the callback mints a **Chainlit** JWT (the standard
+``access_token`` cookie) carrying the account email as the user identifier.
 
-Activation is purely env-driven. The guard is ON iff both
+There is a single source of truth for identity: that Chainlit JWT. Our HTTP
+guard (app.main._AuthGuard) verifies the same cookie, and Chainlit verifies
+it for /chainlit — so conversation isolation is enforced natively by
+Chainlit (per-user threads, ownership checks) with no separate session
+cookie of our own.
+
+Activation is purely env-driven. Login is ON iff both
 ``VOITTA_GOOGLE_AUTH_CLIENT_ID`` and ``VOITTA_GOOGLE_AUTH_CLIENT_SECRET``
 are present — which only happens on a server (.env), never in the macOS
-bundle or local dev. That is the "server mode only" gate.
+bundle or local dev. app.config sets CHAINLIT_CUSTOM_AUTH + the JWT secret
++ SameSite=None in that case, flipping Chainlit's require_login() on.
 
 Policy for now: anyone who can complete Google sign-in is allowed (no
 email allow-list). The redirect URI is ``{VOITTA_PUBLIC_BASE_URL}/api/
@@ -20,23 +27,12 @@ Google Cloud console.
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import json
 import os
-import secrets
-import time
 from http.cookies import SimpleCookie
 from urllib.parse import urlencode
 
 import httpx
-
-from app import config
-
-# ---- cookie / session ----------------------------------------------------
-
-COOKIE_NAME = "vc_session"
-SESSION_TTL_S = 7 * 24 * 3600  # 7 days
 
 # ---- Google OAuth (openid + email only — we just need identity) ----------
 
@@ -46,8 +42,8 @@ SCOPES = ["openid", "email"]
 
 
 def is_enabled() -> bool:
-    """True iff the login guard is active (server mode). Gated on the
-    presence of the dedicated Google login client credentials."""
+    """True iff login is active (server mode). Gated on the presence of the
+    dedicated Google login client credentials."""
     return bool(
         os.getenv("VOITTA_GOOGLE_AUTH_CLIENT_ID")
         and os.getenv("VOITTA_GOOGLE_AUTH_CLIENT_SECRET")
@@ -58,7 +54,7 @@ def _client() -> tuple[str, str]:
     cid = os.getenv("VOITTA_GOOGLE_AUTH_CLIENT_ID")
     csec = os.getenv("VOITTA_GOOGLE_AUTH_CLIENT_SECRET")
     if not cid or not csec:
-        raise RuntimeError("login guard not configured (missing client id/secret)")
+        raise RuntimeError("login not configured (missing client id/secret)")
     return cid, csec
 
 
@@ -67,80 +63,17 @@ def redirect_uri() -> str:
     return f"{base}/api/auth/google/callback"
 
 
-# ---- signing secret -------------------------------------------------------
-
-_secret_cache: bytes | None = None
-
-
-def _secret() -> bytes:
-    """HMAC key for session cookies. From ``VOITTA_AUTH_SECRET`` if set,
-    else a random value persisted under the data dir so sessions survive
-    restarts without manual config."""
-    global _secret_cache
-    if _secret_cache is not None:
-        return _secret_cache
-    env = os.getenv("VOITTA_AUTH_SECRET")
-    if env:
-        _secret_cache = env.encode("utf-8")
-        return _secret_cache
-    path = config.USER_DATA_ROOT / "auth_secret"
-    try:
-        if path.exists():
-            val = path.read_bytes().strip()
-            if val:
-                _secret_cache = val
-                return val
-        path.parent.mkdir(parents=True, exist_ok=True)
-        val = secrets.token_urlsafe(48).encode("ascii")
-        path.write_bytes(val)
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
-        _secret_cache = val
-        return val
-    except Exception:
-        # Last resort: ephemeral key (sessions won't survive restart).
-        _secret_cache = secrets.token_urlsafe(48).encode("ascii")
-        return _secret_cache
-
-
-def _b64(b: bytes) -> str:
-    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
-
-
 def _unb64(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def make_session(email: str) -> str:
-    """Return a signed ``<payload>.<sig>`` session token for ``email``."""
-    payload = {"email": email, "exp": int(time.time()) + SESSION_TTL_S}
-    body = _b64(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    sig = _b64(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
-    return f"{body}.{sig}"
-
-
-def verify_session(token: str | None) -> str | None:
-    """Return the email if ``token`` is a valid, unexpired session, else None."""
-    if not token or "." not in token:
-        return None
-    body, _, sig = token.partition(".")
-    expected = _b64(hmac.new(_secret(), body.encode("ascii"), hashlib.sha256).digest())
-    if not hmac.compare_digest(sig, expected):
-        return None
-    try:
-        payload = json.loads(_unb64(body))
-    except Exception:
-        return None
-    if int(payload.get("exp", 0)) < time.time():
-        return None
-    email = payload.get("email")
-    return email if isinstance(email, str) and email else None
+# ---- identity from the Chainlit JWT cookie --------------------------------
 
 
 def email_from_cookie_header(cookie_header: str | None) -> str | None:
-    """Parse a raw ``Cookie:`` header and return the authenticated email."""
+    """Return the authenticated email by verifying the Chainlit ``access_token``
+    JWT in a raw ``Cookie:`` header. Single source of truth for identity,
+    shared by the HTTP guard and ``/api/auth/me``. None if absent/invalid."""
     if not cookie_header:
         return None
     try:
@@ -148,8 +81,18 @@ def email_from_cookie_header(cookie_header: str | None) -> str | None:
         jar.load(cookie_header)
     except Exception:
         return None
-    morsel = jar.get(COOKIE_NAME)
-    return verify_session(morsel.value) if morsel else None
+    cookies = {k: m.value for k, m in jar.items()}
+    try:
+        from chainlit.auth.cookie import get_token_from_cookies
+        from chainlit.auth.jwt import decode_jwt
+
+        token = get_token_from_cookies(cookies)
+        if not token:
+            return None
+        user = decode_jwt(token)
+        return getattr(user, "identifier", None) or None
+    except Exception:
+        return None
 
 
 # ---- OAuth flow -----------------------------------------------------------

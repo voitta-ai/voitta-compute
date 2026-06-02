@@ -14,6 +14,19 @@ from app.services import login_auth
 router = APIRouter(prefix="/api/auth")
 
 
+def _set_session_cookie(request: Request, response, email: str) -> None:
+    """Mint a Chainlit JWT for ``email`` and set it as the access_token cookie
+    using Chainlit's own helper (honours CHAINLIT_COOKIE_SAMESITE=none + the
+    shared secret, handles chunking). This is the single identity cookie —
+    both our HTTP guard and Chainlit verify it."""
+    from chainlit.auth.cookie import set_auth_cookie
+    from chainlit.auth.jwt import create_jwt
+    from chainlit.user import User
+
+    token = create_jwt(User(identifier=email))
+    set_auth_cookie(request, response, token)
+
+
 def _closer(message: str) -> str:
     """Self-closing popup page. Tells the opener it finished, then closes."""
     safe = message.replace("<", "&lt;").replace(">", "&gt;")
@@ -51,6 +64,7 @@ async def google_start():
 
 @router.get("/google/callback")
 async def google_callback(
+    request: Request,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
@@ -69,20 +83,14 @@ async def google_callback(
         return HTMLResponse(_closer("Sign-in failed: no email returned."), status_code=400)
 
     resp = HTMLResponse(_closer(f"Signed in as {email}."))
-    resp.set_cookie(
-        login_auth.COOKIE_NAME,
-        login_auth.make_session(email),
-        max_age=login_auth.SESSION_TTL_S,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        path="/",
-    )
+    _set_session_cookie(request, resp, email)
     return resp
 
 
 @router.post("/logout")
-async def logout():
+async def logout(request: Request):
+    from chainlit.auth.cookie import clear_auth_cookie
+
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie(login_auth.COOKIE_NAME, path="/", samesite="none", secure=True)
+    clear_auth_cookie(request, resp)
     return resp
