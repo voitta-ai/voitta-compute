@@ -5,6 +5,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# Operator secrets (server deployments). Committed template: .env.example
+.env
+
 # Node / Vite
 node_modules/
 frontend/dist/

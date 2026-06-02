@@ -70,6 +70,72 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="voitta-compute", lifespan=_lifespan)
 
+
+# ── Login guard (server mode only) ────────────────────────────────────────
+# Active iff app.services.login_auth.is_enabled() — i.e. the Google login
+# client creds are present in the env (.env), which only happens on a server,
+# never in the macOS bundle or local dev. When active, requests to data
+# endpoints must carry a valid signed session cookie; otherwise 401 (HTTP) or
+# a handshake reject (WebSocket). Left OPEN so the login UI can bootstrap:
+#   • /api/auth/*           — the login flow itself
+#   • /health               — health probe
+#   • frontend assets, /, /widget.js, /bridge/*  — so the widget can load and
+#     render its "Sign in with Google" screen
+# Guarded: /api/* (except /api/auth/*), /chainlit*, /mcp*.
+#
+# Added BEFORE CORSMiddleware so CORS stays OUTER of the guard and stamps its
+# headers onto the 401 (the last add_middleware is the outermost layer).
+from app.services import login_auth as _login_auth
+
+
+def _is_guarded_path(path: str) -> bool:
+    if path == "/health" or path.startswith("/api/auth/"):
+        return False
+    return (
+        path.startswith("/api/")
+        or path.startswith("/chainlit")
+        or path.startswith("/mcp")
+    )
+
+
+class _AuthGuard:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] not in ("http", "websocket") or not _login_auth.is_enabled():
+            await self._app(scope, receive, send)
+            return
+
+        # Never block CORS/PNA preflights — they carry no cookies.
+        if scope.get("method") == "OPTIONS" or not _is_guarded_path(scope.get("path", "")):
+            await self._app(scope, receive, send)
+            return
+
+        headers = {k.lower(): v for k, v in scope.get("headers", [])}
+        cookie_header = headers.get(b"cookie", b"").decode("latin-1")
+        if _login_auth.email_from_cookie_header(cookie_header):
+            await self._app(scope, receive, send)
+            return
+
+        # Unauthenticated, guarded request.
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 4401})
+            return
+        body = b'{"error":"login_required"}'
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(_AuthGuard)
+
 # CORS. The bookmarklet runs on third-party origins (drive.google.com,
 # enterprise.voitta.ai, ...) and needs to send credentialed requests to
 # the local backend so Chainlit's session cookie round-trips. The CORS
@@ -147,6 +213,7 @@ app.add_middleware(_PNAMiddleware)
 
 
 from app.bridge import router as bridge_router
+from app.routes.auth import router as auth_router
 from app.routes.google import router as google_router
 from app.routes.html_report import router as html_report_router
 from app.routes.plugins import router as plugins_router
@@ -154,6 +221,7 @@ from app.routes.reports import router as reports_router
 from app.routes.settings import router as settings_router
 from app.routes.workspace import router as workspace_router
 
+app.include_router(auth_router)
 app.include_router(reports_router)
 app.include_router(html_report_router)
 app.include_router(settings_router)

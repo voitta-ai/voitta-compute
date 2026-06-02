@@ -14,6 +14,18 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Load a repo-root .env for server deployments (operator-owned secrets:
+# Google login creds, public URL, auth secret). python-dotenv ships with
+# uvicorn[standard]. No-op on the macOS bundle (no .env shipped) and in dev
+# where the file is absent. Existing env vars always win (load_dotenv does
+# not override), so the launcher's setdefault()s are unaffected.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+except Exception:
+    pass
+
 HOST = "127.0.0.1"
 PORT = 12358
 
