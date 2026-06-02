@@ -16,6 +16,20 @@ import ThreadPicker from "./ThreadPicker";
 import { activeTabState, reportCollapsedState, workspaceTabOpenState } from "./report/state";
 
 type View = "chat" | "settings";
+type ResolvedTheme = "light" | "dark";
+
+// Resolve the persisted theme ("light" | "dark" | "auto") to a concrete
+// light/dark. We push the resolved value onto data-theme so the DOM never
+// carries "auto": the themed CSS then only needs its two complete token
+// blocks ([data-theme="light"] / ["dark"]), instead of relying on the
+// prefers-color-scheme fallback block — which had drifted out of sync and
+// left header text dark-on-dark in auto mode on OS-dark machines.
+function resolveTheme(theme: string): ResolvedTheme {
+  if (theme === "auto") {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return theme === "dark" ? "dark" : "light";
+}
 
 const STORE_OPEN = "voitta-bkmk-open";
 const STORE_WIDTH = "voitta-bkmk-width";
@@ -65,6 +79,24 @@ export default function Drawer({ backendOrigin }: Props) {
   });
   const currentHasKey = Boolean(settings.has_api_keys[settings.provider]);
   const [view, setView] = useState<View>(currentHasKey ? "chat" : "settings");
+
+  // Effective light/dark. Recomputed when the persisted theme changes, and —
+  // while in "auto" — kept in sync with the OS scheme via a matchMedia listener
+  // so the widget flips live without a reload.
+  const [effectiveTheme, setEffectiveTheme] = useState<ResolvedTheme>(() =>
+    resolveTheme(settings.theme),
+  );
+  useEffect(() => {
+    if (settings.theme !== "auto") {
+      setEffectiveTheme(settings.theme === "dark" ? "dark" : "light");
+      return;
+    }
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setEffectiveTheme(mq.matches ? "dark" : "light");
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [settings.theme]);
   const [width, setWidth] = useState<number>(loadInitialWidth);
   const [resizing, setResizing] = useState(false);
   const widthRef = useRef(width);
@@ -147,7 +179,7 @@ export default function Drawer({ backendOrigin }: Props) {
       data-open={open ? "true" : "false"}
       data-resizing={resizing ? "true" : "false"}
       data-layout={settings.layout}
-      data-theme={settings.theme}
+      data-theme={effectiveTheme}
       style={{ ["--voitta-pane-width" as string]: width + "px" } as React.CSSProperties}
     >
       {/* floating handle — only visible when drawer is closed */}
@@ -218,25 +250,14 @@ export default function Drawer({ backendOrigin }: Props) {
               <button
                 className="hbtn theme-toggle"
                 type="button"
-                title={(() => {
-                  const eff = settings.theme === "auto"
-                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-                    : settings.theme;
-                  return eff === "dark" ? "Switch to light" : "Switch to dark";
-                })()}
+                title={effectiveTheme === "dark" ? "Switch to light" : "Switch to dark"}
                 aria-label="Toggle color scheme"
                 onClick={() => {
-                  const eff = settings.theme === "auto"
-                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-                    : settings.theme;
-                  saveSettings(backendOrigin, { theme: eff === "dark" ? "light" : "dark" });
+                  saveSettings(backendOrigin, { theme: effectiveTheme === "dark" ? "light" : "dark" });
                 }}
               >
                 {(() => {
-                  const eff = settings.theme === "auto"
-                    ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-                    : settings.theme;
-                  return eff === "dark"
+                  return effectiveTheme === "dark"
                     ? (
                       // sun
                       <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
