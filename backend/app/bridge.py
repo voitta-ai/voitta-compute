@@ -494,9 +494,10 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .lede { font-size: 18px; line-height: 1.6; color: #b9cbd6; margin: 0 0 30px; max-width: 31em; }
 
   .hero-art { justify-self: center; }
-  .hero-art .frame { background: #fff; border-radius: 4px; padding: 14px;
-                     box-shadow: 0 40px 80px rgba(0,0,0,0.35); }
-  .hero-art img { display: block; width: 100%; max-width: 410px; height: auto; border-radius: 2px; }
+  .hero-art .frame { background: #fff; border-radius: 4px; padding: 10px;
+                     border: 1px solid rgba(255,255,255,0.6);
+                     box-shadow: 0 40px 80px rgba(0,0,0,0.38); }
+  .hero-art img { display: block; width: 100%; max-width: 400px; height: auto; border-radius: 2px; }
 
   .cards { display: grid; gap: 14px; }
   .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
@@ -520,22 +521,38 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   .copy:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.45); color: #fff; }
   .copy svg { width: 15px; height: 15px; }
 
-  /* steps — white, navy serif numerals, hairline divider above */
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; padding: 48px 0 56px; }
-  .step { font-size: 14px; color: var(--muted); }
+  /* steps — white, navy serif numerals, kicker label, hairline rules */
+  .steps-section { padding: 56px 0 64px; }
+  .kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--royal); margin-bottom: 26px; }
+  .kicker::before { content: ""; display: inline-block; width: 26px; height: 1px;
+            background: var(--royal); vertical-align: middle; margin-right: 10px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; }
+  .step { font-size: 14px; color: var(--muted); padding-top: 18px; border-top: 1px solid var(--line); }
   .step .n { font-family: var(--serif); font-size: 30px; font-weight: 600; color: var(--cyan);
              line-height: 1; display: block; margin-bottom: 12px; }
   .step b { color: var(--navy); display: block; font-size: 16px; margin-bottom: 4px; font-weight: 600; }
 
+  /* footer — slim navy band closes the page */
+  footer.foot { background: var(--navy); color: #8aa0ad; border-top: 2px solid var(--cyan); }
+  footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 22px 32px;
+                      font-size: 13px; letter-spacing: 0.02em; }
+  footer.foot img { width: 22px; height: 22px; border-radius: 5px; }
+  footer.foot .name { color: #fff; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+  footer.foot .spacer { flex: 1; }
+  footer.foot a { color: #b9cbd6; text-decoration: none; }
+  footer.foot a:hover { color: #fff; }
+
   @media (max-width: 860px) {
     .wrap { padding: 0 22px; }
-    header.nav .wrap { padding: 16px 22px; }
+    header.nav .wrap, footer.foot .wrap { padding: 16px 22px; }
     .hero { grid-template-columns: 1fr; gap: 26px; padding: 40px 0 46px; }
     .hero-art { order: -1; }
     .hero-art img { max-width: 300px; }
     h1 { font-size: 32px; }
     .lede { font-size: 16px; }
-    .steps { grid-template-columns: 1fr; gap: 26px; padding: 36px 0 44px; }
+    .steps-section { padding: 40px 0 44px; }
+    .steps { grid-template-columns: 1fr; gap: 26px; }
   }
 </style></head>
 <body>
@@ -584,11 +601,25 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
     </div>
   </section>
 
-  <section class="wrap steps">
-    <div class="step"><span class="n">1</span><b>Add the bookmark</b>Drag a button above to your bookmarks bar, or Copy &amp; paste it into a new bookmark's URL.</div>
-    <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
-    <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
+  <section class="steps-section">
+    <div class="wrap">
+      <div class="kicker">Get started in three steps</div>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><b>Add the bookmark</b>Drag a button above to your bookmarks bar, or Copy &amp; paste it into a new bookmark's URL.</div>
+        <div class="step"><span class="n">2</span><b>Open any page</b>Navigate to the site you want help with — Drive, Salesforce, a dashboard, anything.</div>
+        <div class="step"><span class="n">3</span><b>Click Voitta</b>The assistant slides in, sees the page, and can run code, search, and build for you.</div>
+      </div>
+    </div>
   </section>
+
+  <footer class="foot">
+    <div class="wrap">
+      <img src="/favicon.svg" alt="">
+      <span class="name">Voitta</span>
+      <span class="spacer"></span>
+      <a href="https://voitta.ai">voitta.ai</a>
+    </div>
+  </footer>
 
   <script>
     var BM = __BM_JSON__;
