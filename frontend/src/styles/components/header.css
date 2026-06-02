@@ -15,6 +15,14 @@ header .brand-name {
   font-size: 18px;
   letter-spacing: 0.02em;
 }
+/* Dog mascot shown in place of the wordmark on narrow panes (Drawer picks
+   which to render from the live pane width). */
+header .brand-dog {
+  display: block;
+  height: 22px;
+  width: auto;
+  flex-shrink: 0;
+}
 header .spacer {
   flex: 1;
 }

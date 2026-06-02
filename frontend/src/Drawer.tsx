@@ -9,6 +9,7 @@ import { threadIdToResumeState, useChatInteract } from "@chainlit/react-client";
 import { useSettings } from "./lib/useSettings";
 import { saveSettings } from "./lib/settings";
 import { useAuth } from "./lib/auth";
+import { DOG_ICON_DATA_URI } from "./lib/dogIcon";
 import ChatPane from "./ChatPane";
 import SettingsView from "./SettingsView";
 import CallFnRouter from "./lib/CallFnRouter";
@@ -37,6 +38,9 @@ const STORE_WIDTH = "voitta-bkmk-width";
 const DEFAULT_WIDTH_PX = 420;
 const MIN_WIDTH_PX = 280;
 const MAX_WIDTH_VW = 92;
+// Below this pane width the "Voitta" wordmark yields to the dog mascot so the
+// header's thread picker, account menu, and buttons keep their room.
+const BRAND_COLLAPSE_PX = 380;
 
 // Provider chip shows a single letter rather than the full id.
 const PROVIDER_LETTER: Record<string, string> = {
@@ -260,7 +264,15 @@ export default function Drawer({ backendOrigin }: Props) {
           onDoubleClick={onResizeDblClick}
         />
         <header>
-          <span className="brand-name">Voitta</span>
+          {/* Wordmark when the pane is wide enough; collapses to the dog
+              mascot when space is tight. Keyed off the live (resizable) pane
+              width — a CSS container query would trap the fixed dropdown
+              backdrops inside the header. */}
+          {width < BRAND_COLLAPSE_PX ? (
+            <img className="brand-dog" src={DOG_ICON_DATA_URI} alt="Voitta" title="Voitta" />
+          ) : (
+            <span className="brand-name">Voitta</span>
+          )}
           <button
             className="provider-chip"
             type="button"
