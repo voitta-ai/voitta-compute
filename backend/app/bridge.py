@@ -47,6 +47,7 @@ app, so the routes exist on both listeners.
 from __future__ import annotations
 
 import html
+import json
 import os
 
 from fastapi import APIRouter, Request
@@ -434,32 +435,70 @@ async def bridge_boot_js() -> Response:
 # tray; this page is for server deployments.
 # ───────────────────────────────────────────────────────────────────────────
 
+# Template uses unique __TOKEN__ placeholders (not str.format) so the embedded
+# CSS/JS braces need no escaping. Each bookmarklet can be installed two ways:
+# drag the pill to the bookmarks bar, OR click Copy and paste into a new
+# bookmark's URL field (handy when the bookmarks bar is hidden).
 _BOOKMARKLETS_PAGE = """<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voitta bookmarklets</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
-  body {{ font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a1a; }}
-  h1 {{ font-size: 22px; }}
-  .bm {{ display: inline-block; margin: 6px 0; padding: 8px 16px; background: #1a1a1a; color: #fff;
-        border-radius: 8px; text-decoration: none; font-weight: 600; cursor: grab; }}
-  .row {{ margin: 22px 0; padding: 16px; border: 1px solid #e2e2e2; border-radius: 10px; }}
-  .hint {{ color: #666; font-size: 13px; margin-top: 6px; }}
-  code {{ background: #f3f3f3; padding: 1px 5px; border-radius: 4px; }}
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 20px; color: #1a1a1a; }
+  h1 { font-size: 22px; }
+  .row { margin: 22px 0; padding: 16px; border: 1px solid #e2e2e2; border-radius: 10px; }
+  .actions { display: flex; align-items: center; gap: 8px; }
+  .bm { display: inline-block; padding: 8px 16px; background: #1a1a1a; color: #fff;
+        border-radius: 8px; text-decoration: none; font-weight: 600; cursor: grab; }
+  .copy { display: inline-flex; align-items: center; gap: 5px; padding: 7px 11px; background: #fff;
+          color: #1a1a1a; border: 1px solid #cfcfcf; border-radius: 8px; font: 600 13px system-ui;
+          cursor: pointer; }
+  .copy:hover { background: #f3f3f3; }
+  .copy svg { width: 14px; height: 14px; }
+  .hint { color: #666; font-size: 13px; margin-top: 10px; }
+  code { background: #f3f3f3; padding: 1px 5px; border-radius: 4px; }
 </style></head>
 <body>
   <h1>Voitta bookmarklets</h1>
-  <p>Drag a button to your bookmarks bar. Then open it on any page to launch Voitta.</p>
+  <p>Drag a button to your bookmarks bar — or click <b>Copy</b> and paste it into a new bookmark's URL.
+     Then open the bookmark on any page to launch Voitta.</p>
   <div class="row">
-    <a class="bm" href="{normal}">Voitta</a>
+    <div class="actions">
+      <a class="bm" href="__NORMAL_HREF__">Voitta</a>
+      <button class="copy" data-bm="normal" type="button"></button>
+    </div>
     <div class="hint">For ordinary pages. Injects the widget directly.</div>
   </div>
   <div class="row">
-    <a class="bm" href="{bridge}">Voitta (Salesforce / strict CSP)</a>
+    <div class="actions">
+      <a class="bm" href="__BRIDGE_HREF__">Voitta (Salesforce / strict CSP)</a>
+      <button class="copy" data-bm="bridge" type="button"></button>
+    </div>
     <div class="hint">For hardened pages (Salesforce Lightning, etc.) that block the direct widget.
       Opens a small popup window — keep it open while you use Voitta.</div>
   </div>
-  <p class="hint">Backend origin: <code>{origin}</code></p>
+  <p class="hint">Backend origin: <code>__ORIGIN__</code></p>
+  <script>
+    var BM = __BM_JSON__;
+    var COPY_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3.5 10.5h-1a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"/></svg>';
+    document.querySelectorAll('.copy').forEach(function (btn) {
+      btn.innerHTML = COPY_SVG + '<span>Copy</span>';
+      btn.addEventListener('click', function () {
+        var text = BM[btn.getAttribute('data-bm')];
+        var label = btn.querySelector('span');
+        var done = function () { label.textContent = 'Copied!'; setTimeout(function () { label.textContent = 'Copy'; }, 1400); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); });
+        } else { fallback(text); done(); }
+      });
+    });
+    function fallback(text) {
+      var ta = document.createElement('textarea'); ta.value = text;
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  </script>
 </body></html>
 """
 
@@ -474,16 +513,27 @@ def _public_origin(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-@router.get("/bookmarklets", include_in_schema=False)
-async def bookmarklets_page(request: Request) -> HTMLResponse:
+def render_bookmarklets(request: Request) -> str:
+    """Build the bookmarklets HTML for the current public origin. Used by both
+    GET /bookmarklets and (in server mode) the site root."""
     from app.bookmarklets import bridge_bookmarklet, normal_bookmarklet
 
     origin = _public_origin(request)
-    # The href carries the javascript: URL verbatim (browsers require that for a
-    # draggable bookmarklet); only the visible origin text is HTML-escaped.
-    page = _BOOKMARKLETS_PAGE.format(
-        normal=normal_bookmarklet(origin),
-        bridge=bridge_bookmarklet(origin),
-        origin=html.escape(origin),
+    normal = normal_bookmarklet(origin)
+    bridge = bridge_bookmarklet(origin)
+    # href: HTML-attribute-escaped (the browser decodes it back to the real
+    # javascript: URL on drag). Copy: JSON-embedded so the exact string reaches
+    # the clipboard; guard the </script> sequence just in case.
+    bm_json = json.dumps({"normal": normal, "bridge": bridge}).replace("</", "<\\/")
+    return (
+        _BOOKMARKLETS_PAGE
+        .replace("__NORMAL_HREF__", html.escape(normal, quote=True))
+        .replace("__BRIDGE_HREF__", html.escape(bridge, quote=True))
+        .replace("__ORIGIN__", html.escape(origin))
+        .replace("__BM_JSON__", bm_json)
     )
-    return HTMLResponse(content=page, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/bookmarklets", include_in_schema=False)
+async def bookmarklets_page(request: Request) -> HTMLResponse:
+    return HTMLResponse(content=render_bookmarklets(request), headers={"Cache-Control": "no-store"})

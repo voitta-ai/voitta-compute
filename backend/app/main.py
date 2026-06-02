@@ -1460,6 +1460,20 @@ async def serve_upload(key: str) -> FileResponse:
 
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
 
+
+@app.get("/", include_in_schema=False)
+async def root(request: Request):
+    """Server mode: the root shows the bookmarklets page (install instructions
+    are the natural landing here — the widget is used via bookmarklet, not by
+    visiting the backend). Desktop/dev: unchanged — serve the frontend so
+    visiting https://127.0.0.1:12358/ still shows the widget."""
+    if app_config.SERVER_MODE:
+        from app.bridge import render_bookmarklets
+        from fastapi.responses import HTMLResponse as _HTMLResponse
+        return _HTMLResponse(render_bookmarklets(request), headers=_NO_CACHE)
+    return await serve_frontend("")
+
+
 @app.get("/{full_path:path}", include_in_schema=False)
 async def serve_frontend(full_path: str) -> FileResponse:
     if not _FE_DIST.is_dir():
