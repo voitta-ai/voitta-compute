@@ -51,7 +51,20 @@ function providerLetter(provider: string | undefined): string {
   return PROVIDER_LETTER[provider.toLowerCase()] ?? provider[0].toUpperCase();
 }
 
-// Logged-in email + logout dropdown (server mode only — hidden when no email).
+// Up-to-two capital initials for the avatar: from a dotted/underscored email
+// local part ("roman.semein" -> "RS"), else the first letter ("roman" -> "R").
+// (We only have the email — Google's identifier — so there's no separate
+// display name to draw real profile initials from.)
+function avatarInitials(email: string): string {
+  const local = (email.split("@")[0] || email).trim();
+  const parts = local.split(/[._+-]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (local[0] || "?").toUpperCase();
+}
+
+// Logged-in account avatar + logout dropdown (server mode only — hidden when
+// no email). The circle replaces the full-width email in the bar to save space;
+// the email moves into the dropdown.
 function UserMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
   return (
@@ -63,15 +76,13 @@ function UserMenu({ email, onLogout }: { email: string; onLogout: () => void }) 
         aria-label="Account menu"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="user-menu-email">{email}</span>
-        <svg className="user-menu-caret" viewBox="0 0 12 12" width="9" height="9" aria-hidden="true">
-          <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <span className="user-menu-avatar">{avatarInitials(email)}</span>
       </button>
       {open && (
         <>
           <div className="user-menu-backdrop" onClick={() => setOpen(false)} />
           <div className="user-menu-menu">
+            <div className="user-menu-account" title={email}>{email}</div>
             <button
               className="user-menu-item"
               type="button"

@@ -187,50 +187,49 @@ header .provider-chip:hover {
   background: var(--voitta-header-btn-bg-hover);
 }
 
-/* user menu — logged-in email + logout dropdown (server mode) */
+/* user menu — account avatar (initials) + logout dropdown (server mode) */
 header .user-menu {
   position: relative;
-  display: flex;
-  min-width: 0;
-  max-width: 180px;
-  /* Pinned to natural width while the wordmark shows (so the header overflows
-     and the brand collapses the moment the email no longer fits); allowed to
-     ellipsis once collapsed to the dog. */
+  /* Fixed-size avatar: never shrinks, never clipped — frees the bar space the
+     full-width email used to occupy. */
   flex-shrink: 0;
-}
-header[data-brand="dog"] .user-menu {
-  flex-shrink: 1;
 }
 header .user-menu-btn {
   display: flex;
   align-items: center;
-  gap: 4px;
   background: transparent;
   border: none;
-  color: var(--voitta-header-fg);
-  font: 11px/1 var(--voitta-font-sans);
-  opacity: 0.7;
   cursor: pointer;
-  padding: 3px 6px;
-  border-radius: var(--voitta-radius-sm);
-  /* Fill + shrink within .user-menu so the email ellipsises rather than
-     overflowing the button's content width onto the action icons. */
-  flex: 1 1 auto;
-  min-width: 0;
+  padding: 0;
+  border-radius: 999px;
 }
-header .user-menu-btn:hover {
-  opacity: 1;
+header .user-menu-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--voitta-header-btn-bg);
+  color: var(--voitta-header-fg);
+  border: 1px solid var(--voitta-header-btn-bg-hover);
+  font: 600 10px/1 var(--voitta-font-sans);
+  letter-spacing: 0.02em;
+}
+header .user-menu-btn:hover .user-menu-avatar {
   background: var(--voitta-header-btn-bg-hover);
 }
-header .user-menu-email {
+/* full email shown inside the dropdown (no longer in the bar) */
+header .user-menu-account {
+  padding: 7px 14px;
+  font: 11px/1.3 var(--voitta-font-sans);
+  color: var(--voitta-picker-fg, var(--voitta-header-fg));
+  opacity: 0.6;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-header .user-menu-caret {
-  flex-shrink: 0;
-  opacity: 0.7;
+  max-width: 240px;
+  border-bottom: 1px solid var(--voitta-picker-rule, var(--voitta-header-rule));
 }
 header .user-menu-backdrop {
   position: fixed;
