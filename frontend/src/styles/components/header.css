@@ -14,6 +14,12 @@ header .brand-name {
   font-weight: 600;
   font-size: 18px;
   letter-spacing: 0.02em;
+  /* Must not shrink: if the wordmark's own box shrank it would absorb the
+     squeeze (text overlapping neighbours) and the header would never report
+     overflow, so the dog swap would never trigger. Pinned → real overflow →
+     Drawer's observer collapses it to the dog. */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 /* Dog mascot shown in place of the wordmark on narrow panes (Drawer picks
    which to render from the live pane width). */
@@ -57,7 +63,15 @@ header .hbtn.theme-toggle:hover {
 /* thread picker — conversation history dropdown */
 header .thread-picker {
   position: relative;
+  display: flex;
   min-width: 0;
+  max-width: 120px;
+  /* Don't shrink while the wordmark is shown: that lets the header overflow
+     so Drawer's observer collapses the brand to the dog as soon as content
+     squashes. Once collapsed (data-brand=dog) the label may ellipsis. */
+  flex-shrink: 0;
+}
+header[data-brand="dog"] .thread-picker {
   flex-shrink: 1;
 }
 header .thread-picker-btn {
@@ -72,7 +86,11 @@ header .thread-picker-btn {
   cursor: pointer;
   padding: 2px 4px;
   border-radius: var(--voitta-radius-sm);
-  max-width: 120px;
+  /* Fill + shrink within the wrapper. A <button> sizes to its content by
+     default and won't shrink to its parent, so the label would overflow
+     instead of ellipsis — flex:1 1 auto + min-width:0 forces it to follow. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 header .thread-picker-btn:hover {
   opacity: 1;
@@ -82,6 +100,7 @@ header .thread-picker-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 header .thread-picker-caret {
   flex-shrink: 0;
@@ -171,10 +190,15 @@ header .provider-chip:hover {
 /* user menu — logged-in email + logout dropdown (server mode) */
 header .user-menu {
   position: relative;
-  /* The email is the flexible item: it shrinks + ellipsises so the fixed
-     action buttons keep their space on narrow panes. min-width:0 is required
-     for a flex child to shrink below its content width. */
+  display: flex;
   min-width: 0;
+  max-width: 180px;
+  /* Pinned to natural width while the wordmark shows (so the header overflows
+     and the brand collapses the moment the email no longer fits); allowed to
+     ellipsis once collapsed to the dog. */
+  flex-shrink: 0;
+}
+header[data-brand="dog"] .user-menu {
   flex-shrink: 1;
 }
 header .user-menu-btn {
@@ -189,7 +213,9 @@ header .user-menu-btn {
   cursor: pointer;
   padding: 3px 6px;
   border-radius: var(--voitta-radius-sm);
-  max-width: 180px;
+  /* Fill + shrink within .user-menu so the email ellipsises rather than
+     overflowing the button's content width onto the action icons. */
+  flex: 1 1 auto;
   min-width: 0;
 }
 header .user-menu-btn:hover {
@@ -200,6 +226,7 @@ header .user-menu-email {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 header .user-menu-caret {
   flex-shrink: 0;

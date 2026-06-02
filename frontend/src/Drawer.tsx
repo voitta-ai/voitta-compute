@@ -38,9 +38,6 @@ const STORE_WIDTH = "voitta-bkmk-width";
 const DEFAULT_WIDTH_PX = 420;
 const MIN_WIDTH_PX = 280;
 const MAX_WIDTH_VW = 92;
-// Below this pane width the "Voitta" wordmark yields to the dog mascot so the
-// header's thread picker, account menu, and buttons keep their room.
-const BRAND_COLLAPSE_PX = 410;
 
 // Provider chip shows a single letter rather than the full id.
 const PROVIDER_LETTER: Record<string, string> = {
@@ -111,6 +108,50 @@ interface Props {
 export default function Drawer({ backendOrigin }: Props) {
   const settings = useSettings();
   const auth = useAuth();
+
+  // Brand collapse: swap the "Voitta" wordmark for the dog mascot the moment
+  // the header content would overflow — i.e. as soon as components begin to
+  // squash. Measured, not a fixed px threshold, because the squash point
+  // depends on the (variable-length) account email. While expanded the
+  // shrinkable items (email, thread picker) are pinned to natural width via
+  // [data-brand] so overflow reflects true content; once collapsed they're
+  // allowed to ellipsis. Hysteresis (remember the collapse width + a buffer)
+  // prevents flip-flop at the boundary.
+  const headerRef = useRef<HTMLElement | null>(null);
+  const [brandCollapsed, setBrandCollapsed] = useState(false);
+  const collapseWidthRef = useRef<number>(0);
+
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const overflowing = el.scrollWidth > el.clientWidth + 1;
+      setBrandCollapsed((collapsed) => {
+        if (!collapsed) {
+          if (overflowing) {
+            collapseWidthRef.current = el.clientWidth;
+            return true;
+          }
+          return false;
+        }
+        // Collapsed: re-expand only once clearly wider than where we collapsed.
+        if (el.clientWidth > collapseWidthRef.current + 16) return false;
+        return true;
+      });
+    };
+    const ro = new ResizeObserver(() => {
+      if (!raf) raf = requestAnimationFrame(measure);
+    });
+    ro.observe(el);
+    measure();
+    return () => {
+      ro.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   const setWorkspaceOpen = useSetRecoilState(workspaceTabOpenState);
   const setActiveTab = useSetRecoilState(activeTabState);
   const setReportCollapsed = useSetRecoilState(reportCollapsedState);
@@ -263,12 +304,10 @@ export default function Drawer({ backendOrigin }: Props) {
           onPointerDown={onResizeDown}
           onDoubleClick={onResizeDblClick}
         />
-        <header>
-          {/* Wordmark when the pane is wide enough; collapses to the dog
-              mascot when space is tight. Keyed off the live (resizable) pane
-              width — a CSS container query would trap the fixed dropdown
-              backdrops inside the header. */}
-          {width < BRAND_COLLAPSE_PX ? (
+        <header ref={headerRef} data-brand={brandCollapsed ? "dog" : "name"}>
+          {/* Wordmark until the header would overflow, then the dog mascot.
+              data-brand also flips which items may shrink (see header.css). */}
+          {brandCollapsed ? (
             <img className="brand-dog" src={DOG_ICON_DATA_URI} alt="Voitta" title="Voitta" />
           ) : (
             <span className="brand-name">Voitta</span>
