@@ -448,14 +448,15 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
 <style>
-  /* Design language sampled from McKinsey Quarterly: deep navy + electric
-     cyan, a high-contrast Didone display serif (Playfair stands in for Bower)
-     over navy, a clean grotesque for body, hairline rules and generous space. */
+  /* McKinsey-editorial: white canvas, deep-navy serif display, ONE restrained
+     blue accent used sparingly (eyebrow tick, one italic phrase, links, step
+     numerals). Hairline rules, structured whitespace. No dark hero band, no
+     glow gradients, no colored card edges. */
   *, *::before, *::after { box-sizing: border-box; }
   :root {
-    --navy: #051C2C; --navy2: #08283f; --ink: #0a1f2c; --muted: #5a6b78;
-    --cyan: #00a9f4; --cyan-soft: #6dd0f7; --royal: #1b3d86;
-    --line: #e4e9ef; --card: #ffffff;
+    --navy: #051C2C; --ink: #0a1f2c; --muted: #54636e; --faint: #8a97a1;
+    --accent: #2251ff; --accent-deep: #1330b8;
+    --line: #e3e7ec;
     --serif: "Playfair Display", Georgia, "Times New Roman", serif;
     --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   }
@@ -463,96 +464,91 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
   body { font: 16px/1.65 var(--sans); color: var(--ink); background: #fff; min-height: 100vh;
          overflow-x: hidden; }
   h1, .lede { overflow-wrap: break-word; }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 32px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 32px; }
 
-  /* nav — white, navy ink, cyan tick, hairline underline */
+  /* nav — white, navy wordmark, hairline underline */
   header.nav { border-bottom: 1px solid var(--line); }
-  header.nav .wrap { display: flex; align-items: center; gap: 11px; padding: 20px 32px; }
-  header.nav img { width: 26px; height: 26px; border-radius: 6px; }
-  header.nav .name { font-weight: 700; font-size: 18px; letter-spacing: 0.04em; color: var(--navy);
+  header.nav .wrap { display: flex; align-items: center; gap: 11px; padding: 22px 32px; }
+  header.nav img { width: 24px; height: 24px; border-radius: 5px; }
+  header.nav .name { font-weight: 700; font-size: 17px; letter-spacing: 0.12em; color: var(--navy);
                      text-transform: uppercase; }
-  header.nav .tick { width: 22px; height: 2px; background: var(--cyan); }
   header.nav .spacer { flex: 1; }
-  header.nav a.ghost { color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 600;
-                       letter-spacing: 0.04em; text-transform: uppercase; }
+  header.nav a.ghost { color: var(--muted); text-decoration: none; font-size: 12px; font-weight: 600;
+                       letter-spacing: 0.12em; text-transform: uppercase; }
   header.nav a.ghost:hover { color: var(--navy); }
 
-  /* hero — full-bleed navy band, white serif headline, framed exhibit art */
-  .hero-band { background:
-      radial-gradient(900px 500px at 88% -8%, rgba(0,169,244,0.22), rgba(0,169,244,0) 60%),
-      linear-gradient(160deg, var(--navy) 0%, var(--navy2) 70%, #0c3350 100%);
-    color: #eaf1f6; }
-  .hero { display: grid; grid-template-columns: 1.04fr 0.96fr; gap: 52px; align-items: center;
-          padding: 64px 0 70px; }
-  .eyebrow { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: 0.18em;
-             text-transform: uppercase; color: var(--cyan-soft); }
-  .eyebrow::before { content: ""; display: inline-block; width: 26px; height: 1px;
-             background: var(--cyan); vertical-align: middle; margin-right: 10px; }
-  h1 { font-family: var(--serif); font-weight: 600; font-size: 54px; line-height: 1.06;
-       letter-spacing: -0.01em; margin: 20px 0 16px; color: #fff; }
-  h1 .grad { font-style: italic; color: var(--cyan-soft); }
-  .lede { font-size: 18px; line-height: 1.6; color: #b9cbd6; margin: 0 0 30px; max-width: 31em; }
+  /* hero — white, navy serif headline, illustration as a bordered exhibit */
+  .hero { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 56px; align-items: center;
+          padding: 64px 0 72px; }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+             color: var(--accent); }
+  .eyebrow::before { content: ""; display: inline-block; width: 24px; height: 1px;
+             background: var(--accent); vertical-align: middle; margin-right: 12px; }
+  h1 { font-family: var(--serif); font-weight: 600; font-size: 50px; line-height: 1.08;
+       letter-spacing: -0.005em; margin: 22px 0 18px; color: var(--navy); }
+  h1 .accent { font-style: italic; color: var(--accent); }
+  .lede { font-size: 18px; line-height: 1.6; color: var(--muted); margin: 0 0 32px; max-width: 30em; }
 
   .hero-art { justify-self: center; }
-  .hero-art .frame { background: #fff; border-radius: 4px; padding: 10px;
-                     border: 1px solid rgba(255,255,255,0.6);
-                     box-shadow: 0 40px 80px rgba(0,0,0,0.38); }
-  .hero-art img { display: block; width: 100%; max-width: 400px; height: auto; border-radius: 2px; }
+  .hero-art img { display: block; width: 100%; max-width: 420px; height: auto;
+                  border: 1px solid var(--line); border-radius: 3px;
+                  box-shadow: 0 22px 44px rgba(5,28,44,0.08); }
 
-  .cards { display: grid; gap: 14px; }
-  .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12);
-          border-left: 2px solid var(--cyan); border-radius: 3px; padding: 16px 18px; }
-  .card.alt { border-left-color: var(--royal); }
-  .card h3 { margin: 0 0 3px; font-size: 15px; font-weight: 600; color: #fff; letter-spacing: 0.01em; }
-  .card p { margin: 0 0 13px; font-size: 13.5px; color: #9fb4c2; }
-  .card .dim { color: #7c93a3; font-weight: 400; }
+  /* install cards — white, single hairline border, no colored edges */
+  .cards { display: grid; gap: 14px; max-width: 560px; }
+  .card { border: 1px solid var(--line); border-radius: 4px; padding: 20px 22px; background: #fff; }
+  .card h3 { margin: 0 0 4px; font-size: 16px; font-weight: 700; color: var(--navy); }
+  .card .dim { color: var(--faint); font-weight: 400; }
+  .card p { margin: 0 0 16px; font-size: 14px; color: var(--muted); }
   .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .bm { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px;
-        background: var(--cyan); color: var(--navy); border-radius: 3px; text-decoration: none;
-        font-weight: 700; font-size: 14px; letter-spacing: 0.02em; cursor: grab; user-select: none; }
-  .bm:hover { background: var(--cyan-soft); }
+  .bm { display: inline-flex; align-items: center; gap: 9px; padding: 11px 18px; background: var(--navy);
+        color: #fff; border-radius: 3px; text-decoration: none; font-weight: 600; font-size: 14px;
+        letter-spacing: 0.01em; cursor: grab; user-select: none; }
+  .bm:hover { background: #0c3350; }
   .bm:active { cursor: grabbing; }
-  .bm .grip { opacity: 0.55; }
-  .card.alt .bm { background: #cdd9ec; color: var(--royal); }
-  .card.alt .bm:hover { background: #e2e9f5; }
-  .copy { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; background: transparent;
-          color: #cfe0ea; border: 1px solid rgba(255,255,255,0.25); border-radius: 3px;
-          font: 600 13px var(--sans); cursor: pointer; }
-  .copy:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.45); color: #fff; }
+  .bm .grip { opacity: 0.5; }
+  /* secondary install = outline, so the two CTAs differ without a second colour */
+  .card.alt .bm { background: #fff; color: var(--navy); border: 1px solid var(--navy); padding: 10px 17px; }
+  .card.alt .bm:hover { background: #f3f5f8; }
+  .copy { display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; background: #fff;
+          color: var(--navy); border: 1px solid var(--line); border-radius: 3px;
+          font: 600 14px var(--sans); cursor: pointer; }
+  .copy:hover { border-color: var(--navy); }
   .copy svg { width: 15px; height: 15px; }
 
-  /* steps — white, navy serif numerals, kicker label, hairline rules */
-  .steps-section { padding: 56px 0 64px; }
-  .kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase;
-            color: var(--royal); margin-bottom: 26px; }
-  .kicker::before { content: ""; display: inline-block; width: 26px; height: 1px;
-            background: var(--royal); vertical-align: middle; margin-right: 10px; }
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 40px; }
-  .step { font-size: 14px; color: var(--muted); padding-top: 18px; border-top: 1px solid var(--line); }
-  .step .n { font-family: var(--serif); font-size: 30px; font-weight: 600; color: var(--cyan);
+  /* steps — exhibit columns: navy top rule, serif numeral, hairline rhythm */
+  .steps-section { border-top: 1px solid var(--line); padding: 56px 0 8px; }
+  .kicker { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+            color: var(--accent); margin-bottom: 30px; }
+  .kicker::before { content: ""; display: inline-block; width: 24px; height: 1px;
+            background: var(--accent); vertical-align: middle; margin-right: 12px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 44px; }
+  .step { font-size: 14px; color: var(--muted); padding-top: 18px; border-top: 2px solid var(--navy); }
+  .step .n { font-family: var(--serif); font-size: 34px; font-weight: 600; color: var(--navy);
              line-height: 1; display: block; margin-bottom: 12px; }
-  .step b { color: var(--navy); display: block; font-size: 16px; margin-bottom: 4px; font-weight: 600; }
+  .step b { color: var(--navy); display: block; font-size: 16px; margin-bottom: 5px; font-weight: 600; }
 
   /* footer — slim navy band closes the page */
-  footer.foot { background: var(--navy); color: #8aa0ad; border-top: 2px solid var(--cyan); }
-  footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 22px 32px;
+  footer.foot { margin-top: 64px; background: var(--navy); color: #9fb1bc; }
+  footer.foot .wrap { display: flex; align-items: center; gap: 11px; padding: 24px 32px;
                       font-size: 13px; letter-spacing: 0.02em; }
-  footer.foot img { width: 22px; height: 22px; border-radius: 5px; }
-  footer.foot .name { color: #fff; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+  footer.foot img { width: 20px; height: 20px; border-radius: 5px; }
+  footer.foot .name { color: #fff; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
   footer.foot .spacer { flex: 1; }
-  footer.foot a { color: #b9cbd6; text-decoration: none; }
+  footer.foot a { color: #cdd9e0; text-decoration: none; }
   footer.foot a:hover { color: #fff; }
 
   @media (max-width: 860px) {
     .wrap { padding: 0 22px; }
     header.nav .wrap, footer.foot .wrap { padding: 16px 22px; }
-    .hero { grid-template-columns: 1fr; gap: 26px; padding: 40px 0 46px; }
+    .hero { grid-template-columns: 1fr; gap: 32px; padding: 44px 0 52px; }
     .hero-art { order: -1; }
-    .hero-art img { max-width: 300px; }
-    h1 { font-size: 32px; }
+    .hero-art img { max-width: 320px; }
+    h1 { font-size: 34px; }
     .lede { font-size: 16px; }
-    .steps-section { padding: 40px 0 44px; }
-    .steps { grid-template-columns: 1fr; gap: 26px; }
+    .steps { grid-template-columns: 1fr; gap: 30px; }
+    .steps-section { padding: 44px 0 4px; }
+    footer.foot { margin-top: 44px; }
   }
 </style></head>
 <body>
@@ -560,44 +556,39 @@ _BOOKMARKLETS_PAGE = """<!doctype html>
     <div class="wrap">
       <img src="/favicon.svg" alt="">
       <span class="name">Voitta</span>
-      <span class="tick"></span>
       <span class="spacer"></span>
       <a class="ghost" href="https://voitta.ai">voitta.ai</a>
     </div>
   </header>
 
-  <section class="hero-band">
-    <div class="wrap hero">
-      <div>
-        <span class="eyebrow">Bookmarklet · works on any site</span>
-        <h1>Your AI assistant, <span class="grad">on every page</span>.</h1>
-        <p class="lede">Voitta rides along in your browser. Drag a bookmark to your bar, click it on
-          any page, and a chat assistant with real compute slides in — no extension, no install.</p>
-        <div class="cards">
-          <div class="card">
-            <h3>Voitta</h3>
-            <p>For ordinary pages. Injects the assistant directly.</p>
-            <div class="actions">
-              <a class="bm" href="__NORMAL_HREF__"><span class="grip">⠿</span>Voitta</a>
-              <button class="copy" data-bm="normal" type="button"></button>
-            </div>
+  <section class="wrap hero">
+    <div>
+      <span class="eyebrow">Bookmarklet · works on any site</span>
+      <h1>Your AI assistant, <span class="accent">on every page</span>.</h1>
+      <p class="lede">Voitta rides along in your browser. Drag a bookmark to your bar, click it on
+        any page, and a chat assistant with real compute slides in — no extension, no install.</p>
+      <div class="cards">
+        <div class="card">
+          <h3>Voitta</h3>
+          <p>For ordinary pages. Injects the assistant directly.</p>
+          <div class="actions">
+            <a class="bm" href="__NORMAL_HREF__"><span class="grip">⠿</span>Voitta</a>
+            <button class="copy" data-bm="normal" type="button"></button>
           </div>
-          <div class="card alt">
-            <h3>Voitta for Salesforce <span class="dim">· strict CSP</span></h3>
-            <p>For hardened pages (Salesforce Lightning, etc.) that block the direct widget. Opens a small
-              popup — keep it open while you work.</p>
-            <div class="actions">
-              <a class="bm" href="__BRIDGE_HREF__"><span class="grip">⠿</span>Voitta (Salesforce)</a>
-              <button class="copy" data-bm="bridge" type="button"></button>
-            </div>
+        </div>
+        <div class="card alt">
+          <h3>Voitta for Salesforce <span class="dim">· strict CSP</span></h3>
+          <p>For hardened pages (Salesforce Lightning, etc.) that block the direct widget. Opens a small
+            popup — keep it open while you work.</p>
+          <div class="actions">
+            <a class="bm" href="__BRIDGE_HREF__"><span class="grip">⠿</span>Voitta (Salesforce)</a>
+            <button class="copy" data-bm="bridge" type="button"></button>
           </div>
         </div>
       </div>
-      <div class="hero-art">
-        <div class="frame">
-          <img src="/hero.png" alt="Isometric illustration: a web page with the Voitta chat assistant docked alongside it" loading="eager" width="410" height="410">
-        </div>
-      </div>
+    </div>
+    <div class="hero-art">
+      <img src="/hero.png" alt="Isometric illustration: a web page with the Voitta chat assistant docked alongside it" loading="eager" width="420" height="420">
     </div>
   </section>
 
