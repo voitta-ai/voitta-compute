@@ -340,6 +340,9 @@ async def refresh_one(conn: MCPConnector) -> MCPConnector:
             host_pattern=host_pattern,
             visibility_check=visibility_check,
         )
+        # Tag ownership so user-added activation hosts
+        # (plugins.<name>.extra_hosts) can widen the host gate.
+        spec.plugin_name = decl.plugin_name
         try:
             _tool_registry.register(spec)
         except ValueError:

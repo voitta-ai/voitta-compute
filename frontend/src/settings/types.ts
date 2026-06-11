@@ -35,6 +35,9 @@ export interface PluginInfo {
   description?: string | null;
   agent_name?: string | null;
   host_patterns: string[];
+  // User-added activation hosts (Settings → Plugins tab), persisted at
+  // ``plugins.<name>.extra_hosts``. May carry a port ("127.0.0.1:8756").
+  extra_hosts?: string[];
   settings_schema: PluginSchema | null;
   settings_panel: "schema" | "custom";
   mcp_connectors: PluginConnectorStatus[];

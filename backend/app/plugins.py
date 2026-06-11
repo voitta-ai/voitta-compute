@@ -75,17 +75,21 @@ def _back_fill_host_patterns(
     Snapshot of tool names BEFORE the plugin import tells us which
     specs are newly contributed. Per-tool ``host_pattern`` overrides
     win — only specs that left the field ``None`` get the manifest
-    default.
+    default. Every new spec (global tools excepted) also gets tagged
+    with its owning ``plugin_name`` so user-added activation hosts can
+    widen the gate at match time.
     """
-    if not host_patterns:
-        return
     from app.tools.registry import registry
 
     added_keys = [n for n in registry.names() if n not in before]
     applied = 0
     for name in added_keys:
         spec = registry.get(name)
-        if spec is not None and spec.host_pattern is None:
+        if spec is None:
+            continue
+        if spec.plugin_name is None and not spec.global_tool:
+            spec.plugin_name = plugin_name
+        if host_patterns and spec.host_pattern is None:
             spec.host_pattern = (
                 host_patterns[0]
                 if len(host_patterns) == 1
@@ -135,7 +139,10 @@ def _import_python_module(plugin_dir: Path, manifest: dict) -> None:
     if isinstance(raw_patterns, str):
         raw_patterns = [raw_patterns]
     patterns = tuple(p for p in raw_patterns if isinstance(p, str) and p)
-    _back_fill_host_patterns(plugin_dir.name, patterns, before)
+    # Tag with the manifest name (not the dir name) — extra_hosts
+    # settings are keyed by manifest name.
+    plugin_name = manifest.get("name") or plugin_dir.name
+    _back_fill_host_patterns(plugin_name, patterns, before)
 
 
 def _warn_if_missing_frontend_bundle(plugin_dir: Path, manifest: dict) -> None:
@@ -255,21 +262,32 @@ def for_host(host: str | None) -> list[Plugin]:
     Matching: ``"*"`` always matches; otherwise ``fnmatch`` against the
     bare hostname (port stripped, lowercased). Hostnames are also
     suffix-matched so ``"ebay.com"`` matches ``"www.ebay.com"``.
+    User-added activation hosts (Settings → Plugins, stored at
+    ``plugins.<name>.extra_hosts``) are OR'd in, port-aware — see
+    :mod:`app.services.host_activation`.
     """
+    from app.services import host_activation
+
     hostname = (host or "").split(":", 1)[0].lower().rstrip(".")
+    extra_map = host_activation.extra_hosts_map()
     out: list[Plugin] = []
     for p in _PLUGINS:
+        matched = False
         for pat in p.host_patterns:
             if pat == "*":
-                out.append(p)
+                matched = True
                 break
             pat_norm = pat.lower().rstrip(".")
             if hostname == pat_norm or hostname.endswith("." + pat_norm):
-                out.append(p)
+                matched = True
                 break
             if fnmatch.fnmatch(hostname, pat_norm):
-                out.append(p)
+                matched = True
                 break
+        if not matched:
+            matched = host_activation.matches(host, extra_map.get(p.name, []))
+        if matched:
+            out.append(p)
     return out
 
 

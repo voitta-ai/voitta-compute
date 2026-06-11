@@ -78,6 +78,11 @@ class ToolSpec:
     # manipulate (e.g. "Drive tools only show when OAuth is connected").
     # Called on every turn — keep cheap.
     visibility_check: Callable[[], bool] | None = None
+    # Owning plugin, back-filled by the plugin loader / MCP refresh.
+    # Lets user-added activation hosts (Settings → Plugins, stored at
+    # ``plugins.<name>.extra_hosts``) widen this spec's host gate
+    # without touching ``host_pattern``.
+    plugin_name: str | None = None
 
 
 class ToolRegistry:
@@ -120,10 +125,31 @@ class ToolRegistry:
         hostname. ``"ebay.com"`` matches ``ebay.com`` and
         ``www.ebay.com`` but NOT ``ebay.com.evil.com``. List of
         patterns is OR'd. ``host`` may include ``:port`` — stripped.
+        User-added activation hosts (``plugins.<name>.extra_hosts``,
+        port-aware) are OR'd in for specs that carry a ``plugin_name``.
         """
         hostname = (host or "").split(":", 1)[0].lower().rstrip(".")
         out: list[ToolSpec] = []
         hidden: list[str] = []
+        # Lazy, one settings read per call — not one per spec.
+        extra_map: dict[str, list[str]] | None = None
+
+        def _extra_match(plugin_name: str | None) -> bool:
+            nonlocal extra_map
+            if not plugin_name or not host:
+                return False
+            try:
+                from app.services import host_activation
+            except Exception:
+                return False
+            if extra_map is None:
+                try:
+                    extra_map = host_activation.extra_hosts_map()
+                except Exception:
+                    logger.exception("extra-hosts lookup failed")
+                    extra_map = {}
+            return host_activation.matches(host, extra_map.get(plugin_name, []))
+
         for s in self._tools.values():
             if s.host_pattern is not None:
                 if not hostname:
@@ -142,6 +168,8 @@ class ToolRegistry:
                     if hostname == pat or hostname.endswith("." + pat):
                         matched = True
                         break
+                if not matched and _extra_match(s.plugin_name):
+                    matched = True
                 if not matched:
                     hidden.append(f"{s.name}(host-mismatch:{patterns}!={hostname!r})")
                     continue

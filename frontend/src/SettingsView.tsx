@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import GlobalSettings from "./settings/GlobalSettings";
+import PluginActivationPanel from "./settings/PluginActivationPanel";
 import PluginSettingsPanel from "./settings/PluginSettingsPanel";
 import type {
   CustomPanelProps,
@@ -37,6 +38,10 @@ const CUSTOM_PANEL_MODULES = import.meta.glob<CustomPanelModule>(
   "../../plugins/**/frontend/settings-panel.tsx",
   { eager: true },
 );
+
+// Tab id for the fixed "Plugins" (activation) tab. Namespaced so a
+// plugin literally named "plugins" can't shadow it.
+const ACTIVATION_TAB = "__activation__";
 
 // relDir is the plugin's path relative to plugins/ root (e.g. "google/drive").
 // Falls back to bare plugin name for flat plugins without a rel_dir from the API.
@@ -120,7 +125,14 @@ export default function SettingsView({ backendOrigin, onClose }: Props) {
 
       <div className="settings-tab-body" style={{ marginTop: 12 }}>
         {activeTab === "global" && <GlobalSettings backendOrigin={backendOrigin} />}
-        {activeTab !== "global" && (
+        {activeTab === ACTIVATION_TAB && (
+          <PluginActivationPanel
+            plugins={plugins}
+            backendOrigin={backendOrigin}
+            onSaved={fetchPlugins}
+          />
+        )}
+        {activeTab !== "global" && activeTab !== ACTIVATION_TAB && (
           <PluginTabBody
             pluginName={activeTab}
             plugin={tabbedPlugins.find((p) => p.name === activeTab)}
@@ -164,6 +176,7 @@ function TabStrip({
 }) {
   const tabs: { id: string; label: string }[] = [
     { id: "global", label: "Global" },
+    { id: ACTIVATION_TAB, label: "Plugins" },
     ...plugins.map((p) => ({ id: p.name, label: p.agent_name || p.name })),
   ];
   return (

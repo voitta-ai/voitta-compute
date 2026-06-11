@@ -21,6 +21,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.plugins import Plugin, all_plugins
+from app.services import host_activation
 from app.services.mcp.registry import (
     MCPConnector,
     list_connectors,
@@ -47,7 +48,7 @@ def _connector_to_dict(conn: MCPConnector) -> dict[str, Any]:
     }
 
 
-def _plugin_to_dict(p: Plugin) -> dict[str, Any]:
+def _plugin_to_dict(p: Plugin, extra_hosts: list[str]) -> dict[str, Any]:
     """Project a loaded-plugin record into the wire shape."""
     return {
         "name": p.name,
@@ -56,6 +57,8 @@ def _plugin_to_dict(p: Plugin) -> dict[str, Any]:
         "description": p.description,
         "agent_name": p.agent_name,
         "host_patterns": list(p.host_patterns),
+        # User-added activation hosts (Settings → Plugins tab).
+        "extra_hosts": extra_hosts,
         "settings_schema": p.settings_schema,
         # Custom-panel opt-out for plugins that need a hand-rolled
         # settings UI (Google's OAuth dance). The FE uses this to choose
@@ -74,9 +77,14 @@ async def list_plugins() -> dict[str, Any]:
 
     Connector status changes only on explicit refresh, so the response
     is stable until the user hits the Refresh button. Plugin list is
-    fixed at startup.
+    fixed at startup; ``extra_hosts`` tracks the live settings blob.
     """
-    return {"plugins": [_plugin_to_dict(p) for p in all_plugins()]}
+    extra_map = host_activation.extra_hosts_map()
+    return {
+        "plugins": [
+            _plugin_to_dict(p, extra_map.get(p.name, [])) for p in all_plugins()
+        ]
+    }
 
 
 @router.post("/{name}/refresh")
