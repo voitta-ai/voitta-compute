@@ -594,11 +594,14 @@ class VoittaMenuBarApp(rumps.App):
     def recreate_certs(self, _sender) -> None:
         """Regenerate the TLS cert pair via mkcert.
 
-        The chainlit build doesn't ship a Python wrapper around mkcert
-        — we just shell out. If mkcert isn't installed, we surface
-        the brew command the user needs.
+        Resolves mkcert the same way first-run provisioning does: the
+        binary bundled in the .app first, then PATH (GUI apps get
+        launchd's minimal PATH, so brew installs are invisible here).
         """
-        if shutil.which("mkcert") is None:
+        from app.certs import _mkcert_path
+
+        mkcert = _mkcert_path()
+        if mkcert is None:
             _alert(
                 title="mkcert not installed",
                 message=(
@@ -626,8 +629,14 @@ class VoittaMenuBarApp(rumps.App):
         certs_dir.mkdir(parents=True, exist_ok=True)
         try:
             subprocess.run(
+                [mkcert, "-install"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
                 [
-                    "mkcert",
+                    mkcert,
                     "-cert-file", str(TLS_CERT_PATH),
                     "-key-file", str(TLS_KEY_PATH),
                     "127.0.0.1", "localhost",
