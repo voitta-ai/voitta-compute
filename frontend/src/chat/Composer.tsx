@@ -90,6 +90,10 @@ export default function Composer({
     }
   }
 
+  // Hostile pages (Sheets, Docs) can't swallow paste/keys here: the
+  // widget-wide event guard (lib/event-guard.ts, installed at mount)
+  // defangs page-level listeners for events originating inside the
+  // shadow root, so this handler and the browser defaults always run.
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = extractImageFiles(e.clipboardData?.items ?? null);
     if (!files.length) return;

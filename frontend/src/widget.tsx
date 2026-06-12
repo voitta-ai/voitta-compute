@@ -6,6 +6,7 @@
 
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { installEventGuard } from "./lib/event-guard";
 import { cssText } from "./styles";
 
 // Plugin frontends — every ``plugins/**/frontend/widget.ts`` is
@@ -54,6 +55,10 @@ function mount(): void {
   document.documentElement.appendChild(host);
 
   const shadow = host.attachShadow({ mode: "closed" });
+
+  // Keep hostile host pages (Sheets, Docs, …) from swallowing
+  // keyboard / clipboard / selection events aimed at the widget.
+  installEventGuard(host, shadow);
 
   // One combined <style> node: tokens → themes → components.
   // See styles/index.ts for the concatenation order.

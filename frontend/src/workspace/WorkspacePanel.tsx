@@ -208,6 +208,7 @@ interface Props {
 // ─── component ────────────────────────────────────────────────────────────────
 
 export default function WorkspacePanel({ backendOrigin, embedded, onClose, onOpenReport }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const [scripts, setScripts] = useState<ScriptItem[]>([]);
   const [data, setData] = useState<DataItem[]>([]);
   const [folders, setFolders] = useState<FolderMeta[]>([]);
@@ -304,9 +305,20 @@ export default function WorkspacePanel({ backendOrigin, embedded, onClose, onOpe
 
   useEffect(() => {
     if (!preview) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") closePreview(); };
+    const h = (e: Event) => {
+      if ((e as KeyboardEvent).key === "Escape") closePreview();
+    };
+    // Two scopes: document catches Escape while focus sits on the host
+    // page; the shadow root catches widget-origin keys, which the
+    // hostile-page event guard re-dispatches inside the shadow tree
+    // only (composed:false — they never reach document).
+    const root = rootRef.current?.getRootNode();
     document.addEventListener("keydown", h);
-    return () => document.removeEventListener("keydown", h);
+    root?.addEventListener("keydown", h);
+    return () => {
+      document.removeEventListener("keydown", h);
+      root?.removeEventListener("keydown", h);
+    };
   }, [preview, closePreview]);
 
   // ─── folder CRUD ──────────────────────────────────────────────────────────
@@ -682,7 +694,7 @@ export default function WorkspacePanel({ backendOrigin, embedded, onClose, onOpe
 
   return (
     <>
-      <div className="ws-panel" style={{ left: pos.x, top: pos.y }} role="dialog" aria-label="Workspace">
+      <div ref={rootRef} className="ws-panel" style={{ left: pos.x, top: pos.y }} role="dialog" aria-label="Workspace">
         <div className="ws-header" onPointerDown={onHeaderDown}>
           <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true" className="ws-header-icon">
             <path d="M2 5h6l2 2h8v10H2V5z" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
