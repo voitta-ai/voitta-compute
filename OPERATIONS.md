@@ -234,6 +234,21 @@ sequenceDiagram
   `<style>` node, themes switch via `data-theme`, layout (`chat-left`/
   `chat-right`) via `data-layout`. Browser-side primitives that need DOM
   access get the shadow root through `window.VoittaBookmarklet.getShadowRoot()`.
+- **Hostile-page event guard**
+  ([frontend/src/lib/event-guard.ts](frontend/src/lib/event-guard.ts), installed
+  at mount): sites like Google Sheets/Docs register document-capture listeners
+  that *act on* keyboard/clipboard/mouse events globally (own context menu,
+  paste-into-grid, focus stealing), swallowing input aimed at the widget. The
+  guard does a full takeover for widget-origin events (`e.target === host` at
+  window capture — exact, thanks to closed-shadow retargeting):
+  `stopImmediatePropagation()` hides the event from the page entirely (browser
+  defaults survive — text insertion, native context menu, selection), then a
+  clone (`composed: false`, `clipboardData`/`dataTransfer` forwarded via
+  getters) is dispatched synchronously on the real inner target so React
+  handlers run normally; `preventDefault` on the clone is mirrored to the
+  original. Known limit: a page hijacker on *window* capture registered before
+  the bookmarklet still precedes the guard (not seen in the wild — Sheets/Docs/
+  Notion all use document).
 
 ### HTTP plumbing quirks ([backend/app/main.py](backend/app/main.py))
 
@@ -437,7 +452,7 @@ A plugin is a directory under [plugins/](plugins/) with a `manifest.json`
   "frontend_bundle": "frontend/widget.ts",
   "system_prompt": "prompt.md",
   "docs_dir": "docs",
-  "mcp_servers": [ { "id": "vre", "url_setting": "plugins.voitta-enterprise.mcp.url",
+  "mcp_servers": [ { "id": "vre", "url_template": "{host}/mcp",
                      "auth": {"type": "bearer", "token_setting": "plugins.voitta-enterprise.mcp.api_key"},
                      "tool_prefix": "vre_", "expose_tools": "*",
                      "transport": "streamable-http" } ],
@@ -455,13 +470,14 @@ What each manifest field wires up
 | `python_module` | `plugins/<name>/backend/` goes on `sys.path`; importing the module registers ToolSpecs as side effects. Specs without their own `host_pattern` are back-filled with the manifest's; all specs get tagged `plugin_name` |
 | `frontend_bundle` | `frontend/widget.ts`, eager-bundled into widget.js via `import.meta.glob`; registers browser primitives |
 | `mcp_servers[]` | declares remote MCP connectors (§8) |
-| `settings_schema` / `settings_panel` | declarative settings tab (schema-rendered) or a custom React panel (`frontend/settings-panel.tsx`) |
+| `settings_schema` / `settings_panel` | declarative settings (schema-rendered inside the plugin's expandable card on the Plugins tab) or a custom React panel (`frontend/settings-panel.tsx`, which gets its own tab) |
 | `docs_dir` | plugin docs are indexed into the RAG `docs` corpus |
 
 The Settings UI ([frontend/src/SettingsView.tsx](frontend/src/SettingsView.tsx))
 shows: **Global** (provider, keys, models, layout, theme) · **Plugins**
-(per-plugin activation hosts: built-in patterns read-only, user extras
-editable chips) · one tab per plugin with a schema or custom panel. Schema
+(one expandable card per plugin: activation hosts as chips, and — for
+schema plugins — the settings form + MCP connector status behind a
+chevron) · one tab per plugin that ships a *custom* panel (Google). Schema
 fields save through `PUT /api/settings` as dotted-path patches
 (`plugins.<name>.<…>`); empty string / null deletes the key.
 
@@ -472,7 +488,28 @@ fields save through `PUT /api/settings` as dotted-path patches
 Plugins integrate remote MCP servers (e.g. a local voitta-rag-enterprise) as
 first-class tools. Design contract: remote tools are **listed at startup and
 on explicit refresh only** — never per chat turn; URL and bearer token are
-read from settings **at call time**, so credential edits apply instantly.
+resolved **at call time**, so credential edits apply instantly.
+
+Two endpoint modes per `mcp_servers[]` entry:
+
+- `url_setting` — a dotted settings path holding an explicit URL.
+- `url_template: "{host}/mcp"` — the endpoint is **derived from the page
+  host per call** (http for loopback hosts, https otherwise), so the same
+  plugin talks to whichever instance the bookmarklet is on
+  (`https://enterprise.voitta.ai/mcp` on the portal,
+  `http://127.0.0.1:8756/mcp` locally). Refresh probes **every** candidate —
+  explicit URL, then the template applied to each manifest pattern and user
+  extra-host — recording a per-endpoint status (the settings card shows one
+  row per instance), registering the **union** of their tools (merged by
+  name; calls route per page host), and remembering the first reachable URL
+  (`active_url`) as the fallback for host-less callers (the `vre://`
+  resolver). An explicit settings URL always wins over the template.
+
+Bearer auth is **per instance**: `auth.token_map_setting` points at a
+`{host: key}` map (Settings → Plugins renders one key field per activation
+host); the token is matched to the host of the URL being *called* — exact
+`host:port` first, then bare-hostname suffix — with the legacy single
+`token_setting` as the any-host fallback.
 
 ```mermaid
 sequenceDiagram
@@ -502,8 +539,11 @@ sequenceDiagram
 
 - Connector status (`ok` / `unauth` / `unreachable` / `not_configured` /
   `unknown`) is surfaced in the plugin's settings tab via the
-  `status_probe: "mcp:<id>"` badge, with a **Refresh tool list** button
-  (`POST /api/plugins/{name}/refresh`).
+  `status_probe: "mcp:<id>"` badge. Each activation-host row carries its own
+  **Connect/Refresh** button (`POST /api/plugins/{name}/refresh?host=…`),
+  which re-probes only that endpoint and re-merges the registration with the
+  others' cached results; **Refresh all** (no `?host=`) re-probes every
+  candidate.
 - Synthesised specs inherit the plugin's `host_patterns` (plus user
   `extra_hosts`) — if the page host doesn't match, the agent **does not see**
   the `vre_*` tools at all. That is the first thing to check when the agent
@@ -681,7 +721,8 @@ One nested JSON blob, atomic-written (tmpfile + `os.replace`)
   "max_tool_iterations": 25, "max_tokens": 24576,
   "mcpDebugEnabled": false,
   "googleOAuth": { "clientId": "…", "tokens": { } },
-  "plugins": { "voitta-enterprise": { "mcp": {"url": "…", "api_key": "…"},
+  "plugins": { "voitta-enterprise": { "mcp": {"api_keys": {"enterprise.voitta.ai": "vk_…",
+                                                            "127.0.0.1:8756": "vk_…"}},
                                       "extra_hosts": ["127.0.0.1:8756"] } }
 }
 ```
