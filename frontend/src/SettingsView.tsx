@@ -81,11 +81,16 @@ export default function SettingsView({ backendOrigin, onClose }: Props) {
     fetchPlugins();
   }, [fetchPlugins]);
 
-  async function onRefreshPlugin(name: string) {
-    setRefreshBusy((m) => ({ ...m, [name]: true }));
+  // host given → re-probe just that activation host's endpoint (the
+  // per-row Connect button); omitted → probe everything. Busy keys are
+  // "name" or "name@host" so rows spin independently.
+  async function onRefreshPlugin(name: string, host?: string) {
+    const busyKey = host ? `${name}@${host}` : name;
+    setRefreshBusy((m) => ({ ...m, [busyKey]: true }));
     try {
+      const qs = host ? `?host=${encodeURIComponent(host)}` : "";
       const r = await fetch(
-        `${backendOrigin}/api/plugins/${encodeURIComponent(name)}/refresh`,
+        `${backendOrigin}/api/plugins/${encodeURIComponent(name)}/refresh${qs}`,
         { method: "POST", credentials: "include" },
       );
       if (!r.ok) throw new Error(`status ${r.status}`);
@@ -103,16 +108,17 @@ export default function SettingsView({ backendOrigin, onClose }: Props) {
     } finally {
       setRefreshBusy((m) => {
         const copy = { ...m };
-        delete copy[name];
+        delete copy[busyKey];
         return copy;
       });
     }
   }
 
-  // Plugin gets a tab if it has a schema OR a custom panel; otherwise
-  // it has nothing to configure and we hide it.
-  const tabbedPlugins = plugins.filter(
-    (p) => p.settings_schema || findCustomPanel(p.rel_dir ?? p.name),
+  // Plugin gets its own tab only when it ships a custom settings panel
+  // (Google's OAuth dance). Schema-declared settings render inside the
+  // plugin's expandable card on the Plugins tab instead.
+  const tabbedPlugins = plugins.filter((p) =>
+    findCustomPanel(p.rel_dir ?? p.name),
   );
 
   return (
@@ -130,6 +136,8 @@ export default function SettingsView({ backendOrigin, onClose }: Props) {
             plugins={plugins}
             backendOrigin={backendOrigin}
             onSaved={fetchPlugins}
+            onRefreshPlugin={onRefreshPlugin}
+            refreshBusy={refreshBusy}
           />
         )}
         {activeTab !== "global" && activeTab !== ACTIVATION_TAB && (
@@ -249,6 +257,10 @@ function PluginTabBody({
         backendOrigin={backendOrigin}
         onRefreshConnectors={onRefresh}
         refreshBusy={refreshBusy}
+        hosts={[
+          ...plugin.host_patterns.filter((h) => !h.includes("*")),
+          ...(plugin.extra_hosts ?? []),
+        ]}
       />
     );
   }

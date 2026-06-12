@@ -26,6 +26,7 @@ from app.services.mcp.registry import (
     MCPConnector,
     list_connectors,
     refresh_all,
+    refresh_endpoint,
     refresh_one,
 )
 
@@ -39,10 +40,22 @@ def _connector_to_dict(conn: MCPConnector) -> dict[str, Any]:
     return {
         "id": d.id,
         "url_setting": d.url_setting,
+        "url_template": d.url_template,
         "token_setting": d.token_setting,
         "tool_prefix": d.tool_prefix,
         "status": conn.status,
         "last_error": conn.last_error,
+        "active_url": conn.active_url,
+        "endpoints": [
+            {
+                "url": e.url,
+                "status": e.status,
+                "last_error": e.last_error,
+                "tool_names": e.tool_names,
+                "tool_count": len(e.tool_names),
+            }
+            for e in conn.endpoints
+        ],
         "tool_names": conn.tool_names,
         "tool_count": len(conn.tool_names),
     }
@@ -88,8 +101,12 @@ async def list_plugins() -> dict[str, Any]:
 
 
 @router.post("/{name}/refresh")
-async def refresh_plugin(name: str) -> dict[str, Any]:
-    """Re-probe every MCP connector belonging to one plugin.
+async def refresh_plugin(name: str, host: str | None = None) -> dict[str, Any]:
+    """Re-probe MCP connectors belonging to one plugin.
+
+    With ``?host=``, only the endpoint(s) for that activation host are
+    re-probed (the per-row Connect button); other endpoints keep their
+    last result. Without it, every candidate endpoint is probed.
 
     Returns the post-refresh connector summary so the UI can update
     status badges without a follow-up GET. 404 if no plugin of that
@@ -101,7 +118,10 @@ async def refresh_plugin(name: str) -> dict[str, Any]:
     conns = list_connectors(plugin_name=name)
     refreshed: list[MCPConnector] = []
     for conn in conns:
-        refreshed.append(await refresh_one(conn))
+        if host:
+            refreshed.append(await refresh_endpoint(conn, host))
+        else:
+            refreshed.append(await refresh_one(conn))
     return {
         "plugin": name,
         "connectors": [_connector_to_dict(c) for c in refreshed],

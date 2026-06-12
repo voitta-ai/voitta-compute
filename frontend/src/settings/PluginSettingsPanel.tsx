@@ -33,6 +33,7 @@ import {
   type PublicSettings,
 } from "../lib/settings";
 import type {
+  ConnectorEndpointStatus,
   PluginConnectorStatus,
   PluginSchema,
   PluginSchemaField,
@@ -45,6 +46,13 @@ interface Props {
   backendOrigin: string;
   onRefreshConnectors: () => void;
   refreshBusy: boolean;
+  // Activation hosts (manifest patterns + user extras) — drives the
+  // per-host rows of "secret_per_host" fields.
+  hosts?: string[];
+  // Per-host re-probe (the row's Connect/Refresh button) + its busy map
+  // keyed by host.
+  onRefreshHost?: (host: string) => void;
+  hostBusy?: Record<string, boolean>;
 }
 
 export default function PluginSettingsPanel({
@@ -54,6 +62,9 @@ export default function PluginSettingsPanel({
   backendOrigin,
   onRefreshConnectors,
   refreshBusy,
+  hosts = [],
+  onRefreshHost,
+  hostBusy = {},
 }: Props) {
   const [snapshot, setSnapshot] = useState<PublicSettings>(getSettings);
   useEffect(() => subscribeSettings(setSnapshot), []);
@@ -79,14 +90,27 @@ export default function PluginSettingsPanel({
       {schema.title && (
         <h3 style={{ margin: "0 0 12px", fontSize: 14 }}>{schema.title}</h3>
       )}
-      {schema.fields.map((f) => (
-        <FieldRow
-          key={f.key}
-          field={f}
-          value={valueOf(f)}
-          onChange={(v) => patchField(f, v)}
-        />
-      ))}
+      {schema.fields.map((f) =>
+        f.type === "secret_per_host" ? (
+          <PerHostSecretRows
+            key={f.key}
+            field={f}
+            hosts={hosts}
+            value={valueOf(f)}
+            onChange={(v) => patchField(f, v)}
+            endpoints={probed?.endpoints ?? []}
+            onRefreshHost={onRefreshHost}
+            hostBusy={hostBusy}
+          />
+        ) : (
+          <FieldRow
+            key={f.key}
+            field={f}
+            value={valueOf(f)}
+            onChange={(v) => patchField(f, v)}
+          />
+        ),
+      )}
 
       {probed && (
         <ConnectorStatusRow
@@ -94,6 +118,11 @@ export default function PluginSettingsPanel({
           pluginName={pluginName}
           onRefresh={onRefreshConnectors}
           busy={refreshBusy}
+          // Hosts already rendered as per-host rows above — the footer
+          // only shows endpoints NOT covered there (explicit URLs).
+          coveredHosts={
+            schema.fields.some((f) => f.type === "secret_per_host") ? hosts : []
+          }
         />
       )}
     </div>
@@ -169,6 +198,149 @@ function FieldRow({
   );
 }
 
+/** "https://x.y:8756/mcp" / "x.y:8756" → "x.y:8756". */
+function hostOf(urlOrHost: string): string {
+  let s = urlOrHost.trim();
+  const i = s.indexOf("://");
+  if (i !== -1) s = s.slice(i + 3);
+  return s.split("/")[0].toLowerCase();
+}
+
+function PerHostSecretRows({
+  field,
+  hosts,
+  value,
+  onChange,
+  endpoints,
+  onRefreshHost,
+  hostBusy,
+}: {
+  field: PluginSchemaField;
+  hosts: string[];
+  value: unknown;
+  onChange: (v: unknown) => void;
+  endpoints: ConnectorEndpointStatus[];
+  onRefreshHost?: (host: string) => void;
+  hostBusy: Record<string, boolean>;
+}) {
+  const map: Record<string, string> =
+    value && typeof value === "object" ? { ...(value as Record<string, string>) } : {};
+  // Show a row per activation host, plus any saved key whose host was
+  // since removed from the activation list (so it stays deletable).
+  const rows = [...hosts];
+  for (const h of Object.keys(map)) {
+    if (!rows.includes(h)) rows.push(h);
+  }
+
+  function setKey(host: string, raw: string) {
+    const next = { ...map };
+    if (raw.trim() === "") delete next[host];
+    else next[host] = raw;
+    // One dotted patch carrying the whole map — host strings contain
+    // dots, so per-entry dotted paths would split into bogus nesting.
+    onChange(Object.keys(next).length ? next : null);
+  }
+
+  if (rows.length === 0) {
+    return (
+      <p className="muted" style={{ marginTop: 12, fontSize: 12 }}>
+        {field.label}: add an activation host above to configure a key.
+      </p>
+    );
+  }
+  return (
+    <div style={{ marginTop: 12 }}>
+      <label>{field.label}</label>
+      {rows.map((host) => {
+        const id = `pfh-${(field.key + host).replace(/[^a-zA-Z0-9]+/g, "-")}`;
+        const ep = endpoints.find((e) => hostOf(e.url) === hostOf(host));
+        const busy = !!hostBusy[host];
+        return (
+          <div
+            key={host}
+            style={{
+              marginTop: 8,
+              padding: "8px 10px",
+              border: "1px solid var(--voitta-border, #d1d5db)",
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <code
+                style={{ fontSize: 11, width: 170, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+                title={host}
+              >
+                {host}
+              </code>
+              <input
+                id={id}
+                className="secret"
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                placeholder={field.placeholder}
+                value={map[host] ?? ""}
+                onChange={(e) => setKey(host, e.currentTarget.value)}
+                style={{ flex: 1 }}
+              />
+              {onRefreshHost && (
+                <button
+                  type="button"
+                  className="save-btn"
+                  disabled={busy}
+                  onClick={() => onRefreshHost(host)}
+                  style={{ background: "#6b7280", padding: "4px 10px", fontSize: 12, flexShrink: 0 }}
+                >
+                  {busy ? "Connecting…" : ep ? "Refresh" : "Connect"}
+                </button>
+              )}
+            </div>
+            <EndpointStatusLine ep={ep} />
+          </div>
+        );
+      })}
+      {field.help && <p className="muted">{field.help}</p>}
+    </div>
+  );
+}
+
+function EndpointStatusLine({ ep }: { ep: ConnectorEndpointStatus | undefined }) {
+  if (!ep) {
+    return (
+      <p className="muted" style={{ margin: "6px 0 0", fontSize: 11 }}>
+        · not probed yet
+      </p>
+    );
+  }
+  const dot = STATUS_DOTS[ep.status] ?? "•";
+  const label = STATUS_LABELS[ep.status] ?? ep.status;
+  // Bound to ~6 names so a 14-tool server doesn't blow the card up.
+  const preview = ep.tool_names.slice(0, 6).join(", ");
+  const more =
+    ep.tool_names.length > 6 ? `, +${ep.tool_names.length - 6} more` : "";
+  return (
+    <div style={{ margin: "6px 0 0", fontSize: 11 }}>
+      <span aria-hidden>{dot}</span>{" "}
+      <code>{ep.url}</code>{" "}
+      <span className="muted">
+        — {ep.status === "ok" ? `${ep.tool_count} ${ep.tool_count === 1 ? "tool" : "tools"}` : label}
+      </span>
+      {ep.status === "ok" && preview && (
+        <p className="muted" style={{ margin: "2px 0 0" }}>
+          {preview}{more}
+        </p>
+      )}
+      {ep.last_error && (
+        <p className="muted" style={{ margin: "2px 0 0", color: "#b00020" }}>
+          {ep.last_error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 const STATUS_DOTS: Record<string, string> = {
   ok: "●",
   unauth: "✕",
@@ -190,18 +362,22 @@ function ConnectorStatusRow({
   pluginName,
   onRefresh,
   busy,
+  coveredHosts,
 }: {
   conn: PluginConnectorStatus;
   pluginName: string;
   onRefresh: () => void;
   busy: boolean;
+  coveredHosts: string[];
 }) {
+  const covered = new Set(coveredHosts.map(hostOf));
+  // Per-host rows above already show their endpoint inline; only
+  // endpoints outside the activation list (explicit URLs) remain here.
+  const extraEndpoints = (conn.endpoints ?? []).filter(
+    (ep) => !covered.has(hostOf(ep.url)),
+  );
   const dot = STATUS_DOTS[conn.status] ?? "•";
   const label = STATUS_LABELS[conn.status] ?? conn.status;
-  // Bound to ~6 names so a 14-tool server doesn't push the Save button off-screen.
-  const preview = conn.tool_names.slice(0, 6).join(", ");
-  const more =
-    conn.tool_names.length > 6 ? `, +${conn.tool_names.length - 6} more` : "";
   return (
     <div
       style={{
@@ -212,23 +388,23 @@ function ConnectorStatusRow({
         background: "var(--voitta-accent-tint, #f9fafb)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span aria-hidden style={{ fontSize: 14 }}>{dot}</span>
-        <strong>{label}</strong>
-        {conn.status === "ok" && (
-          <span className="muted" style={{ marginLeft: "auto", fontSize: 11 }}>
-            {conn.tool_count} {conn.tool_count === 1 ? "tool" : "tools"}
-          </span>
-        )}
-      </div>
-      {conn.status === "ok" && preview && (
-        <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
-          {preview}{more}
-        </p>
+      {extraEndpoints.map((ep) => (
+        <div key={ep.url} style={{ marginBottom: 6 }}>
+          <EndpointStatusLine ep={ep} />
+        </div>
+      ))}
+      {extraEndpoints.length === 0 && conn.endpoints?.length === 0 && (
+        // No probe results yet (not_configured / pre-refresh) — show
+        // the aggregate badge so the card is never empty.
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden style={{ fontSize: 14 }}>{dot}</span>
+          <strong>{label}</strong>
+        </div>
       )}
-      {conn.last_error && (
-        <p className="muted" style={{ margin: "4px 0 0", color: "#b00020", fontSize: 11 }}>
-          {conn.last_error}
+      {conn.url_template && (
+        <p className="muted" style={{ margin: "6px 0 0", fontSize: 11 }}>
+          endpoint is derived from the page host per call (
+          <code>{conn.url_template}</code>)
         </p>
       )}
       <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
@@ -239,7 +415,7 @@ function ConnectorStatusRow({
           className="save-btn"
           style={{ background: "#6b7280", padding: "4px 10px", fontSize: 12 }}
         >
-          {busy ? "Refreshing…" : "Refresh tool list"}
+          {busy ? "Refreshing…" : "Refresh all"}
         </button>
         <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>
           plugin <code>{pluginName}</code>

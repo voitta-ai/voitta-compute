@@ -56,8 +56,8 @@ def synth_tool_spec(
     connector_id: str,
     remote_tool: Tool,
     tool_prefix: str,
-    url_provider: Callable[[], str | None],
-    token_provider: Callable[[], str | None],
+    url_provider: Callable[[str | None], str | None],
+    token_provider: Callable[[str | None], str | None],
     host_pattern: str | list[str] | None,
     visibility_check: Callable[[], bool] | None,
 ) -> ToolSpec:
@@ -67,14 +67,19 @@ def synth_tool_spec(
     settings can change at runtime (user re-saves the api key, points
     the URL at a different server). We resolve them *at call time* so
     the next chat turn picks up the new value without a backend
-    restart. The remote *tool list* still requires an explicit refresh
-    (per design contract) — but credential rotation does not.
+    restart. ``url_provider`` additionally takes the page host —
+    template connectors (``url_template: "{host}/mcp"``) follow the
+    bookmarklet to whichever instance the user is on. The remote *tool
+    list* still requires an explicit refresh (per design contract) —
+    but credential rotation does not.
     """
     local_name = f"{tool_prefix}{remote_tool.name}"
 
     async def _handler(args: dict[str, Any], ctx: ToolCtx) -> dict[str, Any]:
-        url = url_provider()
-        token = token_provider()
+        url = url_provider(ctx.host)
+        # Token follows the resolved URL's host (per-instance keys),
+        # not the page host — though for template connectors they agree.
+        token = token_provider(url)
         if not url:
             return {
                 "ok": False,

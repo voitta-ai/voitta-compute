@@ -3,7 +3,11 @@
 
 export interface PluginSchemaField {
   key: string;
-  type: "text" | "url" | "secret" | "bool" | "enum";
+  // "secret_per_host" renders one secret input per activation host
+  // (built-in patterns + user extras) and stores a {host: value} map
+  // at `key` — saved as ONE dotted patch (host strings contain dots,
+  // so per-entry dotted paths would split wrongly).
+  type: "text" | "url" | "secret" | "secret_per_host" | "bool" | "enum";
   label: string;
   default?: unknown;
   help?: string;
@@ -20,10 +24,27 @@ export interface PluginSchema {
   status_probe?: string;
 }
 
+export interface ConnectorEndpointStatus {
+  url: string;
+  status: "ok" | "unauth" | "unreachable";
+  last_error: string | null;
+  tool_count: number;
+  tool_names: string[];
+}
+
 export interface PluginConnectorStatus {
   id: string;
+  // Aggregate: "ok" when at least one endpoint is reachable.
   status: "ok" | "unauth" | "unreachable" | "not_configured" | "unknown";
   last_error: string | null;
+  // Endpoint the last successful refresh used. For url_template
+  // connectors ("{host}/mcp") tool calls re-derive the URL from the
+  // page host; this is the probe/fallback endpoint.
+  active_url?: string | null;
+  url_template?: string | null;
+  // Per-endpoint probe results (one per activation host for template
+  // connectors) from the last refresh.
+  endpoints?: ConnectorEndpointStatus[];
   tool_count: number;
   tool_names: string[];
 }

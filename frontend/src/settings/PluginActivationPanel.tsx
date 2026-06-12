@@ -1,4 +1,4 @@
-// Settings → Plugins tab: per-plugin activation hosts.
+// Settings → Plugins tab: per-plugin activation hosts + settings.
 //
 // One card per loaded plugin showing where it activates: the manifest
 // ``host_patterns`` (read-only — baked into the plugin) plus the
@@ -10,9 +10,14 @@
 // Entries may carry a port ("127.0.0.1:8756"); the backend then
 // requires the page's port to match, so a plugin pinned to one local
 // app doesn't light up on every other localhost port.
+//
+// Cards with a declarative ``settings_schema`` expand (chevron) to the
+// schema-rendered settings form — API keys and the MCP connector
+// status live here, so schema plugins don't need their own tab.
 
 import { useState } from "react";
 import { saveSettings } from "../lib/settings";
+import PluginSettingsPanel from "./PluginSettingsPanel";
 import type { PluginInfo } from "./types";
 
 interface Props {
@@ -20,6 +25,12 @@ interface Props {
   backendOrigin: string;
   // Refetch /api/plugins after a save so extra_hosts stays in sync.
   onSaved: () => void;
+  // "Refresh tool list" for a plugin's MCP connectors (shared with the
+  // tab view — SettingsView owns the fetch + busy state). With a host,
+  // only that activation host's endpoint is re-probed; busy keys are
+  // "name" or "name@host".
+  onRefreshPlugin: (name: string, host?: string) => void;
+  refreshBusy: Record<string, boolean>;
 }
 
 /** "https://x.y:8756/path", "x.y:8756/", "X.Y." → "x.y:8756" (host[:port]). */
@@ -38,6 +49,8 @@ export default function PluginActivationPanel({
   plugins,
   backendOrigin,
   onSaved,
+  onRefreshPlugin,
+  refreshBusy,
 }: Props) {
   if (plugins.length === 0) {
     return <p className="muted">No plugins loaded.</p>;
@@ -49,6 +62,8 @@ export default function PluginActivationPanel({
         Controls where each plugin's tools and branding turn on. Built-in
         hosts come from the plugin manifest; you can add your own (with an
         optional <code>:port</code>). Changes apply on the next message.
+        Click a plugin with the <span aria-hidden>▸</span> chevron to edit
+        its settings (API keys, connector status).
       </p>
       {plugins.map((p) => (
         <PluginCard
@@ -56,6 +71,8 @@ export default function PluginActivationPanel({
           plugin={p}
           backendOrigin={backendOrigin}
           onSaved={onSaved}
+          onRefresh={(host?: string) => onRefreshPlugin(p.name, host)}
+          refreshBusy={refreshBusy}
         />
       ))}
     </div>
@@ -66,17 +83,23 @@ function PluginCard({
   plugin,
   backendOrigin,
   onSaved,
+  onRefresh,
+  refreshBusy,
 }: {
   plugin: PluginInfo;
   backendOrigin: string;
   onSaved: () => void;
+  onRefresh: (host?: string) => void;
+  refreshBusy: Record<string, boolean>;
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   const extras = plugin.extra_hosts ?? [];
   const everywhere = plugin.host_patterns.includes("*");
+  const expandable = !!plugin.settings_schema;
 
   async function persist(next: string[]) {
     setBusy(true);
@@ -119,7 +142,22 @@ function PluginCard({
         borderRadius: 6,
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          cursor: expandable ? "pointer" : undefined,
+        }}
+        role={expandable ? "button" : undefined}
+        aria-expanded={expandable ? open : undefined}
+        onClick={expandable ? () => setOpen((o) => !o) : undefined}
+      >
+        {expandable && (
+          <span aria-hidden style={{ fontSize: 11, width: 12, flexShrink: 0 }}>
+            {open ? "▾" : "▸"}
+          </span>
+        )}
         <strong style={{ fontSize: 13 }}>{plugin.agent_name || plugin.name}</strong>
         {plugin.agent_name && plugin.agent_name !== plugin.name && (
           <code className="muted" style={{ fontSize: 11 }}>{plugin.name}</code>
@@ -201,6 +239,35 @@ function PluginCard({
         <p className="muted" style={{ margin: "6px 0 0", color: "#b00020", fontSize: 11 }}>
           Save failed: {err}
         </p>
+      )}
+
+      {expandable && open && plugin.settings_schema && (
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: "1px solid var(--voitta-border, #d1d5db)",
+          }}
+        >
+          <PluginSettingsPanel
+            pluginName={plugin.name}
+            schema={plugin.settings_schema}
+            connectors={plugin.mcp_connectors}
+            backendOrigin={backendOrigin}
+            onRefreshConnectors={() => onRefresh()}
+            refreshBusy={!!refreshBusy[plugin.name]}
+            hosts={[
+              ...plugin.host_patterns.filter((h) => !h.includes("*")),
+              ...extras,
+            ]}
+            onRefreshHost={(host) => onRefresh(host)}
+            hostBusy={Object.fromEntries(
+              Object.entries(refreshBusy)
+                .filter(([k]) => k.startsWith(`${plugin.name}@`))
+                .map(([k, v]) => [k.slice(plugin.name.length + 1), v]),
+            )}
+          />
+        </div>
       )}
     </div>
   );

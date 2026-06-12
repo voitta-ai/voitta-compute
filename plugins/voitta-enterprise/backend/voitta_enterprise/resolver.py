@@ -72,12 +72,17 @@ def _connector_endpoint() -> tuple[str, str | None]:
             f"VRE MCP connector not registered "
             f"(plugin {plugin!r}, id {cid!r}) — is voitta-enterprise loaded?"
         )
-    url = mcp_registry._read_url(conn.decl)      # noqa: SLF001
+    # No page host in scope here (resolver runs inside script
+    # execution) — endpoint_for falls back to the URL the last
+    # successful refresh used.
+    url = mcp_registry.endpoint_for(conn)
     if not url:
         raise RuntimeError(
-            "VRE MCP url not configured — fill in Settings → voitta-enterprise."
+            "VRE MCP endpoint unknown — no explicit URL configured and no "
+            "successful refresh yet. Open Settings → Plugins and hit "
+            "'Refresh tool list'."
         )
-    token = mcp_registry._read_token(conn.decl)  # noqa: SLF001
+    token = mcp_registry.token_for(conn.decl, url)
     return url, token
 
 
