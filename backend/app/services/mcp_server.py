@@ -301,6 +301,21 @@ def get_server() -> FastMCP:
         )
 
     @mcp.tool()
+    async def mcp_inject_text(session_id: str, text: str) -> dict:
+        """Inject a user message into a bookmarklet chat and execute it.
+
+        Same path the voice assistant uses (``submit_user_text``
+        primitive → Composer's sendMessage → ``@cl.on_message``), minus
+        the microphone. The message renders in the chat pane and runs a
+        normal LLM turn. Returns ``{ok: true}`` once the FE accepted it,
+        or ``{ok: false, error: 'busy'|'empty_text'|...}``.
+        """
+        _log.info("MCP▶ mcp_inject_text called session=%s text_len=%d", session_id, len(text or ""))
+        if not text or not text.strip():
+            return _err("bad_request", "text is required", session_id=session_id)
+        return await _call_in_session(session_id, "submit_user_text", {"text": text})
+
+    @mcp.tool()
     async def mcp_screenshot(session_id: str) -> dict:
         """Silent screenshot of the currently-mounted report pane.
 

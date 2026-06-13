@@ -38,9 +38,10 @@ _PHASE_NAMES = ["Certificates", "Python packages", "Source libraries", "RAG inde
 _WINDOW_W = 580
 _WINDOW_H = 562
 
-# Y positions (Cocoa: bottom = 0) for each phase row's baseline.
-# Each row occupies 72px: name(20) + bar(16) + status(18) + padding.
-_PHASE_Y = [392, 320, 248, 176]
+# Each phase row occupies 72px: name(20) + bar(16) + status(18) + padding.
+# Rows are laid out top-down from below the header (Cocoa: bottom = 0).
+_ROW_H = 72
+_FIRST_ROW_Y = _WINDOW_H - 170  # == the historical first-run layout
 
 
 class _PhaseRow:
@@ -120,32 +121,45 @@ class _PhaseRow:
 
 
 class InstallWindow:
-    """Modal-style installer window with 3 phase rows and a shared log.
+    """Modal-style installer window with phase rows and a shared log.
 
     Window has only the title bar — no close/minimize/zoom buttons —
-    so the user cannot dismiss it mid-setup.
+    so the user cannot dismiss it mid-setup. Defaults render the
+    first-run setup; pass ``phases``/``title``/… for other flows
+    (e.g. the voice-assistant lazy install).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        phases: list[str] | None = None,
+        window_title: str = "Voitta — First-Run Setup",
+        heading: str = "Setting up Voitta for the first time",
+        subtitle_text: str = "This window will close automatically when setup completes.",
+        footer_text: str = (
+            "One-time setup, ~7 min on a fast connection.  "
+            "Do not close this window."
+        ),
+    ) -> None:
+        phase_names = phases if phases is not None else _PHASE_NAMES
+        phase_y = [_FIRST_ROW_Y - _ROW_H * i for i in range(len(phase_names))]
+
         rect = ((0, 0), (_WINDOW_W, _WINDOW_H))
         self._w = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect, NSWindowStyleMaskTitled, NSBackingStoreBuffered, False
         )
-        self._w.setTitle_("Voitta — First-Run Setup")
+        self._w.setTitle_(window_title)
         self._w.setReleasedWhenClosed_(False)
         self._w.center()
 
         cv = self._w.contentView()
 
         # ---- title ----------------------------------------------------------
-        title = NSTextField.labelWithString_("Setting up Voitta for the first time")
+        title = NSTextField.labelWithString_(heading)
         title.setFrame_(((20, _WINDOW_H - 44), (_WINDOW_W - 40, 26)))
         title.setFont_(NSFont.boldSystemFontOfSize_(15))
         cv.addSubview_(title)
 
-        subtitle = NSTextField.labelWithString_(
-            "This window will close automatically when setup completes."
-        )
+        subtitle = NSTextField.labelWithString_(subtitle_text)
         subtitle.setFrame_(((20, _WINDOW_H - 66), (_WINDOW_W - 40, 18)))
         subtitle.setFont_(NSFont.systemFontOfSize_(11))
         subtitle.setTextColor_(NSColor.secondaryLabelColor())
@@ -159,11 +173,11 @@ class InstallWindow:
         cv.addSubview_(sep)
 
         # ---- phase rows -----------------------------------------------------
-        self._rows = [_PhaseRow(cv, y, name) for y, name in zip(_PHASE_Y, _PHASE_NAMES)]
+        self._rows = [_PhaseRow(cv, y, name) for y, name in zip(phase_y, phase_names)]
 
         # ---- log text view --------------------------------------------------
         log_y = 50
-        log_h = _PHASE_Y[3] - log_y - 10
+        log_h = phase_y[-1] - log_y - 10
         scroll = NSScrollView.alloc().initWithFrame_(((20, log_y), (_WINDOW_W - 40, log_h)))
         scroll.setHasVerticalScroller_(True)
         scroll.setBorderType_(2)  # NSBezelBorder
@@ -180,10 +194,7 @@ class InstallWindow:
         self._log = log
 
         # ---- footer ---------------------------------------------------------
-        footer = NSTextField.labelWithString_(
-            "One-time setup, ~7 min on a fast connection.  "
-            "Do not close this window."
-        )
+        footer = NSTextField.labelWithString_(footer_text)
         footer.setFrame_(((20, 20), (_WINDOW_W - 40, 22)))
         footer.setFont_(NSFont.systemFontOfSize_(10))
         footer.setTextColor_(NSColor.tertiaryLabelColor())
@@ -227,6 +238,37 @@ class InstallWindow:
         )
         length = ts.length()
         self._log.scrollRangeToVisible_((length, 0))
+
+    def add_continue_button(self, on_click) -> None:
+        """Add a Continue button to the footer area (used after a
+        non-fatal failure so the user can read the log, then proceed)."""
+        AppHelper.callAfter(self._add_continue_impl, on_click)
+
+    def _add_continue_impl(self, on_click) -> None:
+        from AppKit import NSButton, NSBezelStyleRounded
+        import objc
+
+        class _Target(__import__("Foundation").NSObject):
+            def initWithCallback_(self, cb):
+                self = objc.super(_Target, self).init()
+                if self is None:
+                    return None
+                self._cb = cb
+                return self
+
+            def clicked_(self, _sender):
+                try:
+                    self._cb()
+                except Exception:
+                    pass
+
+        self._continue_target = _Target.alloc().initWithCallback_(on_click)
+        btn = NSButton.alloc().initWithFrame_(((_WINDOW_W - 130, 14), (110, 30)))
+        btn.setTitle_("Continue")
+        btn.setBezelStyle_(NSBezelStyleRounded)
+        btn.setTarget_(self._continue_target)
+        btn.setAction_("clicked:")
+        self._w.contentView().addSubview_(btn)
 
     def close(self) -> None:
         AppHelper.callAfter(self._w.orderOut_, None)
