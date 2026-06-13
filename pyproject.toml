@@ -10,7 +10,7 @@
 [tool.briefcase]
 project_name = "Voitta"
 bundle = "ai.voitta"
-version = "0.1.181"
+version = "0.1.190"
 url = "https://voitta.ai"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -58,6 +58,10 @@ requires = [
     # macOS menu-bar
     "./wheels/rumps-0.4.0-py3-none-any.whl",
     "pyobjc-framework-Cocoa>=10.0",
+    # Route Python stdout/stderr to NSLog so app logs reach
+    # Console.app / `log show` — the briefcase stub otherwise
+    # swallows them entirely.
+    "std-nslog",
     # Installer bootstrap
     "pip",
     "setuptools",
@@ -74,6 +78,7 @@ min_os_version = "14.0"
 # LSUIElement = menu-bar only, no Dock icon.
 info."LSUIElement" = true
 info."NSHumanReadableCopyright" = "© Voitta"
+info."NSMicrophoneUsageDescription" = "Voitta listens for the 'hey voitta' wake phrase to take voice commands. Audio is processed entirely on this Mac."
 
 # ---- hardened runtime entitlements (required for notarisation) ----------
 #
@@ -84,7 +89,10 @@ info."NSHumanReadableCopyright" = "© Voitta"
 # • allow-dyld-environment-variables: briefcase stub sets DYLD_FRAMEWORK_PATH
 #   so the bundled Python.framework is preferred; hardened runtime strips
 #   DYLD_* vars by default.
+# • device.audio-input: microphone capture for the voice assistant;
+#   hardened runtime blocks the mic even with the usage string without it.
 entitlement."com.apple.security.cs.allow-jit" = true
+entitlement."com.apple.security.device.audio-input" = true
 entitlement."com.apple.security.cs.allow-unsigned-executable-memory" = true
 entitlement."com.apple.security.cs.disable-library-validation" = true
 entitlement."com.apple.security.cs.allow-dyld-environment-variables" = true
