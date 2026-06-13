@@ -29,7 +29,11 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
             "ok": False,
             "error": (
                 f"script {name!r} already exists — use edit_script to "
-                "modify or delete_script first"
+                "change it. Do NOT delete_script + define_script: that "
+                "loses history and wastes a turn re-sending the full "
+                "source. Even a full rewrite is one edit_script call "
+                "(find = the entire old source, replace = the new one); "
+                "read the current source with get_script first."
             ),
         }
     result = sandbox.smoke_test(name, code)
@@ -59,10 +63,13 @@ registry.register(
     ToolSpec(
         name="define_script",
         description=(
-            "Create a new script under scripts/<name>/code.py. The script "
+            "Create a NEW script under scripts/<name>/code.py. The script "
             "must define `build(ctx)`. Returns ok=true only if `build` "
             "executes cleanly during a smoke-test; otherwise nothing is "
-            "written and the traceback is returned."
+            "written and the traceback is returned. Fails if the name "
+            "already exists — run list_scripts BEFORE composing code, and "
+            "use edit_script (never delete_script + define_script) to "
+            "change an existing script."
         ),
         input_schema={
             "type": "object",

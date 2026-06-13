@@ -77,18 +77,27 @@ interactive widgets — you embed inside the HTML directly via
 
 ## Before writing OR editing a report — STOP and run this list
 
-1. **`list_scripts`** — see what's there.
+1. **`list_scripts`** — see what's there. Do this BEFORE composing
+   any code: hitting "already exists" after generating a full script
+   wastes the entire generation.
    - When iterating on a report (fixing a bug, tweaking colors,
-     adjusting sizes, changing data), **always `edit_script` the
-     existing one — DO NOT create a new script per attempt.**
-     The user sees one named report evolving, not a graveyard of
-     `random-flow-chart-v2`, `random-flow-chart-v3`, etc.
+     adjusting sizes, changing data, ADDING elements to a scene),
+     **always `edit_script` the existing one — DO NOT create a new
+     script per attempt.** The user sees one named report evolving,
+     not a graveyard of `random-flow-chart-v2`, `random-flow-chart-v3`.
+   - **`delete_script` + `define_script` is NEVER the way to change
+     a script.** It loses history and re-sends the full source. This
+     includes structural rewrites (e.g. switching from f-string to
+     `.replace()` templating): read with `get_script`, then ONE
+     `edit_script` call — targeted edits where possible, or a single
+     edit whose `find` is the entire current source for a full
+     rewrite. Delete only when the user asks to remove a report.
    - Only `define_script` for a genuinely new report (different
-     concept, not a fix of the previous one). Errors on duplicate
-     names — finding that out is a wasted turn.
+     concept, not a fix or evolution of an existing one).
    - `get_script(name)` to read the current source before editing.
-   - `edit_script(name, patches=[{find, replace}])` for targeted
-     changes. Search-replace patches keep diffs small and obvious.
+   - `edit_script(name, edits=[{find, replace}])` for targeted
+     changes. Each `find` must match exactly once; add surrounding
+     context lines to disambiguate. Small patches keep diffs obvious.
 
 2. **`rag_query corpus="docs" query="reports"`** — mandatory. Re-read
    the report contract. Don't trust memory.

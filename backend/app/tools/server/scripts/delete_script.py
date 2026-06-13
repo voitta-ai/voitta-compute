@@ -29,7 +29,10 @@ registry.register(
         name="delete_script",
         description=(
             "Delete a saved script (idempotent — a missing slug is "
-            "reported as removed=false but ok=true)."
+            "reported as removed=false but ok=true). Only for removing a "
+            "report the user no longer wants. NOT an editing mechanism: "
+            "to change or rewrite an existing script use edit_script — "
+            "delete + define_script loses the script's history."
         ),
         input_schema={
             "type": "object",

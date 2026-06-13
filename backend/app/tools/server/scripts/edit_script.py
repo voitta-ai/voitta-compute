@@ -84,9 +84,12 @@ registry.register(
     ToolSpec(
         name="edit_script",
         description=(
-            "Apply ordered search-replace edits to an existing script. "
-            "Each find must match exactly once; the candidate must pass "
-            "smoke-test before persistence."
+            "Apply ordered search-replace edits to an existing script — "
+            "the ONLY way to change an existing script (never delete and "
+            "re-create). Each find must match exactly once; the candidate "
+            "must pass smoke-test before persistence. Prefer small "
+            "targeted edits; for a structural rewrite, a single edit with "
+            "find = the entire current source also works."
         ),
         input_schema={
             "type": "object",

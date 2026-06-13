@@ -48,3 +48,15 @@ wheels/
 # Claude Code local state (scheduled task lock, etc).
 .claude/
 build/
+
+# Standalone voice prototype (1.3 GB: .venv + onnx models + wav). The
+# shipping voice code is backend/app/services/voice*.py, ported from here.
+audio/
+
+# Stray / generated, not part of the package or build.
+src/voitta/
+scripts/reports/
+
+# Runtime logs written next to the app at launch.
+voitta.log
+frontend/voitta.log
