@@ -80,6 +80,58 @@ def set_mcp_debug_enabled(enabled: bool) -> None:
     write(blob)
 
 
+def voice_enabled() -> bool:
+    """Whether the "hey voitta" voice assistant is on. Default **False**
+    — listening to the mic is strictly opt-in via the tray menu's Voice
+    item. Desktop mode only; server mode has no microphone."""
+    try:
+        return bool(read().get("voiceEnabled", False))
+    except Exception:
+        return False
+
+
+def set_voice_enabled(enabled: bool) -> None:
+    """Persist the voice-assistant toggle. Used by the tray menu."""
+    blob: dict[str, Any] = {}
+    try:
+        blob = read()
+    except Exception:
+        blob = {}
+    blob["voiceEnabled"] = bool(enabled)
+    write(blob)
+
+
+# Mic sensitivity: the CEILING for the voice pipeline's adaptive gain
+# (AutoGain), not a fixed multiplier. Quiet/distant mics under-drive the
+# wake spotter, VAD, and transcription so the user "has to yell"; AutoGain
+# boosts toward a target level, and this caps how much boost a very quiet
+# mic may get. 1.0 = off (raw audio). A normal voice is never amplified
+# into clipping regardless of the ceiling.
+MIC_GAIN_MIN = 1.0
+MIC_GAIN_MAX = 24.0
+MIC_GAIN_DEFAULT = 6.0
+
+
+def mic_gain() -> float:
+    """Adaptive-gain ceiling for the voice pipeline. Default 6.0."""
+    try:
+        g = float(read().get("voiceMicGain", MIC_GAIN_DEFAULT))
+    except Exception:
+        return MIC_GAIN_DEFAULT
+    return max(MIC_GAIN_MIN, min(MIC_GAIN_MAX, g))
+
+
+def set_mic_gain(gain: float) -> None:
+    """Persist the mic-sensitivity gain (clamped)."""
+    blob: dict[str, Any] = {}
+    try:
+        blob = read()
+    except Exception:
+        blob = {}
+    blob["voiceMicGain"] = max(MIC_GAIN_MIN, min(MIC_GAIN_MAX, float(gain)))
+    write(blob)
+
+
 def read() -> dict[str, Any]:
     """Return the persisted settings dict, or ``{}`` if no file yet.
 

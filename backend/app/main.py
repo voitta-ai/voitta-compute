@@ -58,6 +58,15 @@ async def _lifespan(_app: FastAPI):
       so the connector list is populated by the time this fires.
     """
     async def _startup_tasks() -> None:
+        # Hand the voice assistant a handle to this server's event loop
+        # so its capture thread can inject utterances via call_fn. Must
+        # run before the (possibly slow) MCP refresh below.
+        try:
+            import asyncio
+            from app.services import voice
+            voice.register_loop(asyncio.get_running_loop())
+        except Exception:
+            logging.getLogger(__name__).exception("voice loop registration failed")
         try:
             from app.services.mcp.registry import refresh_all
             await refresh_all()

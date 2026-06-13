@@ -381,6 +381,9 @@ class VoittaMenuBarApp(rumps.App):
             rumps.MenuItem("Copy bookmarklet", callback=self.copy_bookmarklet),
             rumps.MenuItem("Copy bookmarklet (Salesforce/strict CSP)", callback=self.copy_bridge_bookmarklet),
             rumps.MenuItem("Settings…", callback=self.show_settings),
+            self._make_voice_item(),
+            self._make_mic_sensitivity_item(),
+            rumps.MenuItem("Active sessions…", callback=self.show_sessions),
             None,
             self._server_status_item,
             rumps.MenuItem("Restart server", callback=self.restart_server),
@@ -402,6 +405,85 @@ class VoittaMenuBarApp(rumps.App):
         self._spin_frame: int = 0
         self._last_server_status: str | None = None
 
+        # Voice feedback poller — created on demand, runs at 120 ms only
+        # while the voice assistant is on (live braille level meter needs
+        # a faster cadence than the 400 ms activity tick).
+        self._voice_timer: rumps.Timer | None = None
+        self._voice_last_seq: int = -1
+        self._voice_spin: int = 0
+        self._voice_autostart_done = False
+        self._voice_installing = False
+        self._sessions_window = None  # lazily built SessionsWindow
+
+        # Register the voice command hook now (harmless if voice never
+        # starts) so "tasks voitta" opens the sessions window. The hook
+        # fires on the voice thread → hop to the Cocoa main thread.
+        try:
+            from app.services import voice
+            from PyObjCTools import AppHelper
+            voice.set_command_hook(
+                lambda _phrase: AppHelper.callAfter(self._show_sessions_main)
+            )
+        except Exception:
+            self._log.exception("voice command hook registration failed")
+
+    def _make_voice_item(self) -> rumps.MenuItem:
+        item = rumps.MenuItem("Voice", callback=self.toggle_voice)
+        try:
+            from app.services import user_settings as _us
+            item.state = 1 if _us.voice_enabled() else 0
+        except Exception:
+            item.state = 0
+        self._voice_item = item
+        return item
+
+    # Mic-sensitivity levels (label → adaptive-gain ceiling). AutoGain
+    # boosts quiet/distant mics toward a target level so the wake word
+    # triggers without yelling; the ceiling only caps how much help a
+    # very quiet mic gets — a normal voice is never over-amplified.
+    _MIC_LEVELS = [
+        ("Off (raw)", 1.0),
+        ("Low", 3.0),
+        ("Normal", 6.0),
+        ("High", 12.0),
+        ("Max", 24.0),
+    ]
+
+    def _make_mic_sensitivity_item(self) -> rumps.MenuItem:
+        """Submenu of discrete mic-gain levels with a checkmark on the
+        active one. Applies live (no restart) and persists."""
+        parent = rumps.MenuItem("Mic sensitivity")
+        try:
+            from app.services import user_settings as _us
+            current = _us.mic_gain()
+        except Exception:
+            current = 1.0
+        # Pick the closest preset for the checkmark.
+        active_label = min(
+            self._MIC_LEVELS, key=lambda lv: abs(lv[1] - current)
+        )[0]
+        self._mic_items: dict[str, rumps.MenuItem] = {}
+        for label, _gain in self._MIC_LEVELS:
+            mi = rumps.MenuItem(label, callback=self._set_mic_sensitivity)
+            mi.state = 1 if label == active_label else 0
+            self._mic_items[label] = mi
+            parent.add(mi)
+        self._mic_sensitivity_item = parent
+        return parent
+
+    def _set_mic_sensitivity(self, sender) -> None:
+        gain = dict(self._MIC_LEVELS).get(sender.title, 1.0)
+        try:
+            from app.services import user_settings as _us
+            from app.services import voice
+            _us.set_mic_gain(gain)
+            voice.set_mic_gain_runtime(gain)  # live — no restart
+            self._log.info("voice: mic sensitivity → %s (gain %.1f)", sender.title, gain)
+        except Exception:
+            self._log.exception("set mic sensitivity failed")
+        for label, mi in self._mic_items.items():
+            mi.state = 1 if label == sender.title else 0
+
     # ---- activity poller -------------------------------------------------
 
     _SPIN_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
@@ -410,7 +492,15 @@ class VoittaMenuBarApp(rumps.App):
         from app import activity
         status = _uvicorn_status()
 
-        if status == "starting…":
+        self._maybe_voice_autostart(status)
+        voice_active = self._sync_voice_timer()
+
+        if voice_active:
+            # _tick_voice owns the title while voice is on. Forget the
+            # last-applied color so the normal glyph is re-applied the
+            # moment voice goes off.
+            self._last_color = None
+        elif status == "starting…":
             # Animate a rotating braille ring around V while server boots.
             frame = self._SPIN_FRAMES[self._spin_frame % len(self._SPIN_FRAMES)]
             self._spin_frame += 1
@@ -429,6 +519,123 @@ class VoittaMenuBarApp(rumps.App):
         label = f"Server: {icons.get(status, '')} {status}"
         if self._server_status_item.title != label:
             self._server_status_item.title = label
+
+        # Keep the sessions window live while it's open (sessions come and
+        # go, titles change) — cheap dict read + diff'd Cocoa update.
+        sw = self._sessions_window
+        if sw is not None and sw.is_visible():
+            self._refresh_sessions()
+
+    # ---- voice feedback ----------------------------------------------------
+
+    # Braille level meter: dots fill bottom-up with the mic level.
+    _METER_FRAMES = ["⠀", "⡀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣷", "⣿"]
+
+    def _maybe_voice_autostart(self, status: str) -> None:
+        """Start the voice pipeline once the server is up, if the user had
+        Voice enabled in a previous session."""
+        if self._voice_autostart_done or status != "running":
+            return
+        self._voice_autostart_done = True
+        try:
+            from app.services import user_settings as _us
+            from app.services import voice, voice_install
+            if not _us.voice_enabled() or voice.is_running():
+                return
+            if voice_install.is_ready():
+                self._log.info("voice: autostarting (was enabled)")
+                voice.start()
+            else:
+                # Version bump wiped the userbase packages. Don't pop a
+                # modal uninvited — uncheck and ask for a re-toggle.
+                _us.set_voice_enabled(False)
+                self._voice_item.state = 0
+                rumps.notification(
+                    title=APP_NAME,
+                    subtitle="Voice needs to reinstall components",
+                    message="Open the Voitta menu and click Voice to set it up again.",
+                )
+        except Exception:
+            self._log.exception("voice autostart failed")
+
+    def _sync_voice_timer(self) -> bool:
+        """Start/stop the fast voice render timer to match the pipeline
+        state. Returns True while voice owns the menu-bar title."""
+        try:
+            from app.services import voice
+            active = voice.snapshot()["state"] != "off"
+        except Exception:
+            active = False
+        running = self._voice_timer is not None
+        if active and not running:
+            self._voice_timer = rumps.Timer(self._tick_voice, 0.12)
+            self._voice_timer.start()
+        elif not active and running:
+            self._voice_timer.stop()
+            self._voice_timer = None
+        return active
+
+    def _tick_voice(self, _timer) -> None:
+        from app import activity
+        from app.services import voice
+
+        snap = voice.snapshot()
+        state = snap["state"]
+        if state == "off":
+            return
+
+        if snap["seq"] != self._voice_last_seq:
+            self._voice_last_seq = snap["seq"]
+            self._voice_notify(state, snap["detail"])
+
+        self._voice_spin += 1
+        spinner = self._SPIN_FRAMES[self._voice_spin % len(self._SPIN_FRAMES)]
+        meter = self._METER_FRAMES[
+            max(0, min(len(self._METER_FRAMES) - 1,
+                       round(snap["level"] * (len(self._METER_FRAMES) - 1))))
+        ]
+
+        if state == "loading":
+            segments = [(spinner, "gray"), ("V", "gray")]
+        elif state == "listening":
+            # Teal level meter + V in whatever the activity color is.
+            segments = [(meter, "teal"), ("V", activity.current_color())]
+        elif state == "recording":
+            # Red meter; V blinks red to make "it's capturing" unmissable.
+            v_col = "red" if (self._voice_spin // 3) % 2 == 0 else "gray"
+            segments = [(meter, "red"), ("V", v_col)]
+        elif state == "transcribing":
+            segments = [(spinner, "purple"), ("V", "purple")]
+        elif state == "sending":
+            segments = [(spinner, "blue"), ("V", "blue")]
+        elif state == "sent":
+            segments = [("✓", "green"), ("V", "green")]
+        elif state == "no_chat":
+            segments = [("!", "orange"), ("V", "orange")]
+        else:  # error
+            segments = [("!", "red"), ("V", "red")]
+
+        self._apply_title_segments(segments)
+
+    def _voice_notify(self, state: str, detail: str) -> None:
+        """One-shot notifications on voice state transitions."""
+        try:
+            if state == "no_chat":
+                rumps.notification(
+                    title=APP_NAME,
+                    subtitle="Heard you — but no active chat",
+                    message=(f"“{detail}” — open a page with the Voitta widget "
+                             "and click into it.") if detail else
+                            "Open a page with the Voitta widget and click into it.",
+                )
+            elif state == "error":
+                rumps.notification(
+                    title=APP_NAME,
+                    subtitle="Voice assistant problem",
+                    message=detail or "unknown error",
+                )
+        except Exception:
+            pass
 
     @staticmethod
     def _ns_color_for(name: str):
@@ -465,6 +672,39 @@ class VoittaMenuBarApp(rumps.App):
             self.title = text
             return
         button.setAttributedTitle_(attributed)
+
+    def _apply_title_segments(self, segments: list[tuple[str, str]]) -> None:
+        """Render the status-item title from (text, color) segments —
+        lets the voice meter and the V glyph carry different colors."""
+        try:
+            from AppKit import (
+                NSFont,
+                NSFontAttributeName,
+                NSForegroundColorAttributeName,
+                NSMutableAttributedString,
+            )
+            from Foundation import NSAttributedString
+        except ImportError:
+            self.title = "".join(t for t, _ in segments)
+            return
+        out = NSMutableAttributedString.alloc().init()
+        font = NSFont.boldSystemFontOfSize_(14)
+        for text, color_name in segments:
+            attrs = {
+                NSForegroundColorAttributeName: self._ns_color_for(color_name),
+                NSFontAttributeName: font,
+            }
+            out.appendAttributedString_(
+                NSAttributedString.alloc().initWithString_attributes_(text, attrs)
+            )
+        try:
+            button = self._nsapp.nsstatusitem.button()
+        except Exception:
+            button = None
+        if button is None:
+            self.title = "".join(t for t, _ in segments)
+            return
+        button.setAttributedTitle_(out)
 
     # ---- menu callbacks --------------------------------------------------
 
@@ -518,6 +758,129 @@ class VoittaMenuBarApp(rumps.App):
                 pass
         else:
             _alert(title=APP_NAME, message="Couldn't access the clipboard.", ok="OK")
+
+    def toggle_voice(self, sender) -> None:
+        """Voice menu item: toggle the "hey voitta" assistant.
+
+        First enable lazy-installs the voice packages + models behind a
+        progress window (they're ~1.3 GB on disk all-in — not something
+        to force on users who never speak to their Mac).
+        """
+        try:
+            from app.services import user_settings as _us
+            from app.services import voice, voice_install
+        except Exception:
+            self._log.exception("voice imports failed")
+            return
+
+        if voice.is_running():
+            voice.stop()
+            sender.state = 0
+            _us.set_voice_enabled(False)
+            self._log.info("voice: disabled via menu")
+            return
+
+        if _installing or self._voice_installing:
+            _alert(
+                title=APP_NAME,
+                message="Setup is already in progress — try again when it finishes.",
+                ok="OK",
+            )
+            return
+
+        if voice_install.is_ready():
+            voice.start()
+            sender.state = 1
+            _us.set_voice_enabled(True)
+            self._log.info("voice: enabled via menu")
+            return
+
+        self._voice_setup_then_start(sender)
+
+    def _voice_setup_then_start(self, sender) -> None:
+        """Show the voice install window and run the 3 phases on a worker
+        thread; start the pipeline and check the menu item on success."""
+        from PyObjCTools import AppHelper
+        from app.install_window import InstallWindow
+        from app.services import user_settings as _us
+        from app.services import voice, voice_install
+
+        log = self._log
+        self._voice_installing = True
+        win = InstallWindow(
+            phases=["Voice packages", "Wake-word model (15 MB)", "Speech model (1.6 GB)"],
+            window_title="Voitta — Voice Setup",
+            heading="Setting up the voice assistant",
+            subtitle_text="One-time download. This window closes automatically.",
+            footer_text="Models run entirely on this Mac — nothing is sent to the cloud.",
+        )
+
+        def _worker() -> None:
+            try:
+                # Phase 0 — pip packages
+                win.start_phase(0, "Preparing…")
+                if not voice_install.packages_missing():
+                    win.skip_phase(0, "Already installed")
+                else:
+                    ok = voice_install.install_packages(
+                        lambda c, t, label: win.update_phase(0, c, t, label)
+                    )
+                    if not ok:
+                        _fail(0, "Install failed — see log")
+                        return
+                    win.finish_phase(0)
+
+                # Phase 1 — wake-word + VAD models (download_kws_model
+                # fetches both; skip only when BOTH are present)
+                win.start_phase(1, "Downloading…")
+                if not voice_install.kws_model_missing() and not voice_install.vad_model_missing():
+                    win.skip_phase(1, "Already downloaded")
+                elif voice_install.download_kws_model(
+                    lambda c, t, label: win.update_phase(1, c, t, label)
+                ):
+                    win.finish_phase(1)
+                else:
+                    _fail(1, "Download failed — see log")
+                    return
+
+                # Phase 2 — whisper model
+                win.start_phase(2, "Downloading…")
+                if not voice_install.whisper_model_missing():
+                    win.skip_phase(2, "Already downloaded")
+                elif voice_install.download_whisper_model(
+                    lambda c, t, label: win.update_phase(2, c, t, label)
+                ):
+                    win.finish_phase(2)
+                else:
+                    _fail(2, "Download failed — see log")
+                    return
+
+                def _done() -> None:
+                    win.close()
+                    voice.start()
+                    sender.state = 1
+                    _us.set_voice_enabled(True)
+                    log.info("voice: installed and enabled")
+                AppHelper.callAfter(_done)
+            finally:
+                self._voice_installing = False
+
+        def _fail(phase: int, note: str) -> None:
+            win.fail_phase(phase, note)
+            detail = voice_install.last_failure_detail or "Unknown error"
+            log.error("voice setup failed (phase %d): %s", phase, detail)
+
+            def _show() -> None:
+                win.close()
+                _alert(
+                    title="Voice setup failed",
+                    message=f"{detail[:800]}\n\nClick Voice in the menu to retry.",
+                    ok="OK",
+                )
+            AppHelper.callAfter(_show)
+
+        win.show()
+        threading.Thread(target=_worker, name="voitta-voice-setup", daemon=True).start()
 
     def show_settings(self, _sender) -> None:
         """Status dialog with the MCP-debug toggle.
@@ -590,6 +953,87 @@ class VoittaMenuBarApp(rumps.App):
         # Open the Voitta page with ?workspace=1 so the frontend auto-opens
         # the workspace panel on load.
         webbrowser.open(f"{_server_url()}?workspace=1")
+
+    # ---- active sessions window ("tasks voitta") ---------------------------
+
+    def _collect_sessions(self):
+        """(sessions, active_id) for the window — connected first, newest
+        first. Read straight from the in-process session registry."""
+        try:
+            from app.services import cl_sessions
+            records = cl_sessions.snapshot()
+            active_id = cl_sessions.active_session_id()
+        except Exception:
+            self._log.exception("collect sessions failed")
+            return [], None
+        # Connected sessions only, most-recently-seen first.
+        live = [r for r in records if r.get("connected")]
+        live.sort(key=lambda r: r.get("last_seen", 0.0), reverse=True)
+        return live, active_id
+
+    def show_sessions(self, _sender=None) -> None:
+        """Menu callback — already on the main thread."""
+        self._show_sessions_main()
+
+    def _show_sessions_main(self) -> None:
+        """Build (once) and show the sessions window. MAIN THREAD ONLY —
+        NSWindow creation off the main thread is unsafe."""
+        try:
+            if self._sessions_window is None:
+                from app.sessions_window import SessionsWindow
+                self._sessions_window = SessionsWindow(
+                    on_select=self._on_session_selected
+                )
+                self._sessions_window.set_refresh_handler(self._refresh_sessions)
+            sessions, active_id = self._collect_sessions()
+            self._sessions_window.show(sessions, active_id)
+        except Exception:
+            self._log.exception("show sessions window failed")
+
+    def _refresh_sessions(self) -> None:
+        if self._sessions_window is None:
+            return
+        sessions, active_id = self._collect_sessions()
+        # Skip the Cocoa rebuild unless something visible actually changed
+        # (the 0.4s poller would otherwise rebuild rows continuously).
+        sig = (active_id, tuple(
+            (s.get("session_id"), s.get("title"), s.get("url"),
+             s.get("host"), s.get("connected"))
+            for s in sessions
+        ))
+        if sig == getattr(self, "_sessions_sig", None):
+            return
+        self._sessions_sig = sig
+        self._sessions_window.update(sessions, active_id)
+
+    def _on_session_selected(self, session_id: str) -> None:
+        """Row click: make this session the active (voice-routed) one and
+        best-effort raise its tab. Browser security usually blocks raising
+        a background tab, so the reliable effect is the active-session
+        switch; the window highlight moves to confirm it."""
+        try:
+            from app.services import cl_sessions
+            cl_sessions.set_active(session_id)
+            self._log.info("sessions: active set to %s", session_id)
+        except Exception:
+            self._log.exception("set active session failed")
+        # Best-effort tab focus (often a no-op on background tabs).
+        try:
+            import asyncio
+            from app.services import voice
+            from app.services.mcp_server import _call_in_session
+            for loop in voice._loops:  # noqa: SLF001
+                asyncio.run_coroutine_threadsafe(
+                    _call_in_session(
+                        session_id, "eval_js",
+                        {"js": "window.focus()", "await_ms": 1500},
+                    ),
+                    loop,
+                )
+                break
+        except Exception:
+            pass
+        self._refresh_sessions()
 
     def recreate_certs(self, _sender) -> None:
         """Regenerate the TLS cert pair via mkcert.
@@ -728,6 +1172,12 @@ class VoittaMenuBarApp(rumps.App):
         # rumps's default Quit bypasses our cleanup. Funnel through here
         # so we can shut uvicorn down explicitly in future revisions
         # (currently relies on daemon-thread reaping).
+        try:
+            from app.services import voice
+            if voice.is_running():
+                voice.stop(timeout=3.0)
+        except Exception:
+            pass
         rumps.quit_application()
 
 
@@ -738,6 +1188,28 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    # Dedicated, uvicorn-proof log for our own code. When uvicorn boots it
+    # runs logging.config.dictConfig (on app import), which stops voitta.*
+    # records from reaching the stderr→voitta.log redirect — so everything
+    # after startup (voice errors, tool dispatch, session events) used to
+    # vanish. A RotatingFileHandler attached directly to the "voitta"
+    # logger is not touched by that dictConfig, so it keeps writing.
+    try:
+        from logging.handlers import RotatingFileHandler
+        _app_log = Path(USER_DATA_ROOT) / "voitta-app.log"
+        _h = RotatingFileHandler(_app_log, maxBytes=5_000_000, backupCount=3)
+        _h.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        _vlog = logging.getLogger("voitta")
+        _vlog.setLevel(logging.INFO)
+        # Avoid duplicate handlers across reloads / re-entry.
+        if not any(isinstance(h, RotatingFileHandler) for h in _vlog.handlers):
+            _vlog.addHandler(_h)
+        log.info("voitta-app.log handler installed at %s", _app_log)
+    except Exception:
+        log.exception("could not install voitta-app.log handler")
 
     # Chainlit reads CHAINLIT_APP_ROOT at module import time to set
     # FILES_DIRECTORY. Inside a frozen .app getcwd() returns "/" (read-only),

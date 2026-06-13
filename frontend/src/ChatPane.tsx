@@ -52,14 +52,55 @@ export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connect]);
 
-  // Tell the backend which host the bookmarklet was injected into.
+  // Tell the backend which host/page/title the bookmarklet sits on — the
+  // active-sessions window ("tasks voitta") renders these per row. Title
+  // can change after load (SPAs), so observe <title> and re-post.
   useEffect(() => {
     const socket = session?.socket;
     if (!socket) return;
-    const post = () => windowMessage(`host:${location.host}`);
+    const post = () => {
+      windowMessage(`host:${location.host}`);
+      windowMessage(`url:${location.href}`);
+      windowMessage(`title:${document.title}`);
+    };
     post();
     socket.on("connect", post);
-    return () => { socket.off("connect", post); };
+
+    const titleEl = document.querySelector("title");
+    let obs: MutationObserver | null = null;
+    if (titleEl) {
+      obs = new MutationObserver(() => {
+        windowMessage(`title:${document.title}`);
+        windowMessage(`url:${location.href}`);
+      });
+      obs.observe(titleEl, { childList: true });
+    }
+    return () => {
+      socket.off("connect", post);
+      obs?.disconnect();
+    };
+  }, [session, windowMessage]);
+
+  // Focus beacon: mark this session as the active one whenever the host
+  // tab gains focus (last-focused-wins on the backend — no blur message).
+  // The voice assistant routes utterances to the last-focused session.
+  useEffect(() => {
+    const socket = session?.socket;
+    if (!socket) return;
+    const beacon = () => {
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        windowMessage("focus:1");
+      }
+    };
+    window.addEventListener("focus", beacon);
+    document.addEventListener("visibilitychange", beacon);
+    socket.on("connect", beacon);
+    beacon();
+    return () => {
+      window.removeEventListener("focus", beacon);
+      document.removeEventListener("visibilitychange", beacon);
+      socket.off("connect", beacon);
+    };
   }, [session, windowMessage]);
 
   // ``loading`` is true between ``task_start`` and ``task_end`` socket

@@ -46,6 +46,11 @@ class PageInfo:
 
 _BY_ID: dict[str, PageInfo] = {}
 
+# Registry-wide pointer to the session whose host tab most recently
+# gained focus — (session_id, timestamp). Set from the FE's ``focus:1``
+# beacon; consumed by the voice assistant to route utterances.
+_last_focused: tuple[str, float] | None = None
+
 
 def record_chat_start(session_id: str, user_agent: str | None = None) -> PageInfo:
     info = _BY_ID.get(session_id)
@@ -79,6 +84,12 @@ def record_window_message(session_id: str, message: str) -> None:
     info.last_seen = time.time()
     if not isinstance(message, str):
         return
+    if message.startswith("focus:"):
+        global _last_focused
+        now = time.time()
+        info.extras["focused_at"] = now
+        _last_focused = (session_id, now)
+        return
     for key in ("host", "url", "title", "user_agent"):
         prefix = key + ":"
         if message.startswith(prefix):
@@ -86,6 +97,49 @@ def record_window_message(session_id: str, message: str) -> None:
             return
     # Unrecognised — stash so we can debug what the FE is sending.
     info.extras.setdefault("raw_messages", []).append(message[:200])
+
+
+def _live_session_ids() -> set[str]:
+    try:
+        from chainlit.session import ws_sessions_id  # type: ignore
+        return set(ws_sessions_id.keys())
+    except Exception:
+        return set()
+
+
+def get_active_session() -> PageInfo | None:
+    """The session voice input should go to: the last-focused session if
+    its socket is still live, else the most recently seen live session,
+    else ``None``."""
+    live = _live_session_ids()
+    if _last_focused is not None:
+        sid, _ts = _last_focused
+        info = _BY_ID.get(sid)
+        if info is not None and sid in live:
+            return info
+    candidates = [i for i in _BY_ID.values() if i.session_id in live]
+    if candidates:
+        return max(candidates, key=lambda i: i.last_seen)
+    return None
+
+
+def set_active(session_id: str) -> bool:
+    """Force ``session_id`` to be the active session (voice routing
+    target), as if its tab had just gained focus. Used by the sessions
+    window's cmd-tab-style row selection. Returns False if unknown."""
+    global _last_focused
+    if session_id not in _BY_ID:
+        return False
+    now = time.time()
+    _BY_ID[session_id].extras["focused_at"] = now
+    _last_focused = (session_id, now)
+    return True
+
+
+def active_session_id() -> str | None:
+    """Session id voice input currently routes to, or None."""
+    info = get_active_session()
+    return info.session_id if info else None
 
 
 def forget(session_id: str) -> None:
@@ -104,11 +158,7 @@ def snapshot() -> list[dict[str, Any]]:
     """Wire-friendly dump for the MCP ``mcp_sessions`` tool. Joined with
     Chainlit's own session registry so we can flag ids that no longer
     have a live socket."""
-    try:
-        from chainlit.session import ws_sessions_id  # type: ignore
-        live_ids = set(ws_sessions_id.keys())
-    except Exception:
-        live_ids = set()
+    live_ids = _live_session_ids()
     out: list[dict[str, Any]] = []
     for info in _BY_ID.values():
         d = asdict(info)

@@ -1,4 +1,4 @@
-import { callFnState } from "@chainlit/react-client";
+import { callFnState, useChatData, useChatInteract } from "@chainlit/react-client";
 import { useEffect } from "react";
 import { useRecoilState, useSetRecoilState } from "recoil";
 import { activeTabState, reportCollapsedState, reportsState } from "../report/state";
@@ -10,6 +10,8 @@ export default function CallFnRouter() {
   const [reports, setReports] = useRecoilState(reportsState);
   const setActiveTab = useSetRecoilState(activeTabState);
   const setCollapsed = useSetRecoilState(reportCollapsedState);
+  const { sendMessage } = useChatInteract();
+  const { loading } = useChatData();
 
   useEffect(() => {
     if (!callFn) return;
@@ -45,6 +47,19 @@ export default function CallFnRouter() {
             a.name ? prev.filter((r) => r.name !== a.name) : []
           );
           result = { ok: true };
+        } else if (name === "submit_user_text") {
+          // Inject a user message as if typed in the Composer — same
+          // sendMessage path, so the BE sees a normal user_message.
+          // Used by the voice assistant (and the MCP debug backdoor).
+          const text = String((args as { text?: unknown })?.text ?? "").trim();
+          if (!text) {
+            result = { ok: false, error: "empty_text" };
+          } else if (loading) {
+            result = { ok: false, error: "busy", message: "a turn is already running" };
+          } else {
+            sendMessage({ output: text, name: "user", type: "user_message" }, []);
+            result = { ok: true };
+          }
         } else {
           const impl = primitives[name];
           result = impl
@@ -60,7 +75,7 @@ export default function CallFnRouter() {
         setCallFn(undefined);
       }
     })();
-  }, [callFn, setCallFn, setReports, setActiveTab, setCollapsed]);
+  }, [callFn, setCallFn, setReports, setActiveTab, setCollapsed, sendMessage, loading]);
 
   return null;
 }
