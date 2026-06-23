@@ -46,6 +46,19 @@ export default function StepView({ step, elements, backendOrigin }: Props) {
       </div>
     );
   }
+  if (step.type === "run") {
+    // Live status line (the Claude subscription brain's "busy" indicator:
+    // "⠋ Working… · 12s · 3,240 tokens"). The text carries its own animated
+    // braille spinner from the backend ticker, so we just render it; the
+    // backend removes the step when the turn ends.
+    const text = step.output ? String(step.output) : "";
+    if (!text) return null;
+    return (
+      <div className="status-line status-running">
+        <span className="status-text">{text}</span>
+      </div>
+    );
+  }
   if (step.type === "tool") {
     // step.streaming is unreliable for cl.Step — use output presence instead.
     // Output is only written by the backend when the tool finishes.

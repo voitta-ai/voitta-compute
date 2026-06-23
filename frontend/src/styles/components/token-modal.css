@@ -1,0 +1,93 @@
+/* Inline token prompt (TokenPromptModal) — rendered inside the chat pane,
+   above the composer. Themed with the same tokens as the composer/settings so
+   it matches light and dark, and never inherits the host page's colors. */
+
+.token-inline {
+  margin: 8px 12px;
+  padding: 12px 14px;
+  background: var(--voitta-surface);
+  color: var(--voitta-text);
+  border: 1px solid var(--voitta-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.token-inline-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--voitta-text);
+}
+
+.token-inline-body {
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--voitta-text);
+}
+
+.token-inline-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  background: var(--voitta-code-bg);
+  color: var(--voitta-text);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.token-inline-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--voitta-border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+}
+
+.token-inline-input:focus {
+  outline: none;
+  border-color: var(--voitta-accent);
+}
+
+.token-inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.token-inline-actions button {
+  padding: 7px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.token-inline-cancel {
+  background: transparent;
+  color: var(--voitta-text);
+  border: 1px solid var(--voitta-border);
+}
+
+.token-inline-submit {
+  background: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+  border: 1px solid var(--voitta-accent);
+}
+
+.token-inline-submit:hover:not(:disabled) {
+  background: var(--voitta-accent-hover);
+}
+
+.token-inline-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.token-inline-note {
+  font-size: 11px;
+  color: var(--voitta-text-muted);
+}

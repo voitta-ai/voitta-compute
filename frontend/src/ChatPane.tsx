@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import MessageList from "./chat/MessageList";
 import Composer from "./chat/Composer";
+import TokenPromptModal from "./TokenPromptModal";
 import type { ImageAttachment } from "./lib/image-attach";
 import { encodeFiles } from "./lib/attachments";
 import { useAuthConnect } from "./lib/useAuthConnect";
@@ -23,7 +24,10 @@ interface Props {
 }
 
 export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) {
-  const { connect, disconnect, session } = useAuthConnect(backendOrigin);
+  // useAuthConnect is Chainlit's useChatSession, which takes no args — the
+  // connection target is configured on the ChainlitContext provider, not here.
+  // (backendOrigin is still used below for socket transport selection.)
+  const { connect, disconnect, session } = useAuthConnect();
   const { messages } = useChatMessages();
   const { loading, elements } = useChatData();
   const { sendMessage, stopTask, uploadFile, windowMessage } = useChatInteract();
@@ -157,6 +161,7 @@ export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) 
             : "Open ⚙ Settings and add an API key."
         }
       />
+      <TokenPromptModal />
       <Composer
         busy={busy}
         attachments={attachments}

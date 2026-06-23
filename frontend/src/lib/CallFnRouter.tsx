@@ -4,6 +4,7 @@ import { useRecoilState, useSetRecoilState } from "recoil";
 import { activeTabState, reportCollapsedState, reportsState } from "../report/state";
 import type { ShowHtmlReportArgs } from "../report/types";
 import { primitives } from "./primitives";
+import { requestToken } from "./tokenPrompt";
 
 export default function CallFnRouter() {
   const [callFn, setCallFn] = useRecoilState(callFnState);
@@ -60,6 +61,14 @@ export default function CallFnRouter() {
             sendMessage({ output: text, name: "user", type: "user_message" }, []);
             result = { ok: true };
           }
+        } else if (name === "prompt_claude_token") {
+          // Open the masked-input modal and return the token over this ACK.
+          // The value never goes through sendMessage, so it never persists to
+          // a chat step or the conversation DB.
+          const instructions = String(
+            (args as { instructions?: unknown })?.instructions ?? "",
+          );
+          result = await requestToken(instructions);
         } else {
           const impl = primitives[name];
           result = impl

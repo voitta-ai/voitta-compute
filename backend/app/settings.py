@@ -236,7 +236,23 @@ def redacted_for_wire(s: UserSettings | None = None) -> dict[str, Any]:
         "has_api_keys": {p: bool(v) for p, v in keys.items()},
         "googleOAuth": g,
         "plugins": dict(blob.get("plugins") or {}),
+        # Claude (subscription) brain: whether the Claude Code engine is
+        # installed (gates the selector option) and whether this user has a
+        # working-or-stored token (drives the "connected" hint). Token status
+        # is per-user — resolves under the current-user contextvar.
+        "agent_sdk": _agent_sdk_status(),
     }
+
+
+def _agent_sdk_status() -> dict[str, Any]:
+    try:
+        from app.services.agent_sdk import is_available
+        from app.services.agent_sdk.credentials import has_token
+
+        return {"available": is_available(), "has_token": has_token()}
+    except Exception:
+        logger.exception("agent_sdk status probe failed")
+        return {"available": False, "has_token": False}
 
 
 def api_key_for(provider: str) -> str | None:

@@ -12,6 +12,9 @@ dependencies = [
   "anthropic>=0.39",
   "openai>=1.50",
   "google-genai>=0.3",
+  # Claude Agent SDK — the 4th "brain" (Claude Pro/Max subscription via the
+  # Claude Code engine).
+  "claude-agent-sdk>=0.2.82",
   "python-multipart",
   "matplotlib>=3.8",
   "plotly>=5.20",

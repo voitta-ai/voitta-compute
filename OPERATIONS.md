@@ -38,9 +38,16 @@ Voitta Compute is a macOS menu-bar app ([backend/app/desktop.py](backend/app/des
 `127.0.0.1:12358` and plain-HTTP on `127.0.0.1:12359`. A **bookmarklet**
 injects a self-contained React widget (`widget.js`) into any page the user is
 on; the widget opens a Chainlit websocket back to the local backend, where an
-LLM **agent loop** runs chat turns with a host-gated tool registry. Tools are
+LLM **agent loop** runs chat turns with a host-gated tool registry. The user
+picks one of **four "brains"**: three API providers (`anthropic`, `openai`,
+`gemini`) that share the normalised in-process agent loop, plus
+**`claude_code`** — the Claude Agent SDK driven by a Claude Pro/Max
+*subscription* (no API key; a one-time OAuth token), which runs the Claude Code
+engine as a subprocess and owns its own conversation + session store. Tools are
 either *server-side* (Python: scripts, RAG, storage) or *hybrid* (round-trip
-into the user's browser tab: `browser_eval`, screenshots, plugin scrapers).
+into the user's browser tab: `browser_eval`, screenshots, plugin scrapers); the
+same tool suite is bridged to the subscription brain over an in-process MCP
+server.
 Plugins extend every layer — system prompt, Python tools, browser primitives,
 settings panels, and remote **MCP servers** whose tools get prefixed and
 merged into the same registry.
@@ -60,6 +67,7 @@ flowchart TB
     subgraph app["FastAPI app (app.main:app) — :12358 TLS / :12359 plain"]
         CL["Chainlit mount /chainlit<br/>(socket.io, threads, steps)"]
         AG["agent.py run_turn()<br/>LLM loop: anthropic · openai · gemini"]
+        ASDK["services/agent_sdk/*<br/>4th brain: Claude Code engine<br/>(subscription, own session store)"]
         REG["tools/registry.py<br/>host-gated ToolSpec registry"]
         PLG["plugins.py loader<br/>manifest → prompt · tools · MCP"]
         MCPC["services/mcp/*<br/>connectors → synthetic ToolSpecs"]
@@ -80,6 +88,9 @@ flowchart TB
 
     W <-->|"socket.io ws"| CL
     CL --> AG --> REG
+    CL -->|"provider == claude_code"| ASDK
+    ASDK -->|in-process MCP bridge| REG
+    ASDK -->|subprocess| ENG["Claude Code engine (Node)<br/>own session store under<br/>CLAUDE_CONFIG_DIR/projects/"]
     AG -->|hybrid tools| PRIM
     PLG --> REG
     PLG --> MCPC -->|streamable-http| REMOTE
@@ -103,6 +114,11 @@ flowchart TB
   site the bookmarklet was clicked on.
 - Settings are re-read from disk **per turn / per call** (no restart needed
   for provider, model, API key, or MCP credential changes).
+- The three API providers share the normalised loop and are **freely
+  interchangeable mid-conversation** (the transcript is provider-neutral). The
+  `claude_code` brain is the exception: it owns its own session, so its history
+  lives in the Claude Code engine's store (not `conversations.sqlite`) and is
+  surfaced by a mode-aware dropdown rather than via Chainlit thread resume.
 - The script runtime is a **power tool, not a sandbox** — user scripts run
   with full Python builtins in the backend process (thread-pooled, 120 s
   timeout).
@@ -142,7 +158,7 @@ without re-notarising.
 | Phase | Check | Action | Where it lands |
 |-------|-------|--------|----------------|
 | 0 Certificates | `certs.is_present()` | `mkcert -install` + `mkcert 127.0.0.1 localhost` (bundled mkcert binary preferred) | `<PROJECT_ROOT>/certs/127.0.0.1+1{,-key}.pem` |
-| 1 Python packages | `installer.is_complete()` (install_state.json) | pip-install `_CORE_HEAVY_PACKAGES` (fastmcp, chainlit, anthropic, openai, google-genai, numpy, pandas, scipy, matplotlib, plotly, chromadb, bm25s, sqlalchemy, …) + plugin-declared deps, `--find-links` bundled wheels | `userbase/lib/python3.x/site-packages` (PIP_PREFIX) |
+| 1 Python packages | `installer.is_complete()` (install_state.json) | pip-install `_CORE_HEAVY_PACKAGES` (fastmcp, chainlit, anthropic, openai, google-genai, claude-agent-sdk, numpy, pandas, scipy, matplotlib, plotly, chromadb, bm25s, sqlalchemy, …) + plugin-declared deps, `--find-links` bundled wheels | `userbase/lib/python3.x/site-packages` (PIP_PREFIX) |
 | 2 Source libraries | `installer.lib_sources_need_update()` (SHA stamp vs bundled `code_sources_version.txt`) | shallow-clone the pinned submodules | `<data>/lib-sources/` (elk, elkjs, jinja, three.js) |
 | 3 RAG indexes | `rag_build.is_built()` (content/SHA stamps) | run [scripts/build_rag.py](scripts/build_rag.py) in-process via `runpy` | `<PROJECT_ROOT.parent>/rag/` |
 
@@ -151,6 +167,20 @@ Version-gated wipe ([backend/app/installer.py](backend/app/installer.py)
 shell wipes `userbase/`, `backend/certs/`, and `install_state.json` so phases
 0–1 re-run cleanly. The RAG index is **not** wiped — its own content stamps
 decide whether a rebuild is needed.
+
+Phase 1 installs the `claude-agent-sdk` **Python driver**, but the Claude Code
+**engine** (Node binary on `$PATH`) is a separate user-side prerequisite the
+app does not bundle. The subscription brain probes for it at runtime
+(`is_available()`) and the selector option stays hidden when it's absent — so
+the three API providers work with no extra install.
+
+> **numpy is pinned `>=1.26,<2.5`.** The ceiling is numba's (numba is pulled in
+> by the voice assistant's `mlx_whisper`). Without it the core install resolves
+> numpy 2.5, the running process imports it, and a *later* voice install
+> downgrades numpy on disk to 2.4.x while the live process keeps 2.5 in memory —
+> numba's import-time check then crashes the voice thread (red tray icon). The
+> cap keeps one numba-compatible numpy from boot. Bump it when numba supports
+> numpy 2.5+. See §12 (Voice assistant).
 
 ### Tray menu
 
@@ -326,6 +356,41 @@ Details that matter operationally
   only; other providers get a textual note).
 - **Caps**: `max_tool_iterations` (default 25) and `max_tokens` (default
   24576) come from settings on every turn.
+
+### The 4th brain: Claude (subscription) via the Agent SDK
+
+When the selected provider is `claude_code`,
+[chainlit_app.py](backend/app/chainlit_app.py) forks **before** the normalised
+agent loop and routes to
+[backend/app/services/agent_sdk/](backend/app/services/agent_sdk/) instead. The
+three API providers above are untouched by this path.
+
+- **Runtime** ([runtime.py](backend/app/services/agent_sdk/runtime.py)): each
+  turn is one `query()` against the Claude Code engine (a Node subprocess).
+  Multi-turn continuity is `resume=<session_id>` (continue-only — no fork). SDK
+  events map to the same `cl.Message` / `cl.Step` primitives the main loop uses.
+- **Tools** ([bridge.py](backend/app/services/agent_sdk/bridge.py)): the *same*
+  host-gated registry suite is exposed to the engine via an in-process MCP
+  server (`mcp__voitta__<tool>`); a `can_use_tool` allowlist denies the engine's
+  own built-in bash/file/web tools so it acts only through Voitta's tools.
+- **Isolation** ([config.py](backend/app/services/agent_sdk/config.py)): a
+  per-user `CLAUDE_CONFIG_DIR` and a **pinned, deterministic `cwd`** (sessions
+  are keyed by encoded cwd, so it must not drift) under the user's data root.
+  The subprocess env injects `CLAUDE_CODE_OAUTH_TOKEN` and strips
+  `ANTHROPIC_API_KEY` (the API key would otherwise outrank the subscription
+  token).
+- **Lazy import**: `claude-agent-sdk` is installed at runtime by the installer
+  (like the other heavy LLM deps), so every SDK import is guarded — a missing
+  SDK degrades the brain to "unavailable" rather than crashing app boot.
+- **History**: sessions are listed/restored from the engine's own store via
+  [sessions.py](backend/app/services/agent_sdk/sessions.py) +
+  [routes/agent_sdk.py](backend/app/routes/agent_sdk.py) — see §12.
+- **Busy feedback**: a single self-animating status line (`cl.Step` `type="run"`,
+  rendered by [StepView.tsx](frontend/src/chat/StepView.tsx)) shows
+  `⠋ Working… · Ns · N tokens` — driven by a 1 s background ticker so the turn
+  stays lively during the silent thinking gaps, with the token count summed
+  from each `AssistantMessage.usage`. It's the only "busy" element (tool steps
+  render themselves) and is `remove()`d when the turn ends — no footer.
 
 ---
 
@@ -716,7 +781,8 @@ One nested JSON blob, atomic-written (tmpfile + `os.replace`)
 {
   "provider": "anthropic",
   "api_keys":  {"anthropic": "sk-…"},
-  "models":    {"anthropic": "claude-sonnet-4-6", "openai": "gpt-4o", "gemini": "gemini-2.0-flash-exp"},
+  "models":    {"anthropic": "claude-sonnet-4-6", "openai": "gpt-4o",
+                "gemini": "gemini-2.0-flash-exp", "claude_code": "claude-opus-4-8"},
   "layout": "chat-right", "theme": "auto",
   "max_tool_iterations": 25, "max_tokens": 24576,
   "mcpDebugEnabled": false,
@@ -727,9 +793,16 @@ One nested JSON blob, atomic-written (tmpfile + `os.replace`)
 }
 ```
 
+`provider` may be `claude_code` (the subscription brain); it has a `models`
+entry but **no `api_keys` entry** — its credential is the subscription OAuth
+token, stored separately (see below), never in `settings.json`.
+
 - Wire shape is **redacted**: `GET /api/settings` returns
   `has_api_keys: {provider: bool}` instead of keys, and strips
-  `googleOAuth.tokens`. Keys are write-only.
+  `googleOAuth.tokens`. Keys are write-only. It also returns
+  `agent_sdk: {available, has_token}` — whether the Claude Code engine is
+  installed (gates the brain in the selector) and whether this user has a
+  stored subscription token.
 - `PUT /api/settings` takes typed fields and/or a `dotted` map
   (`"plugins.x.y": value`; `""`/`null` deletes) — the mechanism behind every
   plugin settings panel.
@@ -780,6 +853,66 @@ settings.json), tokens persist server-side (redacted from the wire), refresh
 is automatic, and Drive/Sheets tools gate on connection state via
 `visibility_check` — they simply don't appear until OAuth is connected.
 
+### Claude subscription brain: auth & sessions
+
+The `claude_code` brain authenticates with a Claude Pro/Max **subscription
+OAuth token** (`sk-ant-oat01-…`), minted by the user running
+`claude setup-token` (in a terminal on desktop, or on their own machine in
+server mode). It is **not** a claude.ai login flow inside the product — the app
+*accepts* a user-minted token, the defensible posture under the Agent SDK terms.
+
+- **Onboarding** ([onboarding.py](backend/app/services/agent_sdk/onboarding.py)):
+  the first `claude_code` turn that fails auth (no token / expired / rejected)
+  triggers an **in-chat** prompt explaining `setup-token`, then a masked input
+  rendered inline in the chat pane ([TokenPromptModal.tsx](frontend/src/TokenPromptModal.tsx),
+  driven by the `prompt_claude_token` `call_fn` round-trip). The token rides the
+  socket ACK only — it is **never** sent as a chat message, so it never lands in
+  a Chainlit step or `conversations.sqlite`.
+- **Storage** ([credentials.py](backend/app/services/agent_sdk/credentials.py)):
+  written 0600 to `<CLAUDE_CONFIG_DIR>/voitta_oauth_token` (per-user), injected
+  into the engine subprocess as `CLAUDE_CODE_OAUTH_TOKEN`. Validated with a
+  throwaway probe turn before the original turn resumes. `Disconnect` (Settings
+  → Global) clears it via `POST /api/agent_sdk/disconnect`.
+- **Sessions / history dropdown** ([routes/agent_sdk.py](backend/app/routes/agent_sdk.py)):
+  in `claude_code` mode the conversation dropdown lists the engine's own
+  sessions (`GET /api/agent_sdk/sessions` → SDK `list_sessions`) instead of
+  Chainlit threads; selecting one `POST /api/agent_sdk/select` latches a
+  per-user "resume this session" choice consumed at the next turn (continue
+  only). `GET /api/agent_sdk/sessions/{id}/messages` returns a session's
+  transcript for display. This store is per-user and single-instance (disk
+  under `CLAUDE_CONFIG_DIR`); a multi-instance server would back it with an
+  external `SessionStore`.
+
+> **Mode boundary:** desktop is the clean case (user's own machine, own
+> subscription). Multi-tenant server custody of users' subscription tokens is
+> built but is the item to confirm against Anthropic's commercial terms before a
+> commercial launch; the unambiguous server default is per-user API keys on the
+> three API providers.
+
+### Voice assistant ("hey voitta")
+
+Off by default and **not bundled** — opt-in. Toggling Voice on runs a 3-phase
+[InstallWindow](backend/app/install_window.py) ([voice_install.py](backend/app/services/voice_install.py)):
+pip packages (`sounddevice`, `sherpa-onnx`, `mlx-whisper`, …) → wake-word + VAD
+models → whisper model. Packages land in the same version-bump-wiped `userbase/`;
+models live under `<USER_DATA_ROOT>/voice` which **survives** the wipe (only the
+package phase re-runs after an update). The pipeline
+([voice.py](backend/app/services/voice.py)) runs on a daemon thread: sherpa-onnx
+wake word → Silero VAD endpointing → mlx-whisper transcription → inject the
+transcript into the last-focused session via the same `call_fn` /
+`submit_user_text` path the MCP debug tools use. The desktop layer polls
+`voice.snapshot()` to render the menu-bar meter (Cocoa-free, like `app.activity`).
+
+Two install-phase gotchas, both fixed and worth remembering:
+
+- **Presence is probed with `find_spec`, never `import`.** These packages wrap
+  native extensions; importing a half-written `.so` mid-install **hard-aborts
+  the process** (SIGABRT, uncatchable). `packages_missing()` only reads importer
+  metadata so the boot-time autostart gate can't crash.
+- **numpy is capped `<2.5` in the main installer** (numba's ceiling) — see §2.
+  Otherwise installing Voice downgrades numpy on disk while the live process
+  holds the newer one, and numba crashes the voice thread.
+
 ### Uploads & Chainlit config
 
 Chat attachments go through a `LocalStorageClient`
@@ -798,8 +931,10 @@ external MCP client (e.g. Claude Code) enumerate live widget sessions and
 drive them. Tools ([backend/app/services/mcp_server.py](backend/app/services/mcp_server.py)):
 `mcp_sessions` (list live bookmarklet sessions), `mcp_session_check`,
 `mcp_page` (outerHTML of a session's page), `mcp_eval` (JS in a session's
-page), `mcp_screenshot` (report pane as PNG), `mcp_devtools_install/read`.
-Three gates, checked per request by middleware:
+page), `mcp_inject_text` (inject + run a user message in a session's chat),
+`mcp_screenshot` (report pane as PNG), and
+`mcp_devtools_install/read/clear`. Three gates, checked per request by
+middleware:
 
 1. `mcpDebugEnabled` setting — toggled from the tray Settings dialog,
    effective without restart; default **off**.
@@ -843,8 +978,11 @@ app is on *that page's origin* — not necessarily this backend.
 │   ├── conversations.sqlite      chat threads/steps
 │   ├── scripts/ + scripts_state/ LLM-authored scripts · errors · inventory
 │   ├── python_storage/cache/     data snapshots by handle
+│   ├── claude_code/              4th brain (per-user): config/ = CLAUDE_CONFIG_DIR
+│   │                             (incl. voitta_oauth_token 0600 + projects/<cwd>/<sid>.jsonl
+│   │                             session store) · workspace/ = pinned engine cwd
 │   ├── auth_secret · install_state.json · .deployed_version
-│   └── users/<slug>/…            (server mode only: per-user roots)
+│   └── users/<slug>/…            (server mode only: per-user roots — incl. its own claude_code/)
 ├── userbase/                     PIP_PREFIX site-packages (wiped on version bump)
 ├── frontend/dist/ · docs/ · plugins/ · lib-sources/   seeded from the bundle
 ~/.config/voitta-compute/

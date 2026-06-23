@@ -122,6 +122,26 @@
 @keyframes voitta-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Live status line (Claude subscription brain "busy" indicator). Matches the
+   tool-call color scheme; plain weight (no bold). */
+.status-line {
+  align-self: flex-start;
+  max-width: 95%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: var(--voitta-tool-bg);
+  border: 1px solid var(--voitta-tool-border);
+  color: var(--voitta-text);
+}
+.status-line .status-text {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .tool-line.status-ok {
   background: var(--voitta-tool-bg);
   border-color: var(--voitta-tool-border);

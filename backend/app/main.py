@@ -244,6 +244,7 @@ from app.routes.plugins import router as plugins_router
 from app.routes.reports import router as reports_router
 from app.routes.settings import router as settings_router
 from app.routes.workspace import router as workspace_router
+from app.routes.agent_sdk import router as agent_sdk_router
 
 app.include_router(auth_router)
 app.include_router(reports_router)
@@ -252,6 +253,7 @@ app.include_router(settings_router)
 app.include_router(plugins_router)
 app.include_router(google_router)
 app.include_router(workspace_router)
+app.include_router(agent_sdk_router)
 # Hardened-site bridge (/bridge, /bridge/relay.js, /bridge/boot.js). Must be
 # registered before the catch-all frontend route so it isn't shadowed.
 app.include_router(bridge_router)

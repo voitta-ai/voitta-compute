@@ -248,7 +248,11 @@ async def on_chat_start() -> None:
     except Exception:
         pass
 
-    if not api_keys.get(provider):
+    # The Claude (subscription) brain uses a subscription token collected
+    # in-chat, not an API key — don't nag about a missing key for it.
+    from app.services.agent_sdk import BRAIN_PROVIDER
+
+    if provider != BRAIN_PROVIDER and not api_keys.get(provider):
         await cl.Message(
             content="⚠️ No API key configured. Open ⚙ Settings to add one.",
         ).send()
@@ -357,6 +361,17 @@ async def on_message(user_msg: cl.Message) -> None:
 
 
 async def _run_message_turn(user_msg: cl.Message, email: str | None) -> None:
+    # Brain fork: the Claude Agent SDK ("claude_code") owns its own
+    # conversation, tool loop, and session store, so it is intercepted here —
+    # before any normalised-provider machinery — and the three API providers'
+    # path below stays byte-for-byte unchanged.
+    from app.services.agent_sdk import BRAIN_PROVIDER
+
+    fresh_top = load_user_settings()
+    if fresh_top.get("provider") == BRAIN_PROVIDER:
+        await _run_agent_sdk_turn(user_msg, email, fresh_top)
+        return
+
     messages: list[LlmMessage] = cl.user_session.get("messages", [])
     snapshot = len(messages)
 
@@ -430,6 +445,89 @@ async def _run_message_turn(user_msg: cl.Message, email: str | None) -> None:
         logger.exception("on_message failed")
         del messages[snapshot:]
         cl.user_session.set("messages", messages)
+        await cl.Message(content=f"⚠️ {type(exc).__name__}: {exc}").send()
+
+
+async def _run_agent_sdk_turn(
+    user_msg: cl.Message, email: str | None, settings: dict[str, Any]
+) -> None:
+    """Drive one turn through the Claude Agent SDK brain.
+
+    Session continuity within a live chat is the ``agent_sdk_session_id`` stashed
+    on the Chainlit session — the SDK resumes it (continue-only) so its session
+    id stays stable for the history dropdown. Cross-session restore is handled by
+    the dedicated SDK restore path (it sets the same session var).
+    """
+    from app.services.agent_sdk import (
+        AgentSdkAuthError,
+        AgentSdkUnavailable,
+        run_agent_sdk_turn,
+    )
+    from app.services.agent_sdk.onboarding import handle_auth_error
+
+    if user_msg.elements:
+        await cl.Message(
+            content="ℹ️ Attachments aren't supported by the Claude (subscription) "
+            "brain yet — sending the text only.",
+        ).send()
+
+    # System prompt is composed from applicable plugins, exactly as the
+    # API-provider path does.
+    host = cl.user_session.get("host")
+    parts: list[str] = []
+    for plugin in for_host(host):
+        if plugin.system_prompt:
+            parts.append(plugin.system_prompt.rstrip())
+    system = "\n\n".join(parts)
+
+    try:
+        session_id = cl.context.session.id  # type: ignore[attr-defined]
+    except Exception:
+        session_id = None
+
+    ctx = ToolCtx(session_id=session_id, host=host, email=email)
+    model = (settings.get("models") or {}).get("claude_code")
+
+    # A history-dropdown pick (resume an existing session, or start fresh)
+    # arrives via the select route and latches per-user; consume it here so it
+    # wins over the live continuation id for this turn onward.
+    from app.services.agent_sdk.selection import take_pending
+
+    selected, picked_id = take_pending(email)
+    if selected:
+        cl.user_session.set("agent_sdk_session_id", picked_id)
+    resume_id = cl.user_session.get("agent_sdk_session_id")
+
+    try:
+        result = await run_agent_sdk_turn(
+            user_text=user_msg.content,
+            system=system,
+            model=model,
+            resume_session_id=resume_id,
+            ctx=ctx,
+        )
+        if result.session_id:
+            cl.user_session.set("agent_sdk_session_id", result.session_id)
+    except AgentSdkUnavailable:
+        logger.warning("agent_sdk turn: engine unavailable")
+        await cl.Message(
+            content="⚠️ The Claude Code engine isn't installed on this machine, "
+            "so the **Claude (subscription)** brain is unavailable. Install Claude "
+            "Code, or switch provider in ⚙ Settings.",
+        ).send()
+    except AgentSdkAuthError as exc:
+        logger.info("agent_sdk turn: auth needed (%s)", exc.detail or exc)
+        # Hand off to the in-chat token-onboarding flow. On success it resumes
+        # the original turn; on cancel it returns without sending.
+        await handle_auth_error(
+            user_text=user_msg.content,
+            system=system,
+            model=model,
+            resume_session_id=resume_id,
+            ctx=ctx,
+        )
+    except Exception as exc:  # surface, don't crash the socket
+        logger.exception("agent_sdk turn failed")
         await cl.Message(content=f"⚠️ {type(exc).__name__}: {exc}").send()
 
 

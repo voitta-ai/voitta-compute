@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSetRecoilState } from "recoil";
 import { threadIdToResumeState, useChatInteract } from "@chainlit/react-client";
 import { useSettings } from "./lib/useSettings";
-import { saveSettings } from "./lib/settings";
+import { saveSettings, AGENT_SDK_PROVIDER } from "./lib/settings";
 import { useAuth } from "./lib/auth";
 import { DOG_ICON_DATA_URI } from "./lib/dogIcon";
 import ChatPane from "./ChatPane";
@@ -44,6 +44,7 @@ const PROVIDER_LETTER: Record<string, string> = {
   anthropic: "A",
   gemini: "G",
   openai: "O",
+  claude_code: "C",
 };
 
 function providerLetter(provider: string | undefined): string {
@@ -182,7 +183,13 @@ export default function Drawer({ backendOrigin }: Props) {
       return true;
     }
   });
-  const currentHasKey = Boolean(settings.has_api_keys[settings.provider]);
+  // "Ready" = the selected brain can run. API providers need a saved key; the
+  // subscription brain just needs the engine installed (its token is collected
+  // in-chat on first use), so it's ready whenever it's available.
+  const isBrain = settings.provider === AGENT_SDK_PROVIDER;
+  const currentHasKey = isBrain
+    ? settings.agent_sdk.available
+    : Boolean(settings.has_api_keys[settings.provider]);
   const [view, setView] = useState<View>(currentHasKey ? "chat" : "settings");
 
   // Effective light/dark. Recomputed when the persisted theme changes, and —

@@ -4,7 +4,17 @@
 
 export type Layout = "chat-right" | "chat-left";
 export type Theme = "light" | "dark" | "auto";
-export type ProviderId = "anthropic" | "openai" | "gemini";
+export type ProviderId = "anthropic" | "openai" | "gemini" | "claude_code";
+
+// The 4th "brain": the Claude Agent SDK driven by a Pro/Max subscription.
+// Selected via the same provider dropdown but handled by a separate runtime
+// (no API key — subscription token collected in-chat).
+export const AGENT_SDK_PROVIDER: ProviderId = "claude_code";
+
+export interface AgentSdkStatus {
+  available: boolean; // Claude Code engine installed on the machine?
+  has_token: boolean; // subscription token stored for this user?
+}
 
 export interface GoogleOAuthBlob {
   // The wire shape is whatever the BE saved minus ``tokens`` (redacted
@@ -31,6 +41,7 @@ export interface PublicSettings {
   // flow predates the plugin-settings system.
   googleOAuth: GoogleOAuthBlob;
   plugins: Record<string, Record<string, unknown>>;
+  agent_sdk: AgentSdkStatus;
 }
 
 export interface SettingsPatch {
@@ -50,6 +61,7 @@ const DEFAULT_MODELS: Record<ProviderId, string> = {
   anthropic: "claude-sonnet-4-6",
   openai: "gpt-4o",
   gemini: "gemini-2.0-flash-exp",
+  claude_code: "claude-opus-4-8",
 };
 
 const DEFAULT: PublicSettings = {
@@ -62,6 +74,7 @@ const DEFAULT: PublicSettings = {
   has_api_keys: {},
   googleOAuth: {},
   plugins: {},
+  agent_sdk: { available: false, has_token: false },
 };
 
 let cache: PublicSettings = { ...DEFAULT };
@@ -99,6 +112,10 @@ function normalise(s: Partial<PublicSettings>): PublicSettings {
     has_api_keys: s.has_api_keys ?? {},
     googleOAuth: (s.googleOAuth ?? {}) as GoogleOAuthBlob,
     plugins: (s.plugins ?? {}) as Record<string, Record<string, unknown>>,
+    agent_sdk: {
+      available: Boolean(s.agent_sdk?.available),
+      has_token: Boolean(s.agent_sdk?.has_token),
+    },
   };
 }
 
@@ -190,6 +207,7 @@ export async function saveSettings(
     has_api_keys: { ...cache.has_api_keys },
     googleOAuth: { ...cache.googleOAuth },
     plugins: { ...cache.plugins },
+    agent_sdk: { ...cache.agent_sdk },
   };
   if (patch.api_keys) {
     for (const [p, v] of Object.entries(patch.api_keys)) {

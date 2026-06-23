@@ -7,6 +7,8 @@
 
 import { useEffect, useState } from "react";
 import {
+  AGENT_SDK_PROVIDER,
+  bootstrapSettings,
   saveSettings,
   type Layout,
   type ProviderId,
@@ -33,12 +35,14 @@ const MODEL_CHOICES: Record<ProviderId, string[]> = {
     "gemini-2.5-pro",
     "gemini-3.1-pro-preview",
   ],
+  claude_code: ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6"],
 };
 
 const KEY_PLACEHOLDER: Record<ProviderId, string> = {
   anthropic: "sk-ant-...",
   openai: "sk-...",
   gemini: "AIza...",
+  claude_code: "", // subscription brain — no API key field
 };
 
 interface Props {
@@ -108,6 +112,28 @@ export default function GlobalSettings({ backendOrigin }: Props) {
   const choices = MODEL_CHOICES[provider] ?? [];
   const model = models[provider] ?? "";
   const providerHasKey = Boolean(hasKey[provider]);
+  const isBrain = provider === AGENT_SDK_PROVIDER;
+  // The subscription brain is only offered when the Claude Code engine is
+  // installed on this machine (Phase 4 gating).
+  const providerOptions = cached.agent_sdk.available
+    ? [...PROVIDERS, { id: AGENT_SDK_PROVIDER, label: "Claude (subscription)" }]
+    : PROVIDERS;
+
+  async function onDisconnectToken() {
+    setSaving(true);
+    try {
+      await fetch(`${backendOrigin}/api/agent_sdk/disconnect`, {
+        method: "POST",
+        credentials: "include",
+      });
+      await bootstrapSettings(backendOrigin); // refresh has_token
+      setStatus({ text: "Disconnected.", err: false });
+    } catch (err) {
+      setStatus({ text: `Error: ${err}`, err: true });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="view-settings global-settings">
@@ -117,43 +143,79 @@ export default function GlobalSettings({ backendOrigin }: Props) {
         value={provider}
         onChange={(e) => setProvider(e.target.value as ProviderId)}
       >
-        {PROVIDERS.map((p) => (
+        {providerOptions.map((p) => (
           <option key={p.id} value={p.id}>
             {p.label}
-            {hasKey[p.id] ? " ✓" : ""}
+            {p.id === AGENT_SDK_PROVIDER
+              ? cached.agent_sdk.has_token
+                ? " ✓"
+                : ""
+              : hasKey[p.id]
+                ? " ✓"
+                : ""}
           </option>
         ))}
       </select>
-      <p className="muted">You can keep keys for all three providers and switch any time.</p>
+      <p className="muted">You can keep keys for all providers and switch any time.</p>
 
-      <label htmlFor="vb-key">API key</label>
-      <input
-        id="vb-key"
-        type="text"
-        className="secret"
-        value={apiKey}
-        placeholder={
-          providerHasKey
-            ? "●●●●●●●●●●●●●●●●  (saved — type to replace)"
-            : KEY_PLACEHOLDER[provider]
-        }
-        onChange={(e) => setApiKey(e.target.value)}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      {providerHasKey && (
-        <div className="muted">
-          A key for {provider} is saved on disk.{" "}
-          <button
-            type="button"
-            className="link-btn"
-            onClick={onClearKey}
-            disabled={saving}
-          >
-            Clear it
-          </button>
-          .
+      {isBrain ? (
+        // Subscription brain: no API key. Auth is a one-time token collected
+        // in chat (claude setup-token) the first time you send a message.
+        <div className="agent-sdk-auth" style={{ marginTop: 4 }}>
+          {cached.agent_sdk.has_token ? (
+            <div className="muted">
+              ✓ Claude subscription connected.{" "}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={onDisconnectToken}
+                disabled={saving}
+              >
+                Disconnect
+              </button>
+              .
+            </div>
+          ) : (
+            <p className="muted">
+              No API key needed — uses your Claude Pro/Max subscription. The
+              first time you send a message I'll walk you through pasting a
+              one-time token (<code>claude setup-token</code>). It's stored
+              locally and never shown in chat.
+            </p>
+          )}
         </div>
+      ) : (
+        <>
+          <label htmlFor="vb-key">API key</label>
+          <input
+            id="vb-key"
+            type="text"
+            className="secret"
+            value={apiKey}
+            placeholder={
+              providerHasKey
+                ? "●●●●●●●●●●●●●●●●  (saved — type to replace)"
+                : KEY_PLACEHOLDER[provider]
+            }
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {providerHasKey && (
+            <div className="muted">
+              A key for {provider} is saved on disk.{" "}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={onClearKey}
+                disabled={saving}
+              >
+                Clear it
+              </button>
+              .
+            </div>
+          )}
+        </>
       )}
 
       <label htmlFor="vb-model">Model</label>

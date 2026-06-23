@@ -33,7 +33,18 @@ _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("anthropic",  "anthropic>=0.39"),
     ("openai",     "openai>=1.50"),
     ("google.genai", "google-genai>=0.3"),
-    ("numpy",      "numpy>=1.26"),
+    # Claude Agent SDK — the 4th "brain" (Claude Pro/Max subscription via the
+    # Claude Code engine). The engine binary itself is a separate install the
+    # brain probes for at runtime; this is just the Python driver.
+    ("claude_agent_sdk", "claude-agent-sdk>=0.2.82"),
+    # Upper bound matches numba's numpy ceiling. numba (pulled in by the voice
+    # assistant's mlx_whisper) requires numpy<2.5; without this cap the main
+    # install resolves numpy 2.5, the live process imports it, and a later voice
+    # install downgrades numpy ON DISK to 2.4.x — but the in-memory 2.5 stays,
+    # so numba's import-time check fails ("Got NumPy 2.5") and the voice thread
+    # crashes. Capping here keeps a single numba-compatible numpy from boot, so
+    # there's no in-process version skew. Bump when numba supports numpy 2.5+.
+    ("numpy",      "numpy>=1.26,<2.5"),
     ("PIL",        "pillow>=10.0"),
     ("pypdf",      "pypdf>=5.0"),
     ("bm25s",      "bm25s>=0.2.6"),
@@ -98,6 +109,7 @@ PACKAGE_BLURBS: dict[str, str] = {
     "anthropic":   "anthropic: Claude API client…",
     "openai":      "openai: OpenAI API client…",
     "google.genai":"google-genai: Google AI client…",
+    "claude_agent_sdk": "claude-agent-sdk: Claude subscription brain…",
     "numpy":       "numpy: numerical arrays…",
     "PIL":         "pillow: image processing…",
     "pypdf":       "pypdf: PDF reading…",

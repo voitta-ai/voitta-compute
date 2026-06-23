@@ -15,7 +15,7 @@ userbase wipes — after an app update only the package phase re-runs.
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import logging
 import shutil
 import ssl
@@ -29,8 +29,12 @@ from app.config import USER_DATA_ROOT
 _log = logging.getLogger("voitta.voice_install")
 
 # (import_name, pip_spec) — same shape as installer.HEAVY_PACKAGES.
-# NOTE: no numpy pin — the userbase numpy stays whatever the main
-# installer resolved; openwakeword's VAD path is numpy-2-safe.
+# NOTE: numpy is intentionally absent here — it's pinned in the MAIN installer
+# to ``numpy>=1.26,<2.5`` (numba's ceiling). mlx_whisper pulls numba, which
+# requires numpy<2.5; if the main install ever resolved numpy 2.5, installing
+# voice would downgrade numpy on disk while the live process kept 2.5 in
+# memory, and numba's import-time check would crash the voice thread. The main
+# cap prevents that — do not add an unpinned/newer numpy here.
 VOICE_PACKAGES: list[tuple[str, str]] = [
     ("sounddevice", "sounddevice>=0.4.6"),
     ("onnxruntime", "onnxruntime>=1.17"),      # usually present (chromadb)
@@ -70,11 +74,27 @@ ProgressCb = Callable[[int, int, str], None]
 
 
 def packages_missing() -> list[tuple[str, str]]:
+    """Which voice packages aren't installed yet.
+
+    Presence is checked with ``find_spec`` — which *locates* the module
+    without executing it — NOT ``import_module``. These packages wrap native
+    extensions (PortAudio via sounddevice, Metal/torch via mlx_whisper,
+    onnxruntime, sherpa-onnx); importing one mid-install — e.g. while a
+    version-bump is repopulating ``userbase/`` and the ``.so`` is half-written
+    or missing a dependent dylib — can **hard-abort the process** (SIGABRT),
+    which a ``try/except ImportError`` cannot catch. This probe runs on every
+    boot where Voice was enabled (the autostart gate), so it must never load a
+    native lib just to answer "is it there?". ``find_spec`` only reads importer
+    metadata, so it's crash-safe."""
     missing = []
     for import_name, spec in VOICE_PACKAGES:
         try:
-            importlib.import_module(import_name)
-        except ImportError:
+            found = importlib.util.find_spec(import_name) is not None
+        except Exception:
+            # A half-present parent package can make find_spec raise — treat
+            # that as "not installed" rather than letting it propagate.
+            found = False
+        if not found:
             missing.append((import_name, spec))
     return missing
 
