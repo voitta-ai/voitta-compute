@@ -246,6 +246,10 @@ def _start_uvicorn(log: logging.Logger) -> threading.Thread:
     if TLS_CERT_PATH.exists() and TLS_KEY_PATH.exists():
         kwargs["ssl_certfile"] = str(TLS_CERT_PATH)
         kwargs["ssl_keyfile"] = str(TLS_KEY_PATH)
+    else:
+        # Should not happen: phase-0 setup aborts startup if the CA can't be
+        # provisioned. Log loudly rather than silently serving plain HTTP.
+        log.error("TLS cert missing at uvicorn start — serving HTTP (unexpected)")
 
     config = uvicorn.Config("app.main:app", **kwargs)
     server = uvicorn.Server(config)
@@ -1278,10 +1282,23 @@ def _run_first_time_setup(log: logging.Logger) -> None:
         except Exception as exc:
             ok = False
             win.log(f"!!! cert error: {exc}")
+            log.exception("cert provisioning raised")
         if ok:
             win.finish_phase(0)
         else:
-            win.fail_phase(0, "Failed — will run over HTTP")
+            # No insecure fallback: if the local HTTPS CA can't be installed and
+            # trusted, abort startup rather than silently serving over HTTP.
+            win.fail_phase(0, "TLS setup failed — see log")
+            log.error("TLS certificate provisioning failed — aborting startup")
+            AppHelper.callAfter(
+                show_error_alert,
+                "TLS certificate setup failed.\n\nThe local HTTPS CA could not "
+                "be installed and trusted, so the app will not start (no "
+                "insecure fallback).\n\nSee ~/Library/Application Support/Voitta "
+                "Compute/backend/voitta-app.log",
+            )
+            AppHelper.callAfter(__import__("rumps").quit_application)
+            return
 
         # Phase 1 — Python packages
         win.start_phase(1, "Preparing…")

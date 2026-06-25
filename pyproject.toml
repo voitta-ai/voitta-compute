@@ -10,7 +10,7 @@
 [tool.briefcase]
 project_name = "Voitta"
 bundle = "ai.voitta"
-version = "0.1.202"
+version = "0.1.203"
 url = "https://voitta.ai"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -61,7 +61,10 @@ requires = [
     # Route Python stdout/stderr to NSLog so app logs reach
     # Console.app / `log show` — the briefcase stub otherwise
     # swallows them entirely.
-    "std-nslog",
+    # Pin to 1.0.x: 2.0.0 splits into nslog.py + a compiled _oslog_shim C
+    # extension the briefcase stub can't load, which makes the app crash on
+    # launch ("Unable to install Python NSLog handler"). 1.0.x is pure-Python.
+    "std-nslog~=1.0.3",
     # Installer bootstrap
     "pip",
     "setuptools",
@@ -72,6 +75,13 @@ requires = [
 # arm64 only — universal2 doubles bundle size and scientific wheels
 # default to arm64-only anyway.
 universal_build = false
+# pyobjc ships a PyObjCTest package with .dSYM debug bundles whose DWARF file
+# is missing; codesign aborts the whole build on them. Tests aren't needed at
+# runtime, so strip the package and any stray dSYMs from the built .app.
+cleanup_paths = [
+    "Contents/Resources/app_packages/PyObjCTest",
+    "**/*.dSYM",
+]
 # Sonoma is Apple's current security floor and the minimum for
 # the scientific stack wheels we lazy-install.
 min_os_version = "14.0"

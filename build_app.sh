@@ -150,7 +150,7 @@ _build_wheel_from_sdist() {
     lower=$(basename "$f" | tr '[:upper:]' '[:lower:]')
     [[ "$lower" == ${prefix}* ]] && return 0
   done
-  echo "[build_app] pre-building wheel for $spec…"
+  echo "[build_app] pre-building wheel for ${spec}…"
   local sdist_dir="$WHEELS_DIR/sdist"
   mkdir -p "$sdist_dir"
   "$VENV/bin/pip" download --no-binary :all: --no-deps -d "$sdist_dir" "$spec" -q
