@@ -173,6 +173,11 @@ export default function Drawer({ backendOrigin }: Props) {
   // cleanly (same pattern as stirista-conversational-agent).
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [newConvKey, setNewConvKey] = useState(0);
+  // Brain (subscription) mode: the SDK session whose transcript the pane should
+  // replay. Distinct from selectedThreadId (a Chainlit thread) — SDK sessions
+  // live in the Agent SDK's own store and are fetched by ChatPane, not resumed
+  // through Chainlit. null = fresh conversation.
+  const [sdkResumeId, setSdkResumeId] = useState<string | null>(null);
   const setThreadIdToResume = useSetRecoilState(threadIdToResumeState);
   const { clear } = useChatInteract();
 
@@ -347,6 +352,17 @@ export default function Drawer({ backendOrigin }: Props) {
               else { setThreadIdToResume(id as any); }
               setSelectedThreadId(id);
             }}
+            onSdkSelect={(sessionId) => {
+              // SDK session pick: reset to a clean Chainlit pane and let ChatPane
+              // replay the transcript. clear() wipes the current messages so the
+              // old conversation doesn't flash before the fetch resolves; the key
+              // bump forces a fresh mount (and socket) for the resumed session.
+              clear();
+              setThreadIdToResume(undefined);
+              setSelectedThreadId(null);
+              setSdkResumeId(sessionId);
+              setNewConvKey((k) => k + 1);
+            }}
           />
           <span className="spacer" />
           {auth.email && <UserMenu email={auth.email} onLogout={auth.logout} />}
@@ -425,6 +441,7 @@ export default function Drawer({ backendOrigin }: Props) {
             backendOrigin={backendOrigin}
             hasApiKey={currentHasKey}
             threadId={selectedThreadId}
+            sdkResumeSessionId={sdkResumeId}
           />
         </div>
         {view === "settings" && (

@@ -5,11 +5,14 @@
 // model call.
 
 import {
+  type IStep,
+  messagesState,
   useChatData,
   useChatInteract,
   useChatMessages,
 } from "@chainlit/react-client";
 import { useEffect, useState } from "react";
+import { useSetRecoilState } from "recoil";
 import MessageList from "./chat/MessageList";
 import Composer from "./chat/Composer";
 import TokenPromptModal from "./TokenPromptModal";
@@ -21,9 +24,18 @@ interface Props {
   backendOrigin: string;
   hasApiKey: boolean;
   threadId?: string | null;
+  // Brain (subscription) mode: replay this Agent SDK session's transcript into
+  // the pane on mount. The turn is already armed to resume it server-side; this
+  // just makes the prior messages visible. null = fresh conversation.
+  sdkResumeSessionId?: string | null;
 }
 
-export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) {
+export default function ChatPane({
+  backendOrigin,
+  hasApiKey,
+  threadId,
+  sdkResumeSessionId,
+}: Props) {
   // useAuthConnect is Chainlit's useChatSession, which takes no args — the
   // connection target is configured on the ChainlitContext provider, not here.
   // (backendOrigin is still used below for socket transport selection.)
@@ -31,6 +43,7 @@ export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) 
   const { messages } = useChatMessages();
   const { loading, elements } = useChatData();
   const { sendMessage, stopTask, uploadFile, windowMessage } = useChatInteract();
+  const setMessages = useSetRecoilState(messagesState);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
 
   // Drawer sets threadIdToResumeState (and clears messages) BEFORE changing the key that
@@ -55,6 +68,47 @@ export default function ChatPane({ backendOrigin, hasApiKey, threadId }: Props) 
     connect(bridge ? { userEnv: {}, transports: ["websocket"] } : { userEnv: {} });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connect]);
+
+  // Brain (subscription) mode: replay the resumed SDK session's transcript.
+  // The Agent SDK keeps its sessions in its own store (not Chainlit's thread
+  // DB), so Chainlit's resume can't render them — we fetch the {role,text} rows
+  // and seed the message atom ourselves. Gated on the socket being up so a
+  // connect-time reset can't wipe what we inject; runs once per mount (the pane
+  // is re-keyed per session switch).
+  useEffect(() => {
+    if (!sdkResumeSessionId) return;
+    if (!session?.socket) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `${backendOrigin}/api/agent_sdk/sessions/${encodeURIComponent(sdkResumeSessionId)}/messages`,
+          { credentials: "include" },
+        );
+        const body = (await res.json()) as {
+          messages?: { role: "user" | "assistant"; text: string }[];
+        };
+        if (cancelled) return;
+        const rows = body.messages ?? [];
+        // Synthetic, strictly-increasing timestamps preserve order under
+        // MessageList's createdAt sort without colliding with live messages.
+        const base = Date.now() - rows.length;
+        const steps: IStep[] = rows.map((m, i) => ({
+          id: `sdk-${sdkResumeSessionId}-${i}`,
+          name: m.role,
+          type: m.role === "user" ? "user_message" : "assistant_message",
+          output: m.text,
+          createdAt: new Date(base + i).toISOString(),
+        }));
+        setMessages(steps);
+      } catch (err) {
+        console.warn("[ChatPane] sdk transcript load failed", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sdkResumeSessionId, session, backendOrigin, setMessages]);
 
   // Tell the backend which host/page/title the bookmarklet sits on — the
   // active-sessions window ("tasks voitta") renders these per row. Title

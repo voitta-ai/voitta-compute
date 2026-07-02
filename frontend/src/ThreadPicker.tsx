@@ -54,9 +54,18 @@ interface Props {
   backendOrigin: string;
   selectedThreadId: string | null;
   onThreadSelect: (threadId: string | null) => void;
+  // Brain (subscription) mode: a picked SDK session id (or null for a fresh
+  // conversation). The host remounts the pane and replays that session's
+  // transcript — see Drawer.onSdkSelect / ChatPane.sdkResumeSessionId.
+  onSdkSelect: (sessionId: string | null) => void;
 }
 
-export default function ThreadPicker({ backendOrigin, selectedThreadId, onThreadSelect }: Props) {
+export default function ThreadPicker({
+  backendOrigin,
+  selectedThreadId,
+  onThreadSelect,
+  onSdkSelect,
+}: Props) {
   const api = useContext(ChainlitContext);
   const { threadId: currentThreadId } = useChatMessages();
   const settings = useSettings();
@@ -124,9 +133,10 @@ export default function ThreadPicker({ backendOrigin, selectedThreadId, onThread
     [onThreadSelect],
   );
 
-  // Arm the next turn to resume an SDK session (or start fresh), then reset the
-  // Chainlit pane to a clean conversation. The resumed context lives in the SDK
-  // session server-side; new turns continue it.
+  // Arm the next turn to resume an SDK session (or start fresh), then hand the
+  // picked id to the host: it remounts the pane and replays the session's
+  // transcript (continue-only). The resumed context lives in the SDK session
+  // server-side; new turns continue it.
   const switchSdk = useCallback(
     async (sessionId: string | null) => {
       setOpen(false);
@@ -141,9 +151,9 @@ export default function ThreadPicker({ backendOrigin, selectedThreadId, onThread
       } catch (err) {
         console.warn("[ThreadPicker] select error", err);
       }
-      onThreadSelect(null); // fresh Chainlit pane
+      onSdkSelect(sessionId); // remount pane + replay transcript (blank if null)
     },
-    [backendOrigin, onThreadSelect],
+    [backendOrigin, onSdkSelect],
   );
 
   // Label: confirmed Chainlit thread (API mode) or active SDK session.
