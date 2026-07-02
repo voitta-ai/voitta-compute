@@ -382,9 +382,12 @@ three API providers above are untouched by this path.
 - **Lazy import**: `claude-agent-sdk` is installed at runtime by the installer
   (like the other heavy LLM deps), so every SDK import is guarded — a missing
   SDK degrades the brain to "unavailable" rather than crashing app boot.
-- **History**: sessions are listed/restored from the engine's own store via
+- **History**: sessions are listed from the engine's own store via
   [sessions.py](backend/app/services/agent_sdk/sessions.py) +
-  [routes/agent_sdk.py](backend/app/routes/agent_sdk.py) — see §12.
+  [routes/agent_sdk.py](backend/app/routes/agent_sdk.py); picking one restores
+  it on **two** tracks — a backend resume latch (continuity) and a frontend
+  transcript replay (display), since the engine store and Chainlit's store are
+  separate. Full flow in §12.
 - **Busy feedback**: a single self-animating status line (`cl.Step` `type="run"`,
   rendered by [StepView.tsx](frontend/src/chat/StepView.tsx)) shows
   `⠋ Working… · Ns · N tokens` — driven by a 1 s background ticker so the turn
@@ -873,15 +876,36 @@ server mode). It is **not** a claude.ai login flow inside the product — the ap
   into the engine subprocess as `CLAUDE_CODE_OAUTH_TOKEN`. Validated with a
   throwaway probe turn before the original turn resumes. `Disconnect` (Settings
   → Global) clears it via `POST /api/agent_sdk/disconnect`.
-- **Sessions / history dropdown** ([routes/agent_sdk.py](backend/app/routes/agent_sdk.py)):
-  in `claude_code` mode the conversation dropdown lists the engine's own
-  sessions (`GET /api/agent_sdk/sessions` → SDK `list_sessions`) instead of
-  Chainlit threads; selecting one `POST /api/agent_sdk/select` latches a
-  per-user "resume this session" choice consumed at the next turn (continue
-  only). `GET /api/agent_sdk/sessions/{id}/messages` returns a session's
-  transcript for display. This store is per-user and single-instance (disk
-  under `CLAUDE_CONFIG_DIR`); a multi-instance server would back it with an
-  external `SessionStore`.
+- **Sessions / history dropdown**
+  ([ThreadPicker.tsx](frontend/src/ThreadPicker.tsx) ·
+  [routes/agent_sdk.py](backend/app/routes/agent_sdk.py)): in `claude_code`
+  mode the conversation dropdown lists the engine's own sessions
+  (`GET /api/agent_sdk/sessions` → SDK `list_sessions`) instead of Chainlit
+  threads. Selecting one drives **two independent restores** — the SDK
+  session store and Chainlit's message store are separate, so both are moved:
+    1. **Continuity (backend resume).** `POST /api/agent_sdk/select` latches a
+       per-user "resume this session" choice
+       ([selection.py](backend/app/services/agent_sdk/selection.py)
+       `set_pending`), consumed at the next turn by `take_pending` in
+       [chainlit_app.py](backend/app/chainlit_app.py) — which overrides the
+       live continuation id, so new turns continue *that* engine session
+       (`resume=<id>`, continue-only).
+    2. **Display (frontend transcript replay).** The engine's sessions live in
+       its own store, *not* `conversations.sqlite`, so Chainlit's thread-resume
+       can't render them. Instead
+       [Drawer.tsx](frontend/src/Drawer.tsx) re-keys the chat pane (fresh mount
+       + socket) for the picked session and
+       [ChatPane.tsx](frontend/src/ChatPane.tsx) fetches
+       `GET /api/agent_sdk/sessions/{id}/messages` (→ `get_brain_transcript`,
+       user/assistant text rows) and seeds Chainlit's Recoil `messagesState`
+       directly (mapping `{role, text}` → `user_message`/`assistant_message`
+       steps with synthetic monotonic `createdAt`). The seed is gated on the
+       socket being up so a connect-time reset can't wipe it, and runs once per
+       mount. "**+ New conversation**" latches a null resume id and mounts a
+       blank pane.
+
+  This store is per-user and single-instance (disk under `CLAUDE_CONFIG_DIR`);
+  a multi-instance server would back it with an external `SessionStore`.
 
 > **Mode boundary:** desktop is the clean case (user's own machine, own
 > subscription). Multi-tenant server custody of users' subscription tokens is
