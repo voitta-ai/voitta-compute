@@ -60,3 +60,6 @@ scripts/reports/
 # Runtime logs written next to the app at launch.
 voitta.log
 frontend/voitta.log
+
+# Briefcase build logs (create/update/package) — regenerated every build.
+logs/
