@@ -33,11 +33,17 @@ SILENCE_END_S = 1.2  # trailing silence that ends the utterance
 SPEECH_TIMEOUT_S = 6.0  # give up if no speech follows the wake word
 REFRACTORY_S = 2.0  # ignore wake re-triggers for this long
 
-# Wake phrases that fire a command (open the sessions window) instead of
-# recording an utterance. Kept as a literal — mirrors
-# ``voice_wake.COMMAND_PHRASES`` but avoids importing that module (and
-# its numpy dependency) before the voice components are installed.
-_COMMAND_PHRASES = ("tasks voitta",)
+# Wake phrases that fire a command (open the sessions window, select a
+# task row, …) instead of recording an utterance. Kept as a literal —
+# mirrors ``voice_wake.COMMAND_PHRASES`` but avoids importing that module
+# (and its numpy dependency) before the voice components are installed.
+# Keep in sync with voice_wake.COMMAND_PHRASES.
+_COMMAND_PHRASES = (
+    "tasks voitta",
+    "task one", "task two", "task three", "task four", "task five",
+    "task six", "task seven", "task eight", "task nine",
+    "task quit",
+)
 SILENT_MIC_WATCHDOG_S = 5.0  # all-zero frames for this long → mic problem
 INJECT_TIMEOUT_S = 20.0
 
@@ -70,6 +76,27 @@ def set_command_hook(fn: "Callable[[str], None] | None") -> None:
     """Register the handler for command wake-phrases. ``None`` clears it."""
     global _command_hook
     _command_hook = fn
+
+
+# Task-mode = the sessions list is on screen. The capture loop is a small
+# state machine: in BASE it honors "hey voitta"/"tasks voitta" and ignores
+# "task N"/"task quit"; in TASKS it honors row selection + "task quit" and
+# suspends the wake word. The desktop layer flips this from the sessions
+# window's open/close so visibility is the single source of truth. Plain
+# bool write/read is atomic in CPython — no lock needed.
+_task_mode: bool = False
+
+
+def enter_task_mode() -> None:
+    """Sessions list shown — start honoring 'task N'/'task quit'."""
+    global _task_mode
+    _task_mode = True
+
+
+def exit_task_mode() -> None:
+    """Sessions list hidden — back to the wake word / 'tasks voitta'."""
+    global _task_mode
+    _task_mode = False
 
 
 # Mic-sensitivity ceiling, cached for the capture loop. This is the MAX
@@ -381,7 +408,15 @@ def _run_pipeline() -> None:
                 if matched and time.monotonic() > refractory_until:
                     wake.reset()
                     refractory_until = time.monotonic() + REFRACTORY_S
-                    if matched in _COMMAND_PHRASES:
+                    # State machine: "task N"/"task quit" belong to TASKS
+                    # mode, everything else to BASE. A phrase from the other
+                    # state is ignored (e.g. "task three" while the list is
+                    # closed, or the wake word while it's open).
+                    is_task_phrase = matched.startswith("task ")
+                    if _task_mode != is_task_phrase:
+                        _log.debug("voice: ignoring %r (task_mode=%s)",
+                                   matched, _task_mode)
+                    elif matched in _COMMAND_PHRASES:
                         # Command phrase — fire its action, no recording.
                         _log.info("voice: command phrase %r detected", matched)
                         _fire_command(matched)

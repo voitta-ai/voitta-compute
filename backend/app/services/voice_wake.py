@@ -18,14 +18,23 @@ from app.services import voice_install
 SAMPLE_RATE = 16000
 
 WAKE_PHRASE = "hey voitta"
+# Row-selection phrases, only acted on while the sessions list is visible
+# (see voice.py task-mode gating). "task quit" closes the list.
+TASK_PHRASES = (
+    "task one", "task two", "task three", "task four", "task five",
+    "task six", "task seven", "task eight", "task nine",
+    "task quit",
+)
 # Phrases spotted in addition to the wake word. Each is its own command
 # (no transcription) — voice.py maps the matched phrase to an action.
-COMMAND_PHRASES = ("tasks voitta",)
+COMMAND_PHRASES = ("tasks voitta", *TASK_PHRASES)
 # Default phrase set for the live pipeline: the wake word plus commands.
 DEFAULT_PHRASES = (WAKE_PHRASE, *COMMAND_PHRASES)
 
 # Spelling variants per phrase — the KWS model only knows English BPE,
-# so unusual words need spellings matching how they *sound*.
+# so unusual words need spellings matching how they *sound*. The number
+# words include common homophones ("WON"/"ONE", "TWO"/"TOO"/"TO") so a
+# slightly slurred digit still spots.
 SPELLINGS = {
     "hey voitta": ["HEY VOITTA", "HEY VOYTA", "HEY VOIDA", "HEY VOY TA"],
     "tasks voitta": [
@@ -33,6 +42,16 @@ SPELLINGS = {
         "TASK VOITTA", "TASK VOIDA",
     ],
     "voitta": ["VOITTA", "VOYTA", "VOIDA", "VOITA", "VOY TA", "VOY DA"],
+    "task one": ["TASK ONE", "TASK WON"],
+    "task two": ["TASK TWO", "TASK TOO", "TASK TO"],
+    "task three": ["TASK THREE", "TASK TREE"],
+    "task four": ["TASK FOUR", "TASK FOR", "TASK FORE"],
+    "task five": ["TASK FIVE"],
+    "task six": ["TASK SIX", "TASK SICKS"],
+    "task seven": ["TASK SEVEN"],
+    "task eight": ["TASK EIGHT", "TASK ATE"],
+    "task nine": ["TASK NINE"],
+    "task quit": ["TASK QUIT", "TASK QUITE", "TASK KWIT"],
 }
 
 

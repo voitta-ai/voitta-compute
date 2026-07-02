@@ -102,6 +102,12 @@ class SessionsWindow:
         self._w.setReleasedWhenClosed_(False)
         self._w.center()
 
+        # Close handler — fires on windowWillClose (X button, click-away, or
+        # the voice "task quit" path). Drives the voice task-mode state off.
+        self._close_cb: Callable[[], None] | None = None
+        self._delegate = _WindowDelegate.alloc().initWithWindow_(self)
+        self._w.setDelegate_(self._delegate)
+
         cv = self._w.contentView()
 
         title = NSTextField.labelWithString_("Active sessions")
@@ -149,7 +155,7 @@ class SessionsWindow:
         cv.addSubview_(btn)
 
         self._hint = NSTextField.labelWithString_(
-            "Click a session to focus it · say “tasks voitta” to reopen this"
+            "Click a row or say “task one”, “task two”… · “task quit” to close"
         )
         self._hint.setFrame_(((140, 18), (_WINDOW_W - 160, 22)))
         self._hint.setFont_(NSFont.systemFontOfSize_(10))
@@ -161,11 +167,25 @@ class SessionsWindow:
     def set_refresh_handler(self, fn: Callable[[], None]) -> None:
         self._refresh_cb = fn
 
+    def set_close_handler(self, fn: Callable[[], None]) -> None:
+        self._close_cb = fn
+
     def is_visible(self) -> bool:
         try:
             return bool(self._w.isVisible())
         except Exception:  # noqa: BLE001
             return False
+
+    def close(self) -> None:
+        """Order the window out (fires windowWillClose → close handler)."""
+        AppHelper.callAfter(self._w.close)
+
+    def _fire_close(self) -> None:
+        if self._close_cb is not None:
+            try:
+                self._close_cb()
+            except Exception:  # noqa: BLE001
+                pass
 
     def show(self, sessions: list[dict[str, Any]], active_id: str | None) -> None:
         AppHelper.callAfter(self._show_impl, sessions, active_id)
@@ -230,16 +250,29 @@ class SessionsWindow:
             except Exception:  # noqa: BLE001 — highlight is cosmetic
                 pass
 
+        # Position badge — the spoken "task N" number. Rows past 9 aren't
+        # voice-addressable (KWS has task one–nine) but still show their index.
+        from AppKit import NSTextAlignmentCenter
+        badge = NSTextField.labelWithString_(str(i + 1))
+        badge.setFrame_(((8, 18), (28, 22)))
+        badge.setFont_(NSFont.boldSystemFontOfSize_(16))
+        badge.setAlignment_(NSTextAlignmentCenter)
+        badge.setTextColor_(
+            NSColor.controlAccentColor() if is_active
+            else NSColor.secondaryLabelColor()
+        )
+        row.addSubview_(badge)
+
         marker = "●  " if is_active else ""
         title = NSTextField.labelWithString_(marker + _row_title(info))
-        title.setFrame_(((12, 28), (w - 110, 20)))
+        title.setFrame_(((44, 28), (w - 142, 20)))
         title.setFont_(NSFont.boldSystemFontOfSize_(13))
         if not info.get("connected", True):
             title.setTextColor_(NSColor.tertiaryLabelColor())
         row.addSubview_(title)
 
         sub = NSTextField.labelWithString_(_short_url(info))
-        sub.setFrame_(((12, 8), (w - 110, 16)))
+        sub.setFrame_(((44, 8), (w - 142, 16)))
         sub.setFont_(NSFont.systemFontOfSize_(11))
         sub.setTextColor_(NSColor.secondaryLabelColor())
         row.addSubview_(sub)
@@ -283,3 +316,18 @@ class _RefreshTarget(NSObject):
 
     def clicked_(self, _sender):  # noqa: N802
         self._win._fire_refresh()
+
+
+class _WindowDelegate(NSObject):
+    """NSWindow delegate — relays windowWillClose to the SessionsWindow so
+    the voice task-mode state can be turned off whenever the list closes."""
+
+    def initWithWindow_(self, win):  # noqa: N802
+        self = objc.super(_WindowDelegate, self).init()
+        if self is None:
+            return None
+        self._win = win
+        return self
+
+    def windowWillClose_(self, _notif):  # noqa: N802 (Cocoa selector)
+        self._win._fire_close()

@@ -418,18 +418,52 @@ class VoittaMenuBarApp(rumps.App):
         self._voice_autostart_done = False
         self._voice_installing = False
         self._sessions_window = None  # lazily built SessionsWindow
+        # Session ids in displayed (frozen) order while the window is open —
+        # so "task two" always means the same row even as sessions refresh.
+        self._frozen_order: list[str] = []
 
         # Register the voice command hook now (harmless if voice never
-        # starts) so "tasks voitta" opens the sessions window. The hook
-        # fires on the voice thread → hop to the Cocoa main thread.
+        # starts) so "tasks voitta" / "task N" / "task quit" route here.
+        # The hook fires on the voice thread → hop to the Cocoa main thread.
         try:
             from app.services import voice
             from PyObjCTools import AppHelper
             voice.set_command_hook(
-                lambda _phrase: AppHelper.callAfter(self._show_sessions_main)
+                lambda phrase: AppHelper.callAfter(self._on_voice_command, phrase)
             )
         except Exception:
             self._log.exception("voice command hook registration failed")
+
+    # Spoken number word → 1-based row index.
+    _TASK_WORDS = {
+        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+        "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    }
+
+    def _on_voice_command(self, phrase: str) -> None:
+        """Dispatch a recognized command phrase. MAIN THREAD (via callAfter)."""
+        if phrase == "tasks voitta":
+            self._show_sessions_main()
+            return
+        if phrase == "task quit":
+            self._close_sessions_window()
+            return
+        word = phrase[len("task "):] if phrase.startswith("task ") else ""
+        idx = self._TASK_WORDS.get(word)
+        if idx is None:
+            return
+        order = self._frozen_order
+        if idx > len(order):
+            # Spoken a number past the visible rows — ignore (the menu-bar
+            # already flashed the recognized phrase).
+            self._log.info("voice: task %d out of range (%d shown)", idx, len(order))
+            return
+        self._on_session_selected(order[idx - 1])
+        # Selecting raises the browser tab, which buries this list — so close
+        # it and return to BASE mode. Otherwise we'd stay in TASKS mode with
+        # the window hidden and "tasks voitta"/"hey voitta" suspended, with no
+        # voice way out. "tasks voitta" reopens the list for the next pick.
+        self._close_sessions_window()
 
     def _make_voice_item(self) -> rumps.MenuItem:
         item = rumps.MenuItem("Voice", callback=self.toggle_voice)
@@ -989,15 +1023,57 @@ class VoittaMenuBarApp(rumps.App):
                     on_select=self._on_session_selected
                 )
                 self._sessions_window.set_refresh_handler(self._refresh_sessions)
+                self._sessions_window.set_close_handler(self._on_sessions_closed)
+            # Re-snapshot row order on each explicit open so numbering starts
+            # fresh; it then stays frozen while the window is up.
+            self._frozen_order = []
             sessions, active_id = self._collect_sessions()
+            sessions = self._ordered_for_display(sessions)
             self._sessions_window.show(sessions, active_id)
+            # Visibility drives the voice state machine → enter TASKS mode.
+            try:
+                from app.services import voice
+                voice.enter_task_mode()
+            except Exception:
+                self._log.exception("enter task mode failed")
         except Exception:
             self._log.exception("show sessions window failed")
+
+    def _close_sessions_window(self) -> None:
+        """Close the sessions list (voice 'task quit'). MAIN THREAD."""
+        win = self._sessions_window
+        if win is not None and win.is_visible():
+            win.close()  # → _on_sessions_closed via windowWillClose
+
+    def _on_sessions_closed(self) -> None:
+        """Sessions window closed (X button, 'task quit', click-away) — leave
+        TASKS mode and drop the frozen order. Fires on the main thread."""
+        self._frozen_order = []
+        try:
+            from app.services import voice
+            voice.exit_task_mode()
+        except Exception:
+            self._log.exception("exit task mode failed")
+
+    def _ordered_for_display(self, sessions):
+        """Apply the frozen display order: rows already shown keep their slot;
+        new sessions append at the bottom. Updates ``_frozen_order`` to match
+        what's rendered so 'task N' resolves to row N."""
+        pos = {sid: i for i, sid in enumerate(self._frozen_order)}
+        known = sorted(
+            (s for s in sessions if s.get("session_id") in pos),
+            key=lambda s: pos[s.get("session_id")],
+        )
+        new = [s for s in sessions if s.get("session_id") not in pos]
+        ordered = list(known) + new
+        self._frozen_order = [s.get("session_id") for s in ordered]
+        return ordered
 
     def _refresh_sessions(self) -> None:
         if self._sessions_window is None:
             return
         sessions, active_id = self._collect_sessions()
+        sessions = self._ordered_for_display(sessions)
         # Skip the Cocoa rebuild unless something visible actually changed
         # (the 0.4s poller would otherwise rebuild rows continuously).
         sig = (active_id, tuple(
@@ -1012,31 +1088,27 @@ class VoittaMenuBarApp(rumps.App):
 
     def _on_session_selected(self, session_id: str) -> None:
         """Row click: make this session the active (voice-routed) one and
-        best-effort raise its tab. Browser security usually blocks raising
-        a background tab, so the reliable effect is the active-session
-        switch; the window highlight moves to confirm it."""
+        bring its Chrome tab to the foreground.
+
+        ``window.focus()`` from inside the page is sandboxed and can't raise a
+        background tab, so we drive Chrome natively via AppleScript, matching
+        on the session's tracked URL (title as a tiebreaker)."""
         try:
             from app.services import cl_sessions
             cl_sessions.set_active(session_id)
             self._log.info("sessions: active set to %s", session_id)
         except Exception:
             self._log.exception("set active session failed")
-        # Best-effort tab focus (often a no-op on background tabs).
+        # Raise the real browser tab from the native side (off the UI thread).
         try:
-            import asyncio
-            from app.services import voice
-            from app.services.mcp_server import _call_in_session
-            for loop in voice._loops:  # noqa: SLF001
-                asyncio.run_coroutine_threadsafe(
-                    _call_in_session(
-                        session_id, "eval_js",
-                        {"js": "window.focus()", "await_ms": 1500},
-                    ),
-                    loop,
-                )
-                break
+            from app.services import cl_sessions, chrome_focus
+            info = cl_sessions.get(session_id)
+            if info and info.url:
+                chrome_focus.focus_tab_async(info.url, info.title)
+            else:
+                self._log.info("sessions: no URL for %s — can't raise tab", session_id)
         except Exception:
-            pass
+            self._log.exception("chrome focus failed")
         self._refresh_sessions()
 
     def recreate_certs(self, _sender) -> None:
