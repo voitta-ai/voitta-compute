@@ -35,23 +35,29 @@ as "it works":
 | cairosvg | ❌ fails | Same story with `libcairo`. |
 | Headless browser | ❌ absent | No `chromium`, `google-chrome`, or `wkhtmltopdf` binaries on the box. |
 
-Probe pattern (keep as a reusable script — cheap to re-run when the sandbox
-changes):
+**Important: every app upgrade wipes `userbase/`**, so pip-installed engines
+(reportlab, svglib, pymupdf) vanish between versions — only bundled deps
+(fpdf2, matplotlib) persist. So DO re-probe the *viable* engines at the start
+of a PDF task, but do NOT re-test weasyprint/cairosvg/headless-browser: their
+failure is structural (missing native libs, no compiler, no browser binary),
+not sandbox state — pip reinstalling them will never help.
+
+Probe pattern (viable engines only — cheap to re-run after any app upgrade):
 
 ```python
-import importlib, shutil
+import importlib
 
 def build(ctx):
     report = {}
-    for mod in ["fpdf", "svglib", "reportlab", "weasyprint", "cairosvg", "fitz"]:
+    for mod in ["fpdf", "svglib", "reportlab", "fitz"]:
         try:
             importlib.import_module(mod)
             report[mod] = "import-ok"
         except Exception as e:
-            report[mod] = f"MISSING: {type(e).__name__}: {e}"
-    for binname in ["chromium", "google-chrome", "wkhtmltopdf"]:
-        report[f"bin:{binname}"] = shutil.which(binname) or "not-found"
+            report[mod] = f"MISSING: {type(e).__name__}"
     ctx.json(report)
+    # fpdf should always be import-ok (bundled). Missing svglib/reportlab/fitz
+    # just means pip_install them again — the last upgrade wiped userbase/.
 ```
 
 ## The core pattern
@@ -144,8 +150,10 @@ ctx.json({"path": out, "bytes": os.path.getsize(out), "preview": preview})
    the route (JS or no JS).
 2. `run_script("pdf-engine-probe")` — confirm what's importable *right now*
    (define the probe above if it doesn't exist).
-3. `pip_install(["pymupdf"])` — for the verification rasterizer. Skip
-   weasyprint/cairosvg; they will not import here.
+3. `pip_install(["pymupdf"])` — for the verification rasterizer (and
+   `svglib`/`reportlab` if you want the fallback engine). These must be
+   reinstalled after every app upgrade — the userbase wipe removes them.
+   Skip weasyprint/cairosvg entirely; they can never import here.
 4. Consult RAG before writing code: `rag_query(corpus="docs", ...)` for the
    ctx/delivery contract, `rag_query(corpus="code", query="fpdf2 svg ...")` for
    exact fpdf2 APIs (source is indexed under `lib-sources/fpdf2/`).
