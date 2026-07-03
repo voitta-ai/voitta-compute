@@ -67,7 +67,7 @@ export default function ThreadPicker({
   onSdkSelect,
 }: Props) {
   const api = useContext(ChainlitContext);
-  const { threadId: currentThreadId } = useChatMessages();
+  const { threadId: currentThreadId, messages } = useChatMessages();
   const settings = useSettings();
   const brainMode = settings.provider === AGENT_SDK_PROVIDER;
 
@@ -101,8 +101,17 @@ export default function ThreadPicker({
       const res = await fetch(`${backendOrigin}/api/agent_sdk/sessions`, {
         credentials: "include",
       });
-      const body = (await res.json()) as { sessions?: SdkSession[] };
+      const body = (await res.json()) as {
+        sessions?: SdkSession[];
+        active_session_id?: string | null;
+      };
       setSdkSessions(body.sessions ?? []);
+      // The backend tracks which session the current pane is on (ongoing
+      // conversations included, not just explicit picks) — adopt it so the
+      // button shows the live conversation's title instead of the default.
+      if (body.active_session_id !== undefined) {
+        setActiveSdkId(body.active_session_id);
+      }
     } catch (err) {
       console.warn("[ThreadPicker] fetchSdkSessions error", err);
       setSdkSessions([]);
@@ -123,6 +132,15 @@ export default function ThreadPicker({
   useEffect(() => {
     if (open) refresh();
   }, [open, refresh]);
+
+  // Brain mode: a brand-new conversation only gets its session id + title once
+  // the first turn completes, and nothing else re-renders the picker then.
+  // Refresh shortly after the message stream goes quiet so the label catches up.
+  useEffect(() => {
+    if (!brainMode || messages.length === 0) return;
+    const t = setTimeout(refresh, 1500);
+    return () => clearTimeout(t);
+  }, [brainMode, messages, refresh]);
 
   // Switch an API-provider thread (Chainlit resume).
   const switchThread = useCallback(

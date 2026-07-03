@@ -120,6 +120,8 @@ async def handle_auth_error(
         )
         if result.session_id:
             cl.user_session.set("agent_sdk_session_id", result.session_id)
+            from app.services.agent_sdk.selection import set_active
+            set_active(ctx.email, result.session_id)
     except AgentSdkAuthError:
         await cl.Message(
             content="⚠️ Still not authenticated after saving the token. "

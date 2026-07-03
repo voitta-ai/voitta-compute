@@ -224,7 +224,20 @@ async def on_chat_start() -> None:
         sid = "?"
     logger.info("on_chat_start: sid=%s", sid)
 
-    _apply_current_user()
+    email = _apply_current_user()
+
+    # A fresh pane starts a brand-new SDK session on its next turn — unless a
+    # history pick is latched (the pick's select route fired just before the
+    # pane remounted). Re-derive the dropdown's "active session" accordingly,
+    # so a reloaded pane doesn't keep advertising a conversation it won't
+    # actually continue.
+    try:
+        from app.services.agent_sdk.selection import peek_pending, set_active
+        _sel, _picked = peek_pending(email)
+        set_active(email, _picked if _sel else None)
+    except Exception:
+        logger.exception("on_chat_start: active-session reset failed")
+
     user_settings = load_user_settings()
     provider = user_settings.get("provider", "anthropic")
     api_keys = user_settings.get("api_keys") or {}
@@ -491,7 +504,7 @@ async def _run_agent_sdk_turn(
     # A history-dropdown pick (resume an existing session, or start fresh)
     # arrives via the select route and latches per-user; consume it here so it
     # wins over the live continuation id for this turn onward.
-    from app.services.agent_sdk.selection import take_pending
+    from app.services.agent_sdk.selection import set_active, take_pending
 
     selected, picked_id = take_pending(email)
     if selected:
@@ -508,6 +521,7 @@ async def _run_agent_sdk_turn(
         )
         if result.session_id:
             cl.user_session.set("agent_sdk_session_id", result.session_id)
+            set_active(email, result.session_id)
     except AgentSdkUnavailable:
         logger.warning("agent_sdk turn: engine unavailable")
         await cl.Message(

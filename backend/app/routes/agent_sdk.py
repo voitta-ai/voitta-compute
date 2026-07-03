@@ -23,7 +23,7 @@ from app.services.agent_sdk import (
 )
 from app.services.agent_sdk.config import is_available
 from app.services.agent_sdk.credentials import clear_token, has_token
-from app.services.agent_sdk.selection import set_pending
+from app.services.agent_sdk.selection import get_active, set_active, set_pending
 from app.services.current_user import get_current_email
 
 logger = logging.getLogger(__name__)
@@ -34,13 +34,21 @@ router = APIRouter(prefix="/api/agent_sdk")
 @router.get("/sessions")
 async def list_sessions() -> dict:
     if not is_available():
-        return {"available": False, "has_token": False, "sessions": []}
+        return {"available": False, "has_token": False, "sessions": [],
+                "active_session_id": None}
     try:
         sessions = await list_brain_sessions()
     except Exception:
         logger.exception("list_brain_sessions failed")
         sessions = []
-    return {"available": True, "has_token": has_token(), "sessions": sessions}
+    return {
+        "available": True,
+        "has_token": has_token(),
+        "sessions": sessions,
+        # The session the user's current chat pane is on — lets the dropdown
+        # label an ongoing conversation, not just an explicitly picked one.
+        "active_session_id": get_active(get_current_email()),
+    }
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -64,6 +72,7 @@ async def select(body: SelectBody) -> dict:
     email = get_current_email()
     target = None if body.new else (body.session_id or None)
     set_pending(email, target)
+    set_active(email, target)
     return {"ok": True, "selected": target}
 
 
