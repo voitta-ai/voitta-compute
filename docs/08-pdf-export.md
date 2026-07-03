@@ -5,6 +5,12 @@ Reports render as HTML in the report pane and stay there. When you need a PDF as
 a **deliverable file**, build it directly in a script with **fpdf2** — a
 pure-Python, generic PDF builder.
 
+> **Exporting an existing report to PDF?** See the field-tested recipe in
+> [`recipes/pdf-report.md`](recipes/pdf-report.md) — vector SVG embedding
+> (gradients included), which engines actually work in the sandbox
+> (weasyprint/cairosvg do **not** — missing native libs), and the
+> rasterize-and-verify loop.
+
 ## fpdf2
 
 `fpdf2` is installed by default. Its source and docs are indexed in the `code`

@@ -13,6 +13,7 @@ Copy-paste patterns for common content types inside HTML reports. Every recipe a
 | `elk.md` | ELK graph layout via CDN |
 | `theming.md` | Using `ctx.theme()` CSS variables |
 | `knowledge-graph.md` | networkx → ELK/SVG visualization |
+| `pdf-report.md` | Rebuild a report as a true vector PDF with fpdf2 (SVG-with-gradients embedding, Unicode fonts, PyMuPDF preview loop). Returns `None` — deliverable is a file, not report HTML. |
 
 ## Rules that apply to all recipes
 
