@@ -1,4 +1,6 @@
  28a383fc201210938934c310cc8c401d9880c245 lib-sources/elk (heads/master)
  5a952e8d3f5aff6d59e0d9f0839b5eb49e07ebc9 lib-sources/elkjs (0.3.0-178-g5a952e8)
+ bd11e753bb30c97c32704ca412bba1107a71b9fe lib-sources/fpdf2 (heads/master)
  5ef70112a1ff19c05324ff889dd30405b1002044 lib-sources/jinja (3.1.6-164-g5ef70112)
  d59cf621fbdc7ee35068008fd5007a3b2653e881 lib-sources/three.js (heads/dev)
+ 78ae832e0dae74331c78d0a4368d139bb8eac895 lib-sources/xhtml2pdf (v0.2.17-10-g78ae832)

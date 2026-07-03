@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -84,6 +85,19 @@ _AUTH_HINTS = (
 class TurnResult:
     session_id: str | None
     is_error: bool = False
+
+
+# Wall-clock ceiling for one brain turn. Agentic loops — especially now that the
+# engine can run Bash — can otherwise run indefinitely (a command waiting on
+# stdin, a runaway define/run/probe loop). An unbounded turn holds the engine
+# subprocess *and* keeps the event loop it streams on busy, which is the "dead
+# session" that makes the whole app look wedged. On expiry we close the SDK
+# generator (terminating the engine subprocess) and surface a clean error.
+# Override with VOITTA_BRAIN_TURN_TIMEOUT_S (seconds).
+try:
+    _TURN_TIMEOUT_S = float(os.environ.get("VOITTA_BRAIN_TURN_TIMEOUT_S", "600"))
+except ValueError:
+    _TURN_TIMEOUT_S = 600.0
 
 
 def _truncate(text: str, limit: int = 32_000) -> str:
@@ -244,56 +258,74 @@ async def run_agent_sdk_turn(
             streaming_msg = None
 
     ticker = asyncio.create_task(_ticker())
+    # Hold the generator explicitly so we can guarantee it's closed on every
+    # exit path — closing it tears down the SDK transport + engine subprocess,
+    # so a stuck turn can't linger.
+    agen = query(prompt=user_prompt_stream(user_text), options=options)
+    timed_out = False
     try:
-        async for message in query(prompt=user_prompt_stream(user_text), options=options):
-            if isinstance(message, AssistantMessage):
-                tokens += _usage_tokens(getattr(message, "usage", None))
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        # Assistant prose — preambles between tool calls AND the
-                        # final answer. Each contiguous run is its own bubble;
-                        # a tool call closes the current bubble so the next run
-                        # starts fresh (nothing is merged or eaten).
-                        if not block.text:
+        # asyncio.timeout (3.11+) fires between/after awaits — an agentic loop
+        # yields control at each engine round-trip, so the deadline is honoured
+        # even mid-turn. (A single synchronous block inside a tool would not be
+        # preempted; the heavy tools — e.g. run_script — are already thread
+        # off-loaded, so in practice the turn stays interruptible.)
+        async with asyncio.timeout(_TURN_TIMEOUT_S):
+            async for message in agen:
+                if isinstance(message, AssistantMessage):
+                    tokens += _usage_tokens(getattr(message, "usage", None))
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            # Assistant prose — preambles between tool calls AND
+                            # the final answer. Each contiguous run is its own
+                            # bubble; a tool call closes the current bubble so the
+                            # next run starts fresh (nothing is merged or eaten).
+                            if not block.text:
+                                continue
+                            if streaming_msg is None:
+                                streaming_msg = cl.Message(content="")
+                                await streaming_msg.send()
+                            await streaming_msg.stream_token(block.text)
+                        elif isinstance(block, ThinkingBlock):
+                            # Reasoning isn't shown (summarised/omitted by
+                            # default); the ticker already conveys "busy".
                             continue
-                        if streaming_msg is None:
-                            streaming_msg = cl.Message(content="")
-                            await streaming_msg.send()
-                        await streaming_msg.stream_token(block.text)
-                    elif isinstance(block, ThinkingBlock):
-                        # Reasoning isn't shown (summarised/omitted by default);
-                        # the ticker already conveys "busy".
-                        continue
-                    elif isinstance(block, ToolUseBlock):
-                        await _flush_text()
-                        name = (block.name or "").removeprefix(f"mcp__{MCP_SERVER_NAME}__")
-                        step = cl.Step(name=name or "tool", type="tool")
-                        try:
-                            import json as _json
-                            step.input = _truncate(_json.dumps(block.input, ensure_ascii=False, default=str))
-                        except Exception:
-                            step.input = str(block.input)
-                        await step.send()
-                        steps[block.id] = step
-            elif isinstance(message, UserMessage):
-                # Tool results the engine fed back — attach to their steps.
-                content = message.content
-                blocks = content if isinstance(content, list) else []
-                for block in blocks:
-                    if isinstance(block, ToolResultBlock):
-                        step = steps.get(block.tool_use_id)
-                        if step is not None:
-                            step.output = _truncate(_tool_result_text(block.content))
-                            if block.is_error:
-                                step.is_error = True
-                            await step.update()
-            elif isinstance(message, ResultMessage):
-                result_msg = message
-                if message.session_id:
-                    session_id = message.session_id
+                        elif isinstance(block, ToolUseBlock):
+                            await _flush_text()
+                            name = (block.name or "").removeprefix(f"mcp__{MCP_SERVER_NAME}__")
+                            step = cl.Step(name=name or "tool", type="tool")
+                            try:
+                                import json as _json
+                                step.input = _truncate(_json.dumps(block.input, ensure_ascii=False, default=str))
+                            except Exception:
+                                step.input = str(block.input)
+                            await step.send()
+                            steps[block.id] = step
+                elif isinstance(message, UserMessage):
+                    # Tool results the engine fed back — attach to their steps.
+                    content = message.content
+                    blocks = content if isinstance(content, list) else []
+                    for block in blocks:
+                        if isinstance(block, ToolResultBlock):
+                            step = steps.get(block.tool_use_id)
+                            if step is not None:
+                                step.output = _truncate(_tool_result_text(block.content))
+                                if block.is_error:
+                                    step.is_error = True
+                                await step.update()
+                elif isinstance(message, ResultMessage):
+                    result_msg = message
+                    if message.session_id:
+                        session_id = message.session_id
 
         if result_msg is not None and result_msg.is_error:
             _raise_for_result(result_msg)
+    except (TimeoutError, asyncio.TimeoutError):
+        # Turn exceeded the wall-clock ceiling — treat as a clean, non-fatal end
+        # rather than a crash. The finally block closes the generator (killing
+        # the engine subprocess); we surface a message below and keep the session
+        # id so the user can continue.
+        timed_out = True
+        logger.warning("agent_sdk turn timed out after %.0fs", _TURN_TIMEOUT_S)
     except CLINotFoundError as exc:
         raise AgentSdkUnavailable(str(exc)) from exc
     except AgentSdkError:
@@ -310,6 +342,14 @@ async def run_agent_sdk_turn(
             raise AgentSdkAuthError(detail=str(exc)) from exc
         raise AgentSdkError(str(exc)) from exc
     finally:
+        # Always tear the engine down — aclose() propagates GeneratorExit into
+        # the SDK's query loop, which terminates the subprocess transport. This
+        # is what stops a stuck/interactive turn from lingering as a "dead
+        # session" that holds the event loop.
+        try:
+            await agen.aclose()
+        except Exception:
+            pass
         ticker.cancel()
         try:
             await ticker
@@ -321,6 +361,18 @@ async def run_agent_sdk_turn(
             await status.remove()
         except Exception:
             pass
+
+    if timed_out:
+        mins = int(_TURN_TIMEOUT_S // 60)
+        await cl.Message(
+            content=(
+                f"⏱️ This turn ran longer than {mins} min and was stopped so it "
+                "couldn't hang the app. This often means a command was waiting "
+                "for input or a step looped. Send another message to continue — "
+                "the conversation is preserved."
+            ),
+        ).send()
+        return TurnResult(session_id=session_id, is_error=True)
 
     return TurnResult(session_id=session_id, is_error=False)
 

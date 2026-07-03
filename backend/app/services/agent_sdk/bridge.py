@@ -13,8 +13,10 @@ is request-scoped; construction is cheap (no IPC, no subprocess).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 # Installed at runtime by app.installer — import defensively so app boot never
@@ -30,6 +32,16 @@ from app.services.agent_sdk.config import MCP_SERVER_NAME
 from app.tools.registry import ToolCtx, registry
 
 logger = logging.getLogger(__name__)
+
+# Per-tool wall-clock ceiling. A bridged tool that hangs (a browser round-trip
+# whose tab went away, a wedged connector) would otherwise stall the whole turn
+# with no signal to the engine. On expiry we return a structured ``isError``
+# timeout so the model gets an actionable result and can move on. Set just above
+# run_script's own 120 s cap. Override with VOITTA_BRAIN_TOOL_TIMEOUT_S.
+try:
+    _TOOL_TIMEOUT_S = float(os.environ.get("VOITTA_BRAIN_TOOL_TIMEOUT_S", "150"))
+except ValueError:
+    _TOOL_TIMEOUT_S = 150.0
 
 # Sentinel keys the orchestrator strips before the model sees a tool result;
 # we strip them here too and (for inline image forms) re-emit as MCP image
@@ -76,8 +88,27 @@ def _make_tool(spec, ctx: ToolCtx):
 
     async def _handler(args: dict[str, Any]) -> dict[str, Any]:
         # The SDK passes the validated input dict; dispatch through the same
-        # registry path the main loop uses so behaviour is identical.
-        res = await registry.dispatch(spec.name, dict(args or {}), ctx)
+        # registry path the main loop uses so behaviour is identical. Bounded by
+        # a wall-clock timeout so a hung tool returns a clean error to the engine
+        # instead of stalling the turn.
+        try:
+            res = await asyncio.wait_for(
+                registry.dispatch(spec.name, dict(args or {}), ctx),
+                timeout=_TOOL_TIMEOUT_S,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            logger.warning("agent_sdk tool %s timed out after %.0fs", spec.name, _TOOL_TIMEOUT_S)
+            err = {
+                "kind": "timeout",
+                "message": (
+                    f"tool {spec.name!r} exceeded {int(_TOOL_TIMEOUT_S)}s and was "
+                    "aborted — try a smaller request or a different approach"
+                ),
+            }
+            return {
+                "content": [{"type": "text", "text": json.dumps(err, ensure_ascii=False)}],
+                "isError": True,
+            }
         if res.ok:
             return {"content": _result_to_mcp_content(res.result)}
         err = res.error or {"kind": "error", "message": "tool failed"}
