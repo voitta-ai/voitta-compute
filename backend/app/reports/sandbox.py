@@ -117,10 +117,45 @@ def smoke_test(slug: str, code: str, host: Optional[str] = None) -> RunResult:
 
     Used by ``define_script`` / ``edit_script`` to validate code BEFORE
     it lands on disk. Side-effects in ``ctx`` are discarded.
+
+    SYNCHRONOUS — never call this from the event loop; use
+    :func:`smoke_test_async`. A wedged uvicorn incident traced back to a
+    smoke test running inline in an async tool handler: the candidate code
+    did a filesystem-wide ``glob.glob(..., recursive=True)`` and the sync
+    frame blocked the loop for good (no asyncio timeout can preempt it).
     """
     ctx = ScriptContext(slug=slug, host=host)
     ctx.sheets = _make_sheets_client(None)
     return _execute(code, ctx)
+
+
+_SMOKE_TIMEOUT_S = 60  # max wall time for a define/edit validation run
+
+
+async def smoke_test_async(
+    slug: str, code: str, host: Optional[str] = None
+) -> RunResult:
+    """Thread-offloaded, time-limited smoke test — safe on the event loop.
+
+    On timeout the worker thread keeps running (Python threads can't be
+    killed) but the loop stays responsive and the caller gets a clean
+    failure instead of a frozen app.
+    """
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(smoke_test, slug, code, host),
+            timeout=_SMOKE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        return RunResult(
+            ok=False,
+            error=(
+                f"smoke test timed out after {_SMOKE_TIMEOUT_S}s — build(ctx) "
+                "must finish quickly at definition time. Avoid unbounded "
+                "loops, filesystem-wide scans (e.g. recursive glob from /), "
+                "and slow network calls without timeouts."
+            ),
+        )
 
 
 _SCRIPT_TIMEOUT_S = 120  # max wall time for a single build(ctx) run

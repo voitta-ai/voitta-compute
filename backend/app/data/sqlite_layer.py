@@ -75,7 +75,9 @@ _SCHEMA_STMTS = [
         "generation"      TEXT,
         "showInput"       TEXT,
         "language"        TEXT,
-        "indent"          INTEGER
+        "indent"          INTEGER,
+        "defaultOpen"     INTEGER NOT NULL DEFAULT 0,
+        "autoCollapse"    INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -105,6 +107,17 @@ _SCHEMA_STMTS = [
         "comment"  TEXT
     )
     """,
+]
+
+# Columns added by newer chainlit versions. CREATE TABLE IF NOT EXISTS
+# does nothing for pre-existing DBs, so each (table, column, ddl) here is
+# retro-fitted with ALTER TABLE at startup. Without this, every step
+# insert/update fails (and retries once per second from the status
+# ticker), flooding the log — seen live when chainlit 2.11.1 started
+# writing "defaultOpen" into a DB created before that column existed.
+_MIGRATIONS = [
+    ("steps", "defaultOpen", 'ALTER TABLE steps ADD COLUMN "defaultOpen" INTEGER NOT NULL DEFAULT 0'),
+    ("steps", "autoCollapse", 'ALTER TABLE steps ADD COLUMN "autoCollapse" INTEGER NOT NULL DEFAULT 0'),
 ]
 
 
@@ -145,6 +158,11 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
         async with self.engine.begin() as conn:
             for stmt in _SCHEMA_STMTS:
                 await conn.execute(text(stmt))
+            for table, column, ddl in _MIGRATIONS:
+                cols = await conn.execute(text(f"PRAGMA table_info({table})"))
+                if column not in {r[1] for r in cols.fetchall()}:
+                    await conn.execute(text(ddl))
+                    logger.info("SQLiteDataLayer: migrated %s.%s", table, column)
             # The INSERT OR IGNORE above is skipped when a row with
             # identifier='local' already exists (e.g. from an older build
             # that used real auth).  Read back whoever actually owns the

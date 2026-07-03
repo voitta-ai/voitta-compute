@@ -67,7 +67,7 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
     if err:
         return {"ok": False, "error": err}
 
-    result = sandbox.smoke_test(name, candidate)
+    result = await sandbox.smoke_test_async(name, candidate)
     if not result.ok:
         return {"ok": False, "error": result.error, "traceback": result.traceback}
 

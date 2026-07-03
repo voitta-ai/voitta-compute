@@ -36,7 +36,7 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
                 "read the current source with get_script first."
             ),
         }
-    result = sandbox.smoke_test(name, code)
+    result = await sandbox.smoke_test_async(name, code)
     if not result.ok:
         return {"ok": False, "error": result.error, "traceback": result.traceback}
     try:
