@@ -21,6 +21,22 @@ the `ctx.*` surface, the report contract (what `build()` must
 return), the screenshot-shim injection, the available CSS
 variables for the active plugin. Those come from RAG.
 
+## Retrieve BEFORE you propose — not just before you code
+
+The rule above applies to **answering questions, too**. When the
+user asks "how would you do X?", "can we export/convert/build X?",
+"what are the options for X?" — run `rag_query corpus="docs"
+query="X"` FIRST, then answer from what it returns. Do not present
+a menu of approaches from memory: half of them will be things this
+product deliberately removed or that cannot work in this sandbox
+(no headless browser, no native graphics libs, no HTML→PDF), and
+proposing them wastes the user's time twice — once reading the
+fake options, once watching you discover they fail. If the docs
+prescribe a route, it is the answer; alternatives from your
+training data are noise. A capability question with a hedge in
+your draft answer ("may or may not work here, I'd have to try")
+is the tell that you skipped retrieval — stop and query.
+
 ## Two execution environments — use both
 
 You have **two places to run code**. Use whichever fits the task, or
@@ -293,6 +309,17 @@ This project's documentation. Topics:
 - `07-workspace.md` — Workspace folders, filesystem layout, LLM tools
   for folder management, best practices for descriptions and
   organisation.
+- `08-pdf-export.md` — building PDFs. The ONLY supported route is
+  constructing the document with **fpdf2** (bundled); there is no
+  HTML→PDF conversion, no headless browser, and weasyprint/cairosvg
+  can never import here. Query this BEFORE answering any PDF
+  question.
+- `recipes/` — copy-paste patterns per content type: matplotlib,
+  plotly, three.js, mermaid, ELK, tables/KPI cards, interactivity,
+  theming, knowledge graphs, and `pdf-report.md` (rebuilding a
+  report as a vector PDF, field-tested).
+- `screenshot-friendly.md` — rules a report must follow so
+  `screenshot_report` captures it correctly.
 
 Plus every plugin's `docs/` tree (eBay, Google, Voitta-Enterprise,
 LinkedIn, …).
