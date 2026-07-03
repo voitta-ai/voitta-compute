@@ -1,9 +1,14 @@
 # Building PDFs
 
-There is **no HTML→PDF conversion** and no "export this report to PDF" button.
-Reports render as HTML in the report pane and stay there. When you need a PDF as
-a **deliverable file**, build it directly in a script with **fpdf2** — a
-pure-Python, generic PDF builder.
+**Rule: construct PDFs with a low-level builder — never convert HTML.** There is
+no HTML→PDF path in this product and no "export report to PDF" button, by design.
+Do not reach for any HTML-to-PDF converter, `wkhtmltopdf`, a headless browser, or
+fpdf2's own `write_html`: those approaches were removed on purpose (no JS charts,
+native-library/font breakage in the sandbox). Build the document directly with
+**fpdf2** — place text, tables, images, and vector drawing with explicit calls
+(`pdf.cell`, `pdf.image`, `pdf.table`, `pdf.draw_path`).
+
+When you need a PDF as a **deliverable file**, that's the only supported route.
 
 > **Exporting an existing report to PDF?** See the field-tested recipe in
 > [`recipes/pdf-report.md`](recipes/pdf-report.md) — vector SVG embedding

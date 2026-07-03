@@ -717,6 +717,16 @@ _SKIP_DIR_NAMES = {
     ".turbo", ".next", "coverage", ".storybook", "storybook",
 }
 
+# Specific vendored files to keep OUT of the code index, by repo-relative POSIX
+# path. fpdf2's HTML.md documents its `write_html` HTML→PDF feature (and points at
+# third-party HTML converters) — both cut against our directive to *construct*
+# PDFs with low-level fpdf2 calls, not convert HTML. Excluding it keeps that
+# guidance out of RAG so the brain doesn't rediscover an HTML→PDF path we
+# deliberately removed.
+_SKIP_CODE_FILES = {
+    "fpdf2/docs/HTML.md",
+}
+
 # three.js src/ subtrees to skip — WebGPU shader node graph and internal
 # renderer machinery. 505 files, zero value for typical script authoring.
 _SKIP_THREE_SRC_DIRS = {"nodes", "renderers"}
@@ -779,6 +789,8 @@ def discover_code_files(
                     continue
                 rel_parts = p.relative_to(repo_dir).parts
                 if any(part in skip_dirs for part in rel_parts):
+                    continue
+                if f"{repo_dir.name}/{'/'.join(rel_parts)}" in _SKIP_CODE_FILES:
                     continue
                 # three.js: skip nodes/ and renderers/ anywhere under src/
                 if repo_dir.name == "three.js" and any(
