@@ -263,6 +263,10 @@ async def run_agent_sdk_turn(
     # so a stuck turn can't linger.
     agen = query(prompt=user_prompt_stream(user_text), options=options)
     timed_out = False
+    logger.info(
+        "agent_sdk turn start: resume=%s model=%s prompt_chars=%d",
+        resume_session_id or "-", model or DEFAULT_MODEL, len(user_text),
+    )
     try:
         # asyncio.timeout (3.11+) fires between/after awaits — an agentic loop
         # yields control at each engine round-trip, so the deadline is honoured
@@ -312,6 +316,21 @@ async def run_agent_sdk_turn(
                                 if block.is_error:
                                     step.is_error = True
                                 await step.update()
+                elif isinstance(message, SystemMessage):
+                    # The engine's init event announces the session id at turn
+                    # START. Latch it as the user's active session right away so
+                    # the history dropdown can title an in-flight conversation —
+                    # waiting for the ResultMessage meant multi-minute first
+                    # turns showed the default label the whole time.
+                    sid = (getattr(message, "data", None) or {}).get("session_id")
+                    if sid and sid != session_id:
+                        session_id = sid
+                        logger.info("agent_sdk turn: session id %s", sid)
+                        try:
+                            from app.services.agent_sdk.selection import set_active
+                            set_active(ctx.email, sid)
+                        except Exception:
+                            logger.exception("set_active at init failed")
                 elif isinstance(message, ResultMessage):
                     result_msg = message
                     if message.session_id:
@@ -362,6 +381,10 @@ async def run_agent_sdk_turn(
         except Exception:
             pass
 
+    logger.info(
+        "agent_sdk turn end: session=%s tokens=%d elapsed=%.0fs timed_out=%s",
+        session_id or "-", tokens, time.monotonic() - t0, timed_out,
+    )
     if timed_out:
         mins = int(_TURN_TIMEOUT_S // 60)
         await cl.Message(

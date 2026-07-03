@@ -274,6 +274,11 @@ def _start_uvicorn(log: logging.Logger) -> threading.Thread:
     # shares all in-memory state (sessions, sockets) with the TLS listener.
     _start_uvicorn_plaintext(log)
 
+    global _watchdog_started
+    if not _watchdog_started:
+        _watchdog_started = True
+        _start_health_watchdog(log)
+
     return t
 
 
@@ -320,8 +325,67 @@ def _uvicorn_status() -> str:
     if not t.is_alive():
         return "crashed"
     if srv is not None and getattr(srv, "started", False):
-        return "running"
+        return "unresponsive" if _health_probe_failures >= 3 else "running"
     return "starting…"
+
+
+# Consecutive /health probe failures against the TLS listener. A live thread
+# with a spinning event loop reads as "running" to thread-liveness checks —
+# an actual HTTP round-trip is the only reliable signal. Written by the
+# watchdog thread, read by _uvicorn_status.
+_health_probe_failures = 0
+_watchdog_started = False
+
+
+def _start_health_watchdog(log: logging.Logger) -> None:
+    """Probe the TLS listener's /health every 20 s (5 s timeout) on a daemon
+    thread. Three consecutive failures flip the menu status to "unresponsive",
+    log loudly, and dump all Python thread stacks to voitta-stacks.log — the
+    post-mortem we were missing when the event loop wedged at 100 % CPU."""
+
+    def _probe() -> None:
+        global _health_probe_failures
+        import ssl
+        import urllib.request
+
+        insecure = ssl._create_unverified_context()  # self-signed local cert
+        url = f"{_server_url()}/health"
+        dumped = False
+        while True:
+            time.sleep(20)
+            with _uvicorn_lock:
+                srv = _uvicorn_server
+            if srv is None or not getattr(srv, "started", False):
+                continue  # not up yet — nothing to probe
+            try:
+                with urllib.request.urlopen(url, timeout=5, context=insecure):
+                    pass
+                if _health_probe_failures:
+                    log.info("health watchdog: TLS listener recovered")
+                _health_probe_failures = 0
+                dumped = False
+            except Exception as exc:
+                _health_probe_failures += 1
+                log.warning(
+                    "health watchdog: probe %d failed: %s",
+                    _health_probe_failures, exc,
+                )
+                if _health_probe_failures == 3 and not dumped:
+                    dumped = True
+                    log.error(
+                        "health watchdog: TLS listener unresponsive — dumping "
+                        "thread stacks to voitta-stacks.log"
+                    )
+                    try:
+                        import faulthandler
+                        with (Path(USER_DATA_ROOT) / "voitta-stacks.log").open("a") as fp:
+                            from datetime import datetime as _dt
+                            fp.write(f"\n=== watchdog dump {_dt.now().isoformat()} ===\n")
+                            faulthandler.dump_traceback(file=fp, all_threads=True)
+                    except Exception:
+                        log.exception("health watchdog: stack dump failed")
+
+    threading.Thread(target=_probe, name="voitta-health-watchdog", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -553,7 +617,8 @@ class VoittaMenuBarApp(rumps.App):
 
         self._last_server_status = status
 
-        icons = {"running": "✓", "starting…": "⋯", "stopped": "✕", "crashed": "⚠"}
+        icons = {"running": "✓", "starting…": "⋯", "stopped": "✕", "crashed": "⚠",
+                 "unresponsive": "⚠"}
         label = f"Server: {icons.get(status, '')} {status}"
         if self._server_status_item.title != label:
             self._server_status_item.title = label
@@ -1278,14 +1343,33 @@ def main() -> None:
         _h.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s"
         ))
-        _vlog = logging.getLogger("voitta")
-        _vlog.setLevel(logging.INFO)
-        # Avoid duplicate handlers across reloads / re-entry.
-        if not any(isinstance(h, RotatingFileHandler) for h in _vlog.handlers):
-            _vlog.addHandler(_h)
+        # "voitta" alone isn't enough: the entire backend logs under "app.*"
+        # (app.chainlit_app, app.routes.*, app.services.*) and those records
+        # were lost after uvicorn's dictConfig — an incident left NO runtime
+        # trace on disk. Attach the same file handler to every namespace we
+        # care about.
+        for _name in ("voitta", "app", "chainlit", "uvicorn", "uvicorn.error"):
+            _l = logging.getLogger(_name)
+            _l.setLevel(logging.INFO)
+            # Avoid duplicate handlers across reloads / re-entry.
+            if not any(isinstance(h, RotatingFileHandler) for h in _l.handlers):
+                _l.addHandler(_h)
         log.info("voitta-app.log handler installed at %s", _app_log)
     except Exception:
         log.exception("could not install voitta-app.log handler")
+
+    # Post-mortem lever for a frozen/spinning backend: `kill -USR2 <pid>`
+    # dumps every thread's Python stack to voitta-stacks.log. Costless at
+    # runtime; invaluable when the event loop wedges and HTTP is dead.
+    try:
+        import faulthandler
+        import signal as _signal
+        _stacks_path = Path(USER_DATA_ROOT) / "voitta-stacks.log"
+        _stacks_fp = _stacks_path.open("a")  # kept open for process lifetime
+        faulthandler.register(_signal.SIGUSR2, file=_stacks_fp, all_threads=True)
+        log.info("SIGUSR2 stack-dump registered → %s", _stacks_path)
+    except Exception:
+        log.exception("could not register SIGUSR2 stack dump")
 
     # Chainlit reads CHAINLIT_APP_ROOT at module import time to set
     # FILES_DIRECTORY. Inside a frozen .app getcwd() returns "/" (read-only),

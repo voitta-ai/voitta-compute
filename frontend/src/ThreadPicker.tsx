@@ -98,8 +98,12 @@ export default function ThreadPicker({
   const fetchSdkSessions = useCallback(async () => {
     setLoading(true);
     try {
+      // Bounded: a wedged backend once left this pending forever and the
+      // dropdown showed "loading…" indefinitely. On timeout we keep whatever
+      // list we already have.
       const res = await fetch(`${backendOrigin}/api/agent_sdk/sessions`, {
         credentials: "include",
+        signal: AbortSignal.timeout(10_000),
       });
       const body = (await res.json()) as {
         sessions?: SdkSession[];
@@ -114,7 +118,8 @@ export default function ThreadPicker({
       }
     } catch (err) {
       console.warn("[ThreadPicker] fetchSdkSessions error", err);
-      setSdkSessions([]);
+      // keep the previous list — an empty flash on a transient failure loses
+      // the user's context for no benefit
     } finally {
       setLoading(false);
     }
