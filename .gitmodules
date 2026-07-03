@@ -10,3 +10,9 @@
 [submodule "lib-sources/jinja"]
 	path = lib-sources/jinja
 	url = https://github.com/pallets/jinja
+[submodule "lib-sources/xhtml2pdf"]
+	path = lib-sources/xhtml2pdf
+	url = https://github.com/xhtml2pdf/xhtml2pdf.git
+[submodule "lib-sources/fpdf2"]
+	path = lib-sources/fpdf2
+	url = https://github.com/py-pdf/fpdf2.git

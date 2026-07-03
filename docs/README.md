@@ -11,5 +11,6 @@
 | `05-browser-eval.md` | browser_eval — JS in the user's tab |
 | `06-reports.md` | User scripts, ctx API, HTML output, execution model |
 | `07-workspace.md` | Snapshots, folders, data access |
+| `08-pdf-export.md` | PDF: report→PDF export (what renders) + building PDFs directly (fpdf2) |
 | `screenshot-friendly.md` | Rules for screenshot-safe HTML |
 | `recipes/README.md` | Recipe index |

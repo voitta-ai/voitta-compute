@@ -59,6 +59,16 @@ _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
     ("networkx",   "networkx>=3.0"),
     ("aiosqlite",  "aiosqlite>=0.17"),
     ("sqlalchemy", "sqlalchemy[asyncio]>=2.0"),
+    # Pure-Python HTML→PDF for the report pane's "Download PDF" (keeps text
+    # selectable). Deliberately not WeasyPrint: that needs native pango/cairo
+    # libs that don't ship as wheels and would break in the frozen app. See
+    # app.services.report_pdf.
+    ("xhtml2pdf", "xhtml2pdf>=0.2.16"),
+    # Generic, programmatic PDF builder — pure-Python, wheels-only. Lets report
+    # scripts construct PDFs directly (pages/text/tables/images/vector) rather
+    # than only via HTML conversion. (ReportLab, the heavier alternative, is
+    # already present transitively as xhtml2pdf's engine.) Import name: fpdf.
+    ("fpdf", "fpdf2>=2.7"),
 ]
 
 
@@ -121,6 +131,8 @@ PACKAGE_BLURBS: dict[str, str] = {
     "chromadb":    "chromadb: vector database for RAG search (biggest download)…",
     "rdflib":      "rdflib: RDF knowledge graph — triples, SPARQL, OWL…",
     "networkx":    "networkx: graph algorithms and layout for flowcharts…",
+    "xhtml2pdf":   "xhtml2pdf: HTML→PDF export for reports (selectable text)…",
+    "fpdf":        "fpdf2: build PDFs directly — pages, tables, images, vector…",
 }
 
 ProgressCb = Callable[[int, int, str, "str | None"], None]

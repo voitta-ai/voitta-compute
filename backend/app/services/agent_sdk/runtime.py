@@ -7,9 +7,10 @@ and reopen it. The new/continued session id is captured from the terminal
 ``ResultMessage`` and returned to the caller, which stamps it on the session
 and thread for the next turn.
 
-Tools are the registry suite, bridged in-process (see :mod:`.bridge`); the
-engine's own filesystem/bash tools are denied via ``can_use_tool`` so the brain
-acts only through Voitta's tools.
+Tools are the registry suite, bridged in-process (see :mod:`.bridge`), plus a
+small allowlist of engine built-ins (``Bash``) gated by ``can_use_tool``; the
+rest of the engine's native filesystem/web tools are denied, so Voitta's tools
+stay the primary surface.
 """
 
 from __future__ import annotations
@@ -148,13 +149,19 @@ async def user_prompt_stream(text: str) -> AsyncIterator[dict[str, Any]]:
     yield {"type": "user", "message": {"role": "user", "content": text}}
 
 
-async def _can_use_tool(tool_name: str, _input: dict, _ctx) -> Any:
-    """Allow only the bridged Voitta tools; deny the engine's built-ins.
+# Engine built-in tools the brain may use *alongside* the bridged Voitta suite.
+# Bash is enabled deliberately: the engine reaches for it naturally, and letting
+# it run a command in its pinned per-user workspace cwd is better UX than a hard
+# refusal. The rest of the engine's native tools (file/web/…) stay denied, so
+# the Voitta MCP tools remain the primary surface.
+_ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash",)
 
-    This is what confines the brain to Voitta's tool surface — the engine's
-    own bash/file/web tools never run.
+
+async def _can_use_tool(tool_name: str, _input: dict, _ctx) -> Any:
+    """Allow the bridged Voitta tools plus a small allowlist of engine built-ins
+    (Bash); deny the rest of the engine's native tools.
     """
-    if tool_name.startswith(f"mcp__{MCP_SERVER_NAME}__"):
+    if tool_name.startswith(f"mcp__{MCP_SERVER_NAME}__") or tool_name in _ALLOWED_ENGINE_TOOLS:
         return PermissionResultAllow()
     return PermissionResultDeny(message=f"{tool_name} is not available in this assistant")
 
@@ -167,7 +174,7 @@ def _build_options(
         cwd=str(workspace_dir()),
         env=subprocess_env(),
         mcp_servers={MCP_SERVER_NAME: server},
-        allowed_tools=allowed,
+        allowed_tools=[*allowed, *_ALLOWED_ENGINE_TOOLS],
         can_use_tool=_can_use_tool,
         system_prompt=system or None,
         model=model or DEFAULT_MODEL,

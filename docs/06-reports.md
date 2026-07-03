@@ -83,6 +83,15 @@ def build(ctx):
 
 The HTML is served at `/api/html-report?id=<slug>` and rendered in a same-origin `<iframe>`.
 
+### Exporting to PDF
+
+The report pane has a **Download PDF** button that converts this same HTML to a
+text-based PDF (selectable text). The converter (**xhtml2pdf**) does **not run
+JavaScript**, so JS-drawn charts (Bokeh/Plotly/three.js) and modern layout CSS
+(flexbox/grid/absolute positioning) don't export — embed static images
+(matplotlib PNG as a `data:` URI) and prefer table/block layout for anything that
+must appear in the PDF. Full rules: [`08-pdf-export.md`](08-pdf-export.md).
+
 ## Smoke testing
 
 `define_script` and `edit_script` run a smoke test (`sandbox.smoke_test()`) before persisting the code. The script must not crash during a bare `build(ctx)` call. If it does, the error is returned to the model without saving.
