@@ -697,17 +697,6 @@ CODE_RULES: dict[str, list[tuple[str, set[str]]]] = {
         # jsm addons — OrbitControls, GLTFLoader, EffectComposer, loaders, etc.
         ("examples/jsm", {".js"}),
     ],
-    "xhtml2pdf": [
-        # The HTML→PDF engine behind the report pane's "Download PDF". Its
-        # source is the ground truth for which HTML tags and CSS properties
-        # actually render — `default.py` (supported CSS defaults + property
-        # table), `tags.py` (per-tag handlers), and `parser.py`/`context.py`
-        # (the CSS the parser understands) are the useful reads when the LLM
-        # needs to know whether a report will export cleanly.
-        ("xhtml2pdf", {".py"}),
-        # Sphinx docs — supported-tags/CSS reference and format notes.
-        ("docs",      {".rst", ".md"}),
-    ],
     "fpdf2": [
         # Generic, programmatic PDF builder (fpdf2, py-pdf org). For when a
         # script needs to construct a PDF directly — pages, text, tables,

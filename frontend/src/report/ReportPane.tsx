@@ -1,7 +1,7 @@
 // Report pane chrome: dynamic tab bar, body, collapse handle.
 // Positioning owned by Drawer's root data-layout; CSS in report.css.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useRecoilState, useSetRecoilState } from "recoil";
 import {
   activeTabState,
@@ -32,7 +32,6 @@ export default function ReportPane({
   const [collapsed, setCollapsed] = useRecoilState(reportCollapsedState);
   const [loading] = useRecoilState(reportLoadingState);
   const setCollapsedOnly = useSetRecoilState(reportCollapsedState);
-  const [exporting, setExporting] = useState(false);
 
   const hasTabs = workspaceOpen || reports.length > 0;
 
@@ -77,49 +76,6 @@ export default function ReportPane({
         else if (workspaceOpen) setActiveTab("workspace");
         else setActiveTab(null);
       }
-    }
-  }
-
-  const activeReport = reports.find((r) => r.render_id === validTab) ?? null;
-
-  // Export the active report to a text-based PDF (pure-Python HTML→PDF on the
-  // backend — keeps text selectable). Async, so the button shows an in-progress
-  // state while the backend converts.
-  async function exportPdf() {
-    if (!activeReport || exporting) return;
-    setExporting(true);
-    try {
-      const q = new URLSearchParams({
-        id: activeReport.name,
-        render_id: activeReport.render_id,
-        title: activeReport.title ?? activeReport.name,
-      });
-      const res = await fetch(`${backendOrigin}/api/report/export-pdf?${q}`, {
-        credentials: "include",
-      });
-      if (!res.ok) {
-        let msg = `PDF export failed (${res.status})`;
-        try {
-          const body = await res.json();
-          if (body?.detail) msg = body.detail;
-        } catch {
-          /* non-JSON error body */
-        }
-        alert(msg);
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${activeReport.title ?? activeReport.name}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.warn("[ReportPane] export pdf failed", err);
-      alert("PDF export failed — see console for details.");
-    } finally {
-      setExporting(false);
     }
   }
 
@@ -189,30 +145,6 @@ export default function ReportPane({
             ))}
           </nav>
           <span className="spacer" />
-          {activeReport && (
-            <button
-              className="hbtn"
-              type="button"
-              title={exporting ? "Exporting PDF…" : "Download report as PDF"}
-              aria-label="Download report as PDF"
-              disabled={exporting}
-              onClick={exportPdf}
-            >
-              {exporting ? (
-                <svg className="report-spinner" viewBox="0 0 40 40" width="13" height="13" aria-hidden="true">
-                  <circle cx="20" cy="20" r="16" fill="none" stroke="currentColor" strokeWidth="4"
-                    strokeDasharray="60 40" strokeLinecap="round" />
-                </svg>
-              ) : (
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" fill="none"
-                  stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 2v7.5" />
-                  <path d="M5 6.5l3 3 3-3" />
-                  <path d="M3 13h10" />
-                </svg>
-              )}
-            </button>
-          )}
           <button
             className="hbtn"
             type="button"
