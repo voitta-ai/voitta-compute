@@ -12,6 +12,7 @@ Responsibilities (all before importing any app.* module):
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import shutil
@@ -104,6 +105,49 @@ def _migrate_settings() -> None:
     if old_config.is_file() and not new_config.is_file():
         new_config.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(old_config, new_config)
+
+    _backfill_legacy_bookmarklet_keys(new_config)
+
+
+# Settings that only ever existed in the original bookmarklet app's blob.
+# The chainlit-era schema rewrite dropped them, so the chainlit→compute
+# copy above can't carry them; pull them straight from the original file.
+_LEGACY_BOOKMARKLET_KEYS = ("googleOAuth", "driveDownloadViaPickup", "pickupDownloadsDir")
+
+
+def _backfill_legacy_bookmarklet_keys(new_config: Path) -> None:
+    """Backfill keys lost in the bookmarklet→chainlit schema rewrite.
+
+    Google OAuth credentials/tokens (and the Drive pickup settings) were
+    configured in the original voitta-bookmarklet app but never made it
+    into the chainlit-era blob, so users who migrated through chainlit
+    land in voitta-compute with OAuth silently unconfigured. Runs on
+    every launch but only writes when a key is missing here and present
+    in the legacy file — existing values are never overwritten.
+    """
+    legacy = Path.home() / ".config" / "voitta-bookmarklet" / "settings.json"
+    if not legacy.is_file() or not new_config.is_file():
+        return
+    try:
+        legacy_blob = json.loads(legacy.read_text(encoding="utf-8"))
+        blob = json.loads(new_config.read_text(encoding="utf-8"))
+        if not isinstance(legacy_blob, dict) or not isinstance(blob, dict):
+            return
+        missing = [
+            k for k in _LEGACY_BOOKMARKLET_KEYS
+            if k not in blob and k in legacy_blob
+        ]
+        if not missing:
+            return
+        for k in missing:
+            blob[k] = legacy_blob[k]
+        tmp = new_config.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, new_config)
+    except Exception:
+        # Never block app launch on a best-effort backfill.
+        pass
 
     old_app_support = Path.home() / "Library" / "Application Support" / "Voitta Chainlit"
     new_app_support = Path.home() / "Library" / "Application Support" / "Voitta Compute"
