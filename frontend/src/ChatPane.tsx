@@ -11,10 +11,11 @@ import {
   useChatInteract,
   useChatMessages,
 } from "@chainlit/react-client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSetRecoilState } from "recoil";
 import MessageList from "./chat/MessageList";
 import Composer from "./chat/Composer";
+import QuestionCard from "./chat/QuestionCard";
 import TokenPromptModal from "./TokenPromptModal";
 import type { ImageAttachment } from "./lib/image-attach";
 import { encodeFiles } from "./lib/attachments";
@@ -41,7 +42,7 @@ export default function ChatPane({
   // (backendOrigin is still used below for socket transport selection.)
   const { connect, disconnect, session } = useAuthConnect();
   const { messages } = useChatMessages();
-  const { loading, elements } = useChatData();
+  const { loading, elements, askUser } = useChatData();
   const { sendMessage, stopTask, uploadFile, windowMessage } = useChatInteract();
   const setMessages = useSetRecoilState(messagesState);
   const [attachments, setAttachments] = useState<ImageAttachment[]>([]);
@@ -169,6 +170,20 @@ export default function ChatPane({
   // safety.
   const busy = loading || messages.some((m) => m.streaming);
 
+  // AskUserQuestion (Claude brain): the backend sends an element-type ask
+  // whose CustomElement carries the questions JSON in its props. While it is
+  // pending, Chainlit has already fired task_end (busy=false), so the composer
+  // stays usable — typing routes through the ask callback as a freeform
+  // `response` instead of starting a (concurrent!) new turn via sendMessage.
+  const askQuestions = useMemo(() => {
+    if (askUser?.spec.type !== "element") return null;
+    const el = elements.find((e) => e.id === askUser.spec.element_id);
+    if (!el || el.type !== "custom" || el.name !== "AskUserQuestion") return null;
+    const props = (el as { props?: Record<string, unknown> }).props;
+    const qs = props?.questions;
+    return Array.isArray(qs) && qs.length ? (qs as never[]) : null;
+  }, [askUser, elements]);
+
   async function onAttach(files: File[]) {
     const encoded = await encodeFiles(files);
     if (encoded.length) setAttachments((prev) => [...prev, ...encoded]);
@@ -179,6 +194,13 @@ export default function ChatPane({
   }
 
   async function onSend(text: string) {
+    // A question is pending: the typed text answers it (freeform path). Never
+    // fall through to sendMessage here — on_message has no busy-guard, so a
+    // regular message would start a second brain turn under the active one.
+    if (askQuestions && askUser) {
+      askUser.callback({ response: text } as never);
+      return;
+    }
     const pending = attachments;
     setAttachments([]);
 
@@ -216,6 +238,13 @@ export default function ChatPane({
         }
       />
       <TokenPromptModal />
+      {askQuestions && askUser && (
+        <QuestionCard
+          key={askUser.spec.step_id}
+          ask={askUser}
+          questions={askQuestions}
+        />
+      )}
       <Composer
         busy={busy}
         attachments={attachments}

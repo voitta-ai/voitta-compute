@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import chainlit as cl
+from chainlit.context import context_var as cl_context_var, get_context as cl_get_context
 
 # The Claude Agent SDK is installed at runtime by app.installer (like the other
 # heavy LLM deps), so it may be absent at module-import time on a fresh launch.
@@ -99,6 +100,16 @@ try:
 except ValueError:
     _TURN_TIMEOUT_S = 600.0
 
+# How long an AskUserQuestion waits for the human before giving up. Generous by
+# design — and on expiry the tool is DENIED with "no response", never silently
+# auto-answered (the CLI's brief auto-continue-after-60s experiment showed why:
+# a question the model asks is a gate, not a suggestion). While a question is
+# pending the turn deadline above is extended so it can't kill the wait.
+try:
+    _ASK_TIMEOUT_S = float(os.environ.get("VOITTA_ASK_USER_TIMEOUT_S", "1800"))
+except ValueError:
+    _ASK_TIMEOUT_S = 1800.0
+
 
 def _truncate(text: str, limit: int = 32_000) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n…[truncated: {len(text)} bytes]"
@@ -170,26 +181,153 @@ async def user_prompt_stream(text: str) -> AsyncIterator[dict[str, Any]]:
 # the Voitta MCP tools remain the primary surface.
 _ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash",)
 
+# Engine tools that are allowed but never pass through unattended — each one is
+# intercepted in ``can_use_tool`` and satisfied by our own UI flow.
+_INTERACTIVE_ENGINE_TOOLS: tuple[str, ...] = ("AskUserQuestion",)
 
-async def _can_use_tool(tool_name: str, _input: dict, _ctx) -> Any:
-    """Allow the bridged Voitta tools plus a small allowlist of engine built-ins
-    (Bash); deny the rest of the engine's native tools.
+
+def _fmt_answer(val: Any) -> str:
+    """Human-readable form of one answer for the transcript summary line."""
+    if isinstance(val, list):
+        return ", ".join(str(v) for v in val)
+    return str(val) if val is not None else "—"
+
+
+async def _ask_user_question(
+    tool_input: dict,
+    *,
+    cl_ctx: Any,
+    wait_state: dict,
+    deadline: list,
+) -> Any:
+    """Bridge one AskUserQuestion call to the chat UI and wait for the human.
+
+    Runs inside an SDK-spawned task, so the Chainlit context is re-bound
+    explicitly from ``cl_ctx`` (contextvar propagation through the SDK's task
+    chain is an implementation detail we don't lean on). The reply travels
+    over Chainlit's *element* ask channel — unlike the action channel it
+    passes the response dict through verbatim (no ``name``/``label`` key
+    access server-side), so the card can return arbitrary
+    ``{answers, annotations, response, cancelled}`` shapes.
+
+    While waiting, the turn's wall-clock deadline (``deadline[0]``, the active
+    ``asyncio.Timeout``) is pushed out so a human reading a question can't
+    trip the runaway-turn ceiling; it is restored to the normal ceiling on
+    every exit path.
     """
-    if tool_name.startswith(f"mcp__{MCP_SERVER_NAME}__") or tool_name in _ALLOWED_ENGINE_TOOLS:
-        return PermissionResultAllow()
-    return PermissionResultDeny(message=f"{tool_name} is not available in this assistant")
+    questions = tool_input.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return PermissionResultDeny(message="AskUserQuestion: malformed questions payload")
+    if cl_ctx is None:
+        return PermissionResultDeny(
+            message="No interactive user is attached to this session; do not ask questions here"
+        )
+
+    loop = asyncio.get_running_loop()
+    cm = deadline[0]
+    if cm is not None:
+        try:
+            cm.reschedule(loop.time() + _ASK_TIMEOUT_S + 60.0)
+        except Exception:
+            logger.exception("ask: deadline extend failed")
+    wait_state["asking"] = True
+    token = cl_context_var.set(cl_ctx)
+    try:
+        first_q = str((questions[0] or {}).get("question", "")).strip()
+        headline = f"❓ {first_q}" if len(questions) == 1 and first_q else "❓ Claude has a question"
+        element = cl.CustomElement(name="AskUserQuestion", props={"questions": questions})
+        ask = cl.AskElementMessage(content=headline, element=element, timeout=int(_ASK_TIMEOUT_S))
+        res = await ask.send()
+
+        async def _finish(content: str) -> None:
+            ask.content = content
+            try:
+                await ask.update()
+            except Exception:
+                logger.exception("ask: transcript update failed")
+
+        if res is None:  # Chainlit timeout → returns None (ask_timeout emitted)
+            await _finish(f"{headline}\n\n*(no response — timed out)*")
+            return PermissionResultDeny(
+                message=(
+                    f"The user did not respond within {int(_ASK_TIMEOUT_S // 60)} minutes. "
+                    "Do not assume an answer; proceed only with what you already know, "
+                    "or end the turn so the user can follow up."
+                )
+            )
+        data = dict(res) if isinstance(res, dict) else {}
+        if data.get("cancelled"):
+            await _finish(f"{headline}\n\n*(dismissed by the user)*")
+            return PermissionResultDeny(message="User declined to answer.")
+
+        # Freeform path: the user typed into the composer instead of picking
+        # options. The engine renders this as "The user responded: …".
+        response = data.get("response")
+        if isinstance(response, str) and response.strip():
+            await _finish(f"{headline}\n\n> {response.strip()}")
+            return PermissionResultAllow(
+                updated_input={"questions": questions, "response": response.strip()}
+            )
+
+        answers = data.get("answers")
+        if not isinstance(answers, dict) or not answers:
+            await _finish(f"{headline}\n\n*(dismissed by the user)*")
+            return PermissionResultDeny(message="User dismissed the question without answering.")
+
+        updated: dict[str, Any] = {"questions": questions, "answers": answers}
+        annotations = data.get("annotations")
+        if isinstance(annotations, dict) and annotations:
+            updated["annotations"] = annotations
+
+        lines = []
+        for q in questions:
+            if not isinstance(q, dict):
+                continue
+            label = str(q.get("header") or q.get("question") or "?").strip()
+            lines.append(f"- **{label}**: {_fmt_answer(answers.get(str(q.get('question', ''))))}")
+        await _finish("❓ Answered:\n" + "\n".join(lines))
+        return PermissionResultAllow(updated_input=updated)
+    except Exception as exc:  # noqa: BLE001 — a UI failure must not kill the turn
+        logger.exception("AskUserQuestion handling failed")
+        return PermissionResultDeny(message=f"The question could not be shown to the user: {exc}")
+    finally:
+        cl_context_var.reset(token)
+        wait_state["asking"] = False
+        if cm is not None:
+            try:
+                cm.reschedule(loop.time() + _TURN_TIMEOUT_S)
+            except Exception:
+                pass
+
+
+def _make_can_use_tool(*, cl_ctx: Any, wait_state: dict, deadline: list):
+    """Per-turn ``can_use_tool``: intercept AskUserQuestion into the chat UI,
+    allow the bridged Voitta tools plus the engine-builtin allowlist, deny the
+    rest of the engine's native tools.
+    """
+
+    async def _can_use_tool(tool_name: str, tool_input: dict, _ctx) -> Any:
+        if tool_name in _INTERACTIVE_ENGINE_TOOLS:
+            return await _ask_user_question(
+                tool_input, cl_ctx=cl_ctx, wait_state=wait_state, deadline=deadline
+            )
+        if tool_name.startswith(f"mcp__{MCP_SERVER_NAME}__") or tool_name in _ALLOWED_ENGINE_TOOLS:
+            return PermissionResultAllow()
+        return PermissionResultDeny(message=f"{tool_name} is not available in this assistant")
+
+    return _can_use_tool
 
 
 def _build_options(
-    *, system: str, model: str | None, resume: str | None, ctx: ToolCtx
+    *, system: str, model: str | None, resume: str | None, ctx: ToolCtx, can_use_tool: Any
 ) -> ClaudeAgentOptions:
     server, allowed = build_tool_server(ctx)
     return ClaudeAgentOptions(
         cwd=str(workspace_dir()),
         env=subprocess_env(),
         mcp_servers={MCP_SERVER_NAME: server},
-        allowed_tools=[*allowed, *_ALLOWED_ENGINE_TOOLS],
-        can_use_tool=_can_use_tool,
+        allowed_tools=[*allowed, *_ALLOWED_ENGINE_TOOLS, *_INTERACTIVE_ENGINE_TOOLS],
+        can_use_tool=can_use_tool,
         system_prompt=system or None,
         model=model or DEFAULT_MODEL,
         resume=resume,
@@ -217,7 +355,21 @@ async def run_agent_sdk_turn(
     """
     if query is None:
         raise AgentSdkUnavailable("claude-agent-sdk is not installed")
-    options = _build_options(system=system, model=model, resume=resume_session_id, ctx=ctx)
+
+    # AskUserQuestion plumbing: the Chainlit context captured here is re-bound
+    # inside the SDK-spawned callback task; ``wait_state`` flips the ticker to
+    # its "waiting" face; ``deadline`` carries the asyncio.Timeout so the ask
+    # handler can extend/restore the turn ceiling around a human-paced wait.
+    try:
+        cl_ctx: Any = cl_get_context()
+    except Exception:
+        cl_ctx = None
+    wait_state: dict[str, bool] = {"asking": False}
+    deadline: list[Any] = [None]
+    options = _build_options(
+        system=system, model=model, resume=resume_session_id, ctx=ctx,
+        can_use_tool=_make_can_use_tool(cl_ctx=cl_ctx, wait_state=wait_state, deadline=deadline),
+    )
 
     streaming_msg: cl.Message | None = None
     steps: dict[str, cl.Step] = {}
@@ -244,7 +396,10 @@ async def run_agent_sdk_turn(
             while True:
                 elapsed = int(time.monotonic() - t0)
                 tail = f" · {tokens:,} tokens" if tokens else ""
-                status.output = f"{_SPIN[i % len(_SPIN)]} Working… · {elapsed}s{tail}"
+                if wait_state["asking"]:
+                    status.output = f"❓ Waiting for your answer… · {elapsed}s{tail}"
+                else:
+                    status.output = f"{_SPIN[i % len(_SPIN)]} Working… · {elapsed}s{tail}"
                 await status.update()
                 i += 1
                 await asyncio.sleep(1)
@@ -273,7 +428,10 @@ async def run_agent_sdk_turn(
         # even mid-turn. (A single synchronous block inside a tool would not be
         # preempted; the heavy tools — e.g. run_script — are already thread
         # off-loaded, so in practice the turn stays interruptible.)
-        async with asyncio.timeout(_TURN_TIMEOUT_S):
+        async with asyncio.timeout(_TURN_TIMEOUT_S) as _turn_deadline:
+            # Hand the Timeout to the ask handler so a pending question can
+            # push the ceiling out (and restore it) — see _ask_user_question.
+            deadline[0] = _turn_deadline
             async for message in agen:
                 if isinstance(message, AssistantMessage):
                     tokens += _usage_tokens(getattr(message, "usage", None))

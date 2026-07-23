@@ -1,0 +1,196 @@
+/* QuestionCard — AskUserQuestion UI for the Claude brain.
+ *
+ * Palette is 100% --voitta-* tokens, so light/dark/auto (data-theme on
+ * .root) and plugin theme overrides apply with zero component logic.
+ * The card is a container so the preview pane goes side-by-side only
+ * when the pane is actually wide enough — the widget's width is not
+ * the viewport's, so a media query would lie here.
+ */
+
+.qcard {
+  margin: 8px 10px 0;
+  border: 1px solid var(--voitta-border);
+  border-radius: var(--voitta-radius);
+  background: var(--voitta-surface);
+  color: var(--voitta-text);
+  font-family: var(--voitta-font-sans);
+  padding: 10px 12px;
+  container-type: inline-size;
+}
+
+/* ── Tabs (multi-question) ─────────────────────────────────────── */
+.qcard-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.qcard-tab {
+  border: 1px solid var(--voitta-border);
+  border-radius: 999px;
+  background: var(--voitta-bg);
+  color: var(--voitta-text-muted);
+  font: 600 11px/1 var(--voitta-font-sans);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.qcard-tab.is-done {
+  color: var(--voitta-text);
+}
+.qcard-tab.is-active {
+  background: var(--voitta-accent);
+  border-color: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+}
+
+.qcard-question {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+/* ── Options / preview layout ──────────────────────────────────── */
+.qcard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+@container (min-width: 520px) {
+  .qcard-body.has-preview {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+.qcard-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.qcard-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--voitta-border);
+  border-radius: var(--voitta-radius-sm);
+  background: var(--voitta-bg);
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.qcard-option:hover {
+  border-color: var(--voitta-text-faint);
+}
+.qcard-option.is-selected {
+  border-color: var(--voitta-accent);
+  outline: 1px solid var(--voitta-accent);
+}
+.qcard-option input {
+  margin: 2px 0 0;
+  accent-color: var(--voitta-accent);
+  flex: none;
+}
+.qcard-opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.qcard-opt-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.qcard-opt-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--voitta-text-muted);
+}
+.qcard-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+  font: 600 9.5px/1.5 var(--voitta-font-sans);
+  vertical-align: 1px;
+}
+
+.qcard-other-input,
+.qcard-notes {
+  border: 1px solid var(--voitta-border);
+  border-radius: var(--voitta-radius-sm);
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  font: 400 12.5px/1.4 var(--voitta-font-sans);
+  padding: 6px 9px;
+  outline: none;
+}
+.qcard-other-input:focus,
+.qcard-notes:focus {
+  border-color: var(--voitta-accent);
+}
+.qcard-notes::placeholder,
+.qcard-other-input::placeholder {
+  color: var(--voitta-text-faint);
+}
+
+/* ── Preview pane ──────────────────────────────────────────────── */
+.qcard-preview {
+  border: 1px solid var(--voitta-border);
+  border-radius: var(--voitta-radius-sm);
+  background: var(--voitta-bg);
+  padding: 8px 10px;
+  overflow: auto;
+  max-height: 320px;
+  min-width: 0;
+  font-size: 12px;
+}
+.qcard-preview pre,
+.qcard-preview code {
+  font-family: var(--voitta-font-mono);
+}
+.qcard-preview-empty {
+  color: var(--voitta-text-faint);
+  font-size: 12px;
+}
+
+/* ── Actions ───────────────────────────────────────────────────── */
+.qcard-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.qcard-btn {
+  border: 1px solid var(--voitta-border);
+  border-radius: var(--voitta-radius-sm);
+  background: var(--voitta-bg);
+  color: var(--voitta-text);
+  font: 600 12px/1 var(--voitta-font-sans);
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.qcard-btn:hover {
+  border-color: var(--voitta-text-faint);
+}
+.qcard-submit {
+  background: var(--voitta-accent);
+  border-color: var(--voitta-accent);
+  color: var(--voitta-accent-fg);
+}
+.qcard-submit:hover:not(:disabled) {
+  background: var(--voitta-accent-hover);
+}
+.qcard-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.qcard-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--voitta-text-faint);
+  text-align: right;
+}

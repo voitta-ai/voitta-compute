@@ -75,6 +75,11 @@ def subprocess_env() -> dict[str, str]:
     env["CLAUDE_CONFIG_DIR"] = str(config_dir())
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    # AskUserQuestion option previews. The TS-only ``toolConfig`` SDK option is
+    # just a setter for this env var (verified in the bundled engine binary);
+    # the Python SDK lacks the option, so set the var directly. "markdown" —
+    # previews render through our own Markdown component, no HTML sanitizer.
+    env["CLAUDE_CODE_QUESTION_PREVIEW_FORMAT"] = "markdown"
     # Lazy import avoids a config<->credentials import cycle.
     from app.services.agent_sdk.credentials import load_token
 

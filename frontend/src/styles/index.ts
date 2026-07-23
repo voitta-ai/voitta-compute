@@ -24,6 +24,7 @@ import markdown from "./components/markdown.css?inline";
 import report from "./components/report.css?inline";
 import workspace from "./components/workspace.css?inline";
 import tokenModal from "./components/token-modal.css?inline";
+import questionCard from "./components/question-card.css?inline";
 
 export const cssText = [
   tokens,
@@ -42,4 +43,5 @@ export const cssText = [
   report,
   workspace,
   tokenModal,
+  questionCard,
 ].join("\n\n");
