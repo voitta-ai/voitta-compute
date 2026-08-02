@@ -39,7 +39,12 @@ VOICE_PACKAGES: list[tuple[str, str]] = [
     ("sounddevice", "sounddevice>=0.4.6"),
     ("onnxruntime", "onnxruntime>=1.17"),      # usually present (chromadb)
     ("openwakeword", "openwakeword>=0.6.0"),   # only for its bundled Silero VAD
-    ("sherpa_onnx", "sherpa-onnx>=1.10"),
+    # Upper bound is load-bearing: sherpa-onnx 1.13.4 silently broke keyword
+    # spotting with the gigaspeech-3.3M KWS model — it spots NOTHING, not even
+    # the model's own shipped demo wavs (verified 2026-07). 1.13.0–1.13.3 work.
+    # Without the cap, a userbase rebuild pulls the latest wheel and voice goes
+    # dead with no error. Re-test the demo wavs before raising this ceiling.
+    ("sherpa_onnx", "sherpa-onnx>=1.13,<1.13.4"),
     ("sentencepiece", "sentencepiece>=0.1.99"),
     ("mlx_whisper", "mlx-whisper>=0.4"),       # pulls mlx + torch — the big one
 ]
