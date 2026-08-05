@@ -995,8 +995,12 @@ app is on *that page's origin* — not necessarily this backend.
 ```
 ~/Library/Application Support/Voitta Compute/
 ├── .voitta.lock                  single-instance flock
-├── voitta.log                    shell stdout/stderr (truncated per launch)
 ├── backend/                      ← VOITTA_PROJECT_ROOT = VOITTA_DATA_ROOT
+│   ├── logs/                     all logs; fresh each launch, prior runs → logs/previous/run-*
+│   │   ├── voitta.log            launcher stdout/stderr (incl. pip install output)
+│   │   ├── voitta-app.log(.1-3)  backend logging, DEBUG for voitta/app/chainlit, 5MB rotating
+│   │   ├── voitta-stacks.log     SIGUSR2 / watchdog thread dumps
+│   │   └── previous/run-1..3     rolling archive of the last 3 runs (run-1 newest)
 │   ├── certs/                    mkcert pair (wiped on version bump)
 │   ├── rag/                      .chroma · .bm25 · .chroma_code · .bm25_code
 │   ├── conversations.sqlite      chat threads/steps
@@ -1020,9 +1024,18 @@ repo tree (git-ignored), and the widget is served from `frontend/dist`.
 
 ### Logging
 
+All app-mode logs live under `backend/logs/`, reachable from the tray via
+**Open logs folder…** (reveals the folder in Finder for drag-drop into a
+support email). Each launch starts fresh; the previous runs are archived to
+`backend/logs/previous/run-1..3` (run-1 newest) first, so a crash-before-
+capture stays recoverable. Retention is capped at the last 3 runs
+(`LOG_KEEP_RUNS` in `__main__.py`) to bound total growth.
+
 | Surface | Where | Notes |
 |---------|-------|-------|
-| Shell + backend (app mode) | `~/…/Voitta Compute/voitta.log` | stdout/stderr redirect; **overwritten each launch**, no rotation |
+| Launcher (app mode) | `backend/logs/voitta.log` | stdout/stderr redirect (incl. pip install output); **fresh each launch**, no rotation |
+| Backend (app mode) | `backend/logs/voitta-app.log` (+ `.1`–`.3`) | `voitta`/`app`/`chainlit` at **DEBUG**, uvicorn at INFO; 5 MB × 3 rotating; survives uvicorn's dictConfig |
+| Thread stacks | `backend/logs/voitta-stacks.log` | `kill -USR2 <pid>` or the health watchdog dumps all Python thread stacks here |
 | Backend (dev) | terminal | `logging.basicConfig` INFO, `%(asctime)s %(levelname)s %(name)s` |
 | Tool/agent diagnostics | same stream | `run_turn: host=… visible=…/… hidden=[…]` lines show exactly why a tool is missing — first grep for tool-visibility issues |
 | Script errors | `scripts_state/errors/<slug>.jsonl` | also via `get_script_errors` tool |

@@ -378,7 +378,7 @@ def _start_health_watchdog(log: logging.Logger) -> None:
                     )
                     try:
                         import faulthandler
-                        with (Path(USER_DATA_ROOT) / "voitta-stacks.log").open("a") as fp:
+                        with (Path(USER_DATA_ROOT) / "logs" / "voitta-stacks.log").open("a") as fp:
                             from datetime import datetime as _dt
                             fp.write(f"\n=== watchdog dump {_dt.now().isoformat()} ===\n")
                             faulthandler.dump_traceback(file=fp, all_threads=True)
@@ -457,6 +457,7 @@ class VoittaMenuBarApp(rumps.App):
             rumps.MenuItem("Restart server", callback=self.restart_server),
             None,
             rumps.MenuItem("Workspace…", callback=self.open_workspace),
+            rumps.MenuItem("Open logs folder…", callback=self.open_logs_folder),
             rumps.MenuItem("(Re)create TLS certificates…", callback=self.recreate_certs),
             rumps.MenuItem("Rebuild…", callback=self.rebuild),
             rumps.MenuItem("Reset…", callback=self.reset),
@@ -1057,6 +1058,19 @@ class VoittaMenuBarApp(rumps.App):
         # the workspace panel on load.
         webbrowser.open(f"{_server_url()}?workspace=1")
 
+    def open_logs_folder(self, _sender) -> None:
+        """Reveal logs/ in Finder so the user can drag the log files into an
+        email for support. All logs live here — voitta.log (launcher),
+        voitta-app.log (+ rotations), voitta-stacks.log — plus previous/run-*,
+        archives of the last few runs. Each launch starts fresh (see
+        __main__.py)."""
+        logs_dir = Path(USER_DATA_ROOT) / "logs"
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["open", str(logs_dir)], check=False)
+        except Exception:
+            self._log.exception("open logs folder failed")
+
     # ---- active sessions window ("tasks voitta") ---------------------------
 
     def _collect_sessions(self):
@@ -1338,8 +1352,11 @@ def main() -> None:
     # logger is not touched by that dictConfig, so it keeps writing.
     try:
         from logging.handlers import RotatingFileHandler
-        _app_log = Path(USER_DATA_ROOT) / "voitta-app.log"
+        _logs_dir = Path(USER_DATA_ROOT) / "logs"
+        _logs_dir.mkdir(parents=True, exist_ok=True)
+        _app_log = _logs_dir / "voitta-app.log"
         _h = RotatingFileHandler(_app_log, maxBytes=5_000_000, backupCount=3)
+        _h.setLevel(logging.DEBUG)
         _h.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s"
         ))
@@ -1348,9 +1365,16 @@ def main() -> None:
         # were lost after uvicorn's dictConfig — an incident left NO runtime
         # trace on disk. Attach the same file handler to every namespace we
         # care about.
+        #
+        # Our own namespaces run at DEBUG so install/startup/tool-dispatch
+        # detail lands on disk for support (logs are wiped + archived each
+        # launch, so verbosity has a bounded footprint). uvicorn stays at INFO
+        # — DEBUG there is per-request access-log flood that would bury the
+        # detail we actually want.
+        _debug_ns = {"voitta", "app", "chainlit"}
         for _name in ("voitta", "app", "chainlit", "uvicorn", "uvicorn.error"):
             _l = logging.getLogger(_name)
-            _l.setLevel(logging.INFO)
+            _l.setLevel(logging.DEBUG if _name in _debug_ns else logging.INFO)
             # Avoid duplicate handlers across reloads / re-entry.
             if not any(isinstance(h, RotatingFileHandler) for h in _l.handlers):
                 _l.addHandler(_h)
@@ -1364,7 +1388,8 @@ def main() -> None:
     try:
         import faulthandler
         import signal as _signal
-        _stacks_path = Path(USER_DATA_ROOT) / "voitta-stacks.log"
+        _stacks_path = Path(USER_DATA_ROOT) / "logs" / "voitta-stacks.log"
+        _stacks_path.parent.mkdir(parents=True, exist_ok=True)
         _stacks_fp = _stacks_path.open("a")  # kept open for process lifetime
         faulthandler.register(_signal.SIGUSR2, file=_stacks_fp, all_threads=True)
         log.info("SIGUSR2 stack-dump registered → %s", _stacks_path)
@@ -1451,7 +1476,7 @@ def _run_first_time_setup(log: logging.Logger) -> None:
                 "TLS certificate setup failed.\n\nThe local HTTPS CA could not "
                 "be installed and trusted, so the app will not start (no "
                 "insecure fallback).\n\nSee ~/Library/Application Support/Voitta "
-                "Compute/backend/voitta-app.log",
+                "Compute/backend/logs/voitta-app.log",
             )
             AppHelper.callAfter(__import__("rumps").quit_application)
             return

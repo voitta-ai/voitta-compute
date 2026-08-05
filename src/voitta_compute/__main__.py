@@ -5,7 +5,7 @@ Responsibilities (all before importing any app.* module):
   2. Prepare the writable user data dir under ~/Library/Application Support/.
   3. Set VOITTA_PROJECT_ROOT so app.config resolves paths to the user data dir.
   4. Configure PIP_PREFIX so lazy installs land in userbase/, not the bundle.
-  5. Redirect stdout/stderr to voitta.log (visible in Console.app).
+  5. Redirect stdout/stderr to logs/voitta.log (visible in Console.app).
   6. Seed resources (frontend, docs, plugins, lib-sources) into the user data dir.
   7. Hand off to app.desktop.main().
 """
@@ -244,9 +244,50 @@ def main() -> int:
     if str(user_site) not in sys.path:
         sys.path.insert(0, str(user_site))
 
-    # Redirect stdout/stderr to voitta.log (frozen .app has no terminal).
-    # Open in "w" mode to start fresh on each launch — old logs are stale.
-    log_path = user / "voitta.log"
+    # Log directory: all logs (launcher voitta.log, app voitta-app.log,
+    # voitta-stacks.log) live under backend/logs/ so the tray "Open logs
+    # folder…" item reveals a clean folder the user can drag into an email.
+    # Each launch starts fresh; the previous runs are archived under
+    # logs/previous/run-1 (most recent) … run-N (oldest) so a crash-before-
+    # capture is still recoverable — support flow: ask a remote user to
+    # reproduce, then send logs/. Retention is capped at LOG_KEEP_RUNS to
+    # bound total growth. This runs before any log file for THIS run is
+    # opened, so it only ever moves prior runs' files.
+    LOG_KEEP_RUNS = 3
+    logs_dir = user / "backend" / "logs"
+    try:
+        archive = logs_dir / "previous"
+        if logs_dir.is_dir():
+            archive.mkdir(parents=True, exist_ok=True)
+            # Drop the oldest, then shift run-i → run-(i+1) from oldest to
+            # newest so no rename clobbers a slot still in use.
+            oldest = archive / f"run-{LOG_KEEP_RUNS}"
+            if oldest.exists():
+                shutil.rmtree(oldest, ignore_errors=True)
+            for i in range(LOG_KEEP_RUNS - 1, 0, -1):
+                src = archive / f"run-{i}"
+                if src.exists():
+                    try:
+                        src.rename(archive / f"run-{i + 1}")
+                    except OSError:
+                        pass
+            # This run's just-finished files become run-1.
+            run1 = archive / "run-1"
+            run1.mkdir(parents=True, exist_ok=True)
+            for entry in logs_dir.iterdir():
+                if entry.name == "previous":
+                    continue
+                try:
+                    entry.rename(run1 / entry.name)
+                except OSError:
+                    pass
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+    # Redirect stdout/stderr to logs/voitta.log (frozen .app has no terminal).
+    # Fresh each launch — prior runs were just archived to logs/previous/run-*.
+    log_path = logs_dir / "voitta.log"
     try:
         log_fp = log_path.open("w", buffering=1, encoding="utf-8")
         sys.stdout = log_fp
