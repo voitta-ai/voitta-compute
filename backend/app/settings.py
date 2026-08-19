@@ -45,11 +45,12 @@ class UserSettings(TypedDict, total=False):
     max_tokens: int
 
 
-_DEFAULT_MODELS = {
-    "anthropic": "claude-sonnet-4-6",
-    "openai": "gpt-4o",
-    "gemini": "gemini-2.0-flash-exp",
-}
+# The ``models`` map stores only the user's *pinned* selection per provider.
+# It is intentionally empty by default: the list of choices and the default
+# model both come from app.services.models_catalog (live cache → bundled
+# snapshot), so no model-id string is hardcoded here. An unset provider means
+# "use the catalog default", resolved at call time by default_model_for().
+_DEFAULT_MODELS: dict[str, str] = {}
 
 _DEFAULTS: UserSettings = {
     "provider": "anthropic",
@@ -148,14 +149,29 @@ def save(patch: dict[str, Any]) -> UserSettings:
 
     if isinstance(patch.get("api_keys"), dict):
         keys = dict(current.get("api_keys") or {})
+        changed_providers: list[str] = []
         for p, v in patch["api_keys"].items():
             if not isinstance(v, str):
                 continue
             if v == "":
-                keys.pop(p, None)
+                if keys.pop(p, None) is not None:
+                    changed_providers.append(p)  # cleared
             else:
+                if keys.get(p) != v:
+                    changed_providers.append(p)  # set or replaced
                 keys[p] = v
         current["api_keys"] = keys
+        # Sync moments #1 (key saved) / #7 (key removed): drop the cached
+        # model list so the next /api/models fetch reflects the new credential
+        # (or reverts to the snapshot when a key was cleared).
+        if changed_providers:
+            try:
+                from app.services import models_catalog
+
+                for p in changed_providers:
+                    models_catalog.invalidate(p)
+            except Exception:
+                logger.exception("model-catalog invalidate on key change failed")
 
     if isinstance(patch.get("models"), dict):
         models = dict(current.get("models") or {})

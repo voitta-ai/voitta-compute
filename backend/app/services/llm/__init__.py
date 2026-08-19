@@ -20,12 +20,6 @@ from app.services.llm.base import (
 
 ProviderId = Literal["anthropic", "openai", "gemini"]
 
-DEFAULT_MODELS: dict[ProviderId, str] = {
-    "anthropic": "claude-sonnet-4-6",
-    "openai": "gpt-4o",
-    "gemini": "gemini-2.0-flash-exp",
-}
-
 
 def get_provider(provider_id: ProviderId, api_key: str | None) -> Provider:
     if not api_key:
@@ -46,9 +40,18 @@ def get_provider(provider_id: ProviderId, api_key: str | None) -> Provider:
 
 
 def default_model_for(provider_id: ProviderId) -> str:
-    if provider_id in DEFAULT_MODELS:
-        return DEFAULT_MODELS[provider_id]
-    raise ProviderNotConfigured(provider_id, f"unknown provider {provider_id!r}")
+    """Best-known default model for a provider.
+
+    Delegates to :mod:`app.services.models_catalog`, which reads the live
+    cache when present and otherwise the bundled snapshot — the single
+    source of truth for model ids. Never triggers a network call.
+    """
+    from app.services import models_catalog
+
+    default = models_catalog.default_model_for(provider_id)
+    if not default:
+        raise ProviderNotConfigured(provider_id, f"no default model for {provider_id!r}")
+    return default
 
 
 __all__ = [

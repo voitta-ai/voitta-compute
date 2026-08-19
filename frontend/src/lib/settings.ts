@@ -57,16 +57,13 @@ export interface SettingsPatch {
   dotted?: Record<string, unknown>;
 }
 
-const DEFAULT_MODELS: Record<ProviderId, string> = {
-  anthropic: "claude-sonnet-4-6",
-  openai: "gpt-4o",
-  gemini: "gemini-2.0-flash-exp",
-  claude_code: "claude-opus-4-8",
-};
-
+// No hardcoded model list. ``models`` holds only the user's *pinned*
+// selection per provider (empty = "use the catalog default"). The list of
+// choices and the default both come from GET /api/models/{provider}
+// (see lib/models.ts), which serves live data or the bundled snapshot.
 const DEFAULT: PublicSettings = {
   provider: "anthropic",
-  models: { ...DEFAULT_MODELS },
+  models: {},
   layout: "chat-right",
   theme: "auto",
   max_tool_iterations: 25,
@@ -98,7 +95,7 @@ function notify() {
 function normalise(s: Partial<PublicSettings>): PublicSettings {
   return {
     provider: (s.provider as ProviderId) ?? DEFAULT.provider,
-    models: { ...DEFAULT_MODELS, ...(s.models ?? {}) },
+    models: { ...(s.models ?? {}) },
     layout: (s.layout as Layout) ?? DEFAULT.layout,
     theme: (s.theme as Theme) ?? DEFAULT.theme,
     max_tool_iterations:

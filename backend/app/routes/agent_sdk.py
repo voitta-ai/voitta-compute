@@ -79,4 +79,11 @@ async def select(body: SelectBody) -> dict:
 @router.post("/disconnect")
 async def disconnect() -> dict:
     clear_token()
+    # Drop the subscription brain's cached model list (sync moment #7).
+    try:
+        from app.services import models_catalog
+
+        models_catalog.invalidate("claude_code")
+    except Exception:
+        logger.exception("model-catalog invalidate on disconnect failed")
     return {"ok": True, "has_token": False}

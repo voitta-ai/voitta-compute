@@ -33,10 +33,21 @@ from app.services.current_user import user_data_root
 BRAIN_PROVIDER = "claude_code"
 BRAIN_LABEL = "Claude (subscription)"
 
-# Default model when the user hasn't pinned one for this brain. ``None`` lets
-# the Claude Code engine pick its own default; we set a concrete current model
-# so behaviour is predictable across engine versions.
-DEFAULT_MODEL = "claude-opus-4-8"
+# Default model when the user hasn't pinned one for this brain. Sourced from
+# the model catalog (bundled snapshot for claude_code — the subscription brain
+# has no machine-readable model list; see agent_sdk/models.py) so the default
+# lives in one place, not as a scattered literal. Falls back to a concrete id
+# if the catalog is somehow unreadable, so behaviour stays predictable.
+def _default_model() -> str:
+    try:
+        from app.services import models_catalog
+
+        return models_catalog.default_model_for(BRAIN_PROVIDER) or "claude-opus-4-8"
+    except Exception:
+        return "claude-opus-4-8"
+
+
+DEFAULT_MODEL = _default_model()
 
 # In-process MCP server name; tools surface to the engine as
 # ``mcp__<MCP_SERVER_NAME>__<tool>``.

@@ -109,6 +109,10 @@ class Provider(Protocol):
     async def create_message(self, req: NormalisedRequest) -> NormalisedResponse:
         ...
 
+    async def list_models(self) -> list[str]:
+        """Return this provider's chat-capable model ids, newest-first."""
+        ...
+
     def stream(self, req: NormalisedRequest) -> Any:
         """Returns an async context manager yielding StreamEvent.
 
@@ -133,6 +137,16 @@ class BaseProvider(abc.ABC):
     @abc.abstractmethod
     def stream(self, req: NormalisedRequest) -> Any:
         ...
+
+    async def list_models(self) -> list[str]:
+        """Return chat-capable model ids, newest-first.
+
+        Adapters override this to hit their provider's models API and apply
+        a provider-specific chat-capability filter. The default is empty so
+        a not-yet-implemented adapter degrades to the bundled snapshot
+        rather than raising.
+        """
+        return []
 
     async def create_message(self, req: NormalisedRequest) -> NormalisedResponse:
         from app.services.llm.stream import (

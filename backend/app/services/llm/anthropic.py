@@ -69,6 +69,24 @@ class AnthropicProvider(BaseProvider):
     def __init__(self, api_key: str) -> None:
         self._client = AsyncAnthropic(api_key=api_key, base_url=ANTHROPIC_BASE_URL)
 
+    async def list_models(self) -> list[str]:
+        """Live Anthropic catalog, newest-first.
+
+        Filter: ids starting ``claude-`` (drops any non-chat SKUs the API
+        might list). The SDK returns newest-first already; we additionally
+        sort by ``created_at`` when present to be robust.
+        """
+        collected: list[tuple[Any, str]] = []
+        async for model in self._client.models.list(limit=1000):
+            mid = getattr(model, "id", None)
+            if not isinstance(mid, str) or not mid.startswith("claude-"):
+                continue
+            created = getattr(model, "created_at", None)
+            collected.append((created, mid))
+        # Sort newest-first; entries without a timestamp keep API order at the end.
+        collected.sort(key=lambda t: (t[0] is not None, str(t[0])), reverse=True)
+        return [mid for _, mid in collected]
+
     def _build_kwargs(self, req: NormalisedRequest) -> dict[str, Any]:
         messages = [_message_to_dict(m) for m in req.messages]
 

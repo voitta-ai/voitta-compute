@@ -46,11 +46,48 @@ from app.services.llm.stream import (
 )
 
 
+def _gemini_version_key(mid: str) -> tuple[float, str]:
+    """Sort key extracting the leading ``gemini-<major>.<minor>`` version.
+
+    Returns ``(version_float, id)`` so a reverse sort puts newer families
+    first and orders ties alphabetically-descending (stable enough for a
+    dropdown). Unparseable ids sort to the bottom.
+    """
+    import re
+
+    m = re.search(r"(\d+)\.(\d+)", mid)
+    ver = float(f"{m.group(1)}.{m.group(2)}") if m else 0.0
+    return (ver, mid)
+
+
 class GeminiProvider(BaseProvider):
     id = "gemini"
 
     def __init__(self, api_key: str) -> None:
         self._client = genai.Client(api_key=api_key)
+
+    async def list_models(self) -> list[str]:
+        """Live Gemini catalog, generateContent-capable only.
+
+        Keep models whose supported actions include ``generateContent``
+        (drops embedding / aqa / imagen). Strip the ``models/`` name prefix
+        so ids match what the rest of the app uses. Preview/exp variants are
+        kept — they're the only way to reach the newest models. Ordered
+        newest-first by version number heuristic (2.5 > 2.0 > 1.5).
+        """
+        ids: list[str] = []
+        pager = await self._client.aio.models.list()
+        async for model in pager:
+            actions = getattr(model, "supported_actions", None) or []
+            if "generateContent" not in actions:
+                continue
+            name = getattr(model, "name", None)
+            if not isinstance(name, str) or not name:
+                continue
+            ids.append(name.split("/", 1)[-1] if name.startswith("models/") else name)
+        # Newest-first: sort by the leading version number descending, stable.
+        ids.sort(key=_gemini_version_key, reverse=True)
+        return ids
 
     def _build_request(self, req: NormalisedRequest) -> dict[str, Any]:
         contents = _messages_to_contents(req.messages)

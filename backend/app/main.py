@@ -72,6 +72,13 @@ async def _lifespan(_app: FastAPI):
             await refresh_all()
         except Exception:
             logging.getLogger(__name__).exception("MCP startup refresh failed")
+        # Warm the model catalog for every provider that already has a stored
+        # credential (sync moment #3), so the Settings dropdown lands live.
+        try:
+            from app.services import models_catalog
+            await models_catalog.warm_cached_credentialed()
+        except Exception:
+            logging.getLogger(__name__).exception("model-catalog warm-up failed")
 
     if _mcp_asgi is not None and hasattr(_mcp_asgi, "router"):
         async with _mcp_asgi.router.lifespan_context(_app):
@@ -240,6 +247,7 @@ from app.bridge import router as bridge_router
 from app.routes.auth import router as auth_router
 from app.routes.google import router as google_router
 from app.routes.html_report import router as html_report_router
+from app.routes.models import router as models_router
 from app.routes.plugins import router as plugins_router
 from app.routes.reports import router as reports_router
 from app.routes.settings import router as settings_router
@@ -250,6 +258,7 @@ app.include_router(auth_router)
 app.include_router(reports_router)
 app.include_router(html_report_router)
 app.include_router(settings_router)
+app.include_router(models_router)
 app.include_router(plugins_router)
 app.include_router(google_router)
 app.include_router(workspace_router)

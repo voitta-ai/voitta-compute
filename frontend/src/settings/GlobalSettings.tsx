@@ -15,6 +15,11 @@ import {
   type SettingsPatch,
   type Theme,
 } from "../lib/settings";
+import {
+  fetchModels,
+  getCachedModels,
+  type ModelCatalog,
+} from "../lib/models";
 import { useSettings } from "../lib/useSettings";
 
 const PROVIDERS: { id: ProviderId; label: string }[] = [
@@ -22,21 +27,6 @@ const PROVIDERS: { id: ProviderId; label: string }[] = [
   { id: "openai", label: "OpenAI (ChatGPT)" },
   { id: "gemini", label: "Google (Gemini)" },
 ];
-
-const MODEL_CHOICES: Record<ProviderId, string[]> = {
-  anthropic: [
-    "claude-sonnet-4-6",
-    "claude-opus-4-7",
-    "claude-haiku-4-5-20251001",
-  ],
-  openai: ["gpt-4o", "gpt-4o-mini", "o3-mini", "gpt-5"],
-  gemini: [
-    "gemini-2.0-flash-exp",
-    "gemini-2.5-pro",
-    "gemini-3.1-pro-preview",
-  ],
-  claude_code: ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6"],
-};
 
 const KEY_PLACEHOLDER: Record<ProviderId, string> = {
   anthropic: "sk-ant-...",
@@ -61,10 +51,37 @@ export default function GlobalSettings({ backendOrigin }: Props) {
   const [hasKey, setHasKey] = useState<Record<string, boolean>>(cached.has_api_keys);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ text: string; err: boolean } | null>(null);
+  // Model catalog for the currently-selected provider. Seeded from the
+  // module cache for an instant first paint, then revalidated over the wire.
+  const [catalog, setCatalog] = useState<ModelCatalog>(() => getCachedModels(provider));
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  async function loadModels(p: ProviderId, opts: { force?: boolean } = {}) {
+    setModelsLoading(true);
+    // Show whatever we already have cached for this provider immediately.
+    setCatalog(getCachedModels(p));
+    try {
+      const next = await fetchModels(backendOrigin, p, opts);
+      // Guard against a stale response if the provider changed mid-flight.
+      setProvider((cur) => {
+        if (cur === p) setCatalog(next);
+        return cur;
+      });
+    } finally {
+      setModelsLoading(false);
+    }
+  }
 
   // Clear the in-flight unsaved key when switching providers so a
   // half-pasted key for OpenAI doesn't end up saved under Anthropic.
   useEffect(() => setApiKey(""), [provider]);
+
+  // Fetch the catalog whenever the selected provider changes (also fires on
+  // mount / panel-open). Cache-first on the backend, so this is cheap.
+  useEffect(() => {
+    void loadModels(provider);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
 
   useEffect(() => {
     setProvider(cached.provider);
@@ -86,10 +103,14 @@ export default function GlobalSettings({ backendOrigin }: Props) {
     };
     if (models[provider]) patch.models = { [provider]: models[provider] };
     if (apiKey) patch.api_keys = { [provider]: apiKey };
+    const keyWasSet = Boolean(apiKey);
     try {
       await saveSettings(backendOrigin, patch);
       setApiKey("");
       setStatus({ text: "Saved.", err: false });
+      // A newly-saved key means the backend can now fetch a live catalog —
+      // force past the TTL so the dropdown updates immediately.
+      if (keyWasSet) void loadModels(provider, { force: true });
     } catch (err) {
       setStatus({ text: `Error: ${err}`, err: true });
     } finally {
@@ -102,6 +123,8 @@ export default function GlobalSettings({ backendOrigin }: Props) {
     try {
       await saveSettings(backendOrigin, { api_keys: { [provider]: "" } });
       setStatus({ text: "Key cleared.", err: false });
+      // No credential now → catalog reverts to the bundled snapshot.
+      void loadModels(provider, { force: true });
     } catch (err) {
       setStatus({ text: `Error: ${err}`, err: true });
     } finally {
@@ -109,8 +132,12 @@ export default function GlobalSettings({ backendOrigin }: Props) {
     }
   }
 
-  const choices = MODEL_CHOICES[provider] ?? [];
+  const choices = catalog.models;
   const model = models[provider] ?? "";
+  // A pinned model the provider no longer offers (renamed / retired). We keep
+  // the pin selectable but warn, so the user can consciously switch.
+  const pinnedButGone = Boolean(model) && choices.length > 0 && !choices.includes(model);
+  const effectiveDefault = catalog.default || choices[0] || "";
   const providerHasKey = Boolean(hasKey[provider]);
   const isBrain = provider === AGENT_SDK_PROVIDER;
   // The subscription brain is only offered when the Claude Code engine is
@@ -127,6 +154,9 @@ export default function GlobalSettings({ backendOrigin }: Props) {
         credentials: "include",
       });
       await bootstrapSettings(backendOrigin); // refresh has_token
+      // Backend invalidated the claude_code catalog on disconnect; reload so
+      // the dropdown reflects the snapshot instead of a stale list.
+      void loadModels(provider, { force: true });
       setStatus({ text: "Disconnected.", err: false });
     } catch (err) {
       setStatus({ text: `Error: ${err}`, err: true });
@@ -218,21 +248,57 @@ export default function GlobalSettings({ backendOrigin }: Props) {
         </>
       )}
 
-      <label htmlFor="vb-model">Model</label>
+      <div className="model-label-row" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <label htmlFor="vb-model" style={{ marginRight: "auto" }}>
+          Model
+        </label>
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => void loadModels(provider, { force: true })}
+          disabled={modelsLoading}
+          title="Re-fetch this provider's model list"
+        >
+          {modelsLoading ? "Refreshing…" : "↻ Refresh"}
+        </button>
+      </div>
       <select
         id="vb-model"
-        value={choices.includes(model) ? model : "_custom"}
+        value={model && choices.includes(model) ? model : model ? "_custom" : effectiveDefault}
         onChange={(e) => setModels({ ...models, [provider]: e.target.value })}
+        disabled={modelsLoading && choices.length === 0}
       >
+        {choices.length === 0 && (
+          <option value="">{modelsLoading ? "Loading models…" : "No models available"}</option>
+        )}
         {choices.map((m) => (
           <option key={m} value={m}>
             {m}
+            {m === effectiveDefault ? "  (default)" : ""}
           </option>
         ))}
-        {!choices.includes(model) && model && (
-          <option value="_custom">custom: {model}</option>
-        )}
+        {pinnedButGone && <option value="_custom">custom: {model}</option>}
       </select>
+      <p className="muted" style={{ marginTop: 4 }}>
+        {catalog.source === "snapshot"
+          ? isBrain
+            ? "Built-in list (the subscription engine doesn't expose a live model list)."
+            : providerHasKey
+              ? "Offline list — couldn't reach the provider; showing the built-in snapshot."
+              : "Built-in list. Add an API key to load this provider's live models."
+          : catalog.source === "cache"
+            ? "Cached list from a recent sync."
+            : "Live list from the provider."}
+        {pinnedButGone && (
+          <>
+            {" "}
+            <span className="err">
+              Your pinned model “{model}” is no longer offered — pick another or it falls back to{" "}
+              {effectiveDefault || "the default"}.
+            </span>
+          </>
+        )}
+      </p>
 
       <label>Layout</label>
       <div className="radio-row">

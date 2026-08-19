@@ -37,11 +37,55 @@ from app.services.llm.stream import (
 )
 
 
+# Substrings that mark a `gpt-*`/`o*` id as NOT a chat model. Keeps the
+# filter permissive (new gpt/o releases pass automatically) while dropping
+# the non-chat SKUs that share those prefixes.
+_OPENAI_NON_CHAT_MARKERS = (
+    "embedding",
+    "tts",
+    "whisper",
+    "audio",
+    "transcribe",
+    "realtime",
+    "image",
+    "dall-e",
+    "moderation",
+    "search",
+    "computer-use",
+)
+
+
+def _is_openai_chat_model(mid: str) -> bool:
+    low = mid.lower()
+    if not (low.startswith("gpt-") or low.startswith("o1") or low.startswith("o3")
+            or low.startswith("o4") or low.startswith("chatgpt")):
+        return False
+    return not any(marker in low for marker in _OPENAI_NON_CHAT_MARKERS)
+
+
 class OpenAIProvider(BaseProvider):
     id = "openai"
 
     def __init__(self, api_key: str) -> None:
         self._client = AsyncOpenAI(api_key=api_key)
+
+    async def list_models(self) -> list[str]:
+        """Live OpenAI catalog, chat-capable only, newest-first.
+
+        The models endpoint returns everything — embeddings, tts, whisper,
+        dall-e, moderation, realtime, etc. Keep only chat-completion SKUs:
+        the ``gpt-*`` and ``o<n>`` (reasoning) families, minus the known
+        non-chat variants that still match those prefixes.
+        """
+        collected: list[tuple[int, str]] = []
+        async for model in self._client.models.list():
+            mid = getattr(model, "id", None)
+            if not isinstance(mid, str) or not _is_openai_chat_model(mid):
+                continue
+            created = getattr(model, "created", 0) or 0
+            collected.append((int(created), mid))
+        collected.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return [mid for _, mid in collected]
 
     def _build_kwargs(self, req: NormalisedRequest) -> dict[str, Any]:
         kwargs: dict[str, Any] = dict(
