@@ -52,6 +52,36 @@ All tools are `ToolSpec` instances registered with `app.tools.registry`. They ar
 | `rag_search` | Vector + BM25 search over the indexed docs corpus |
 | `rag_index` | Trigger a re-index of the docs corpus |
 
+## Google plugin tools (Drive / Sheets)
+
+Registered by the `google` plugins; visible only when at least one Google
+account is connected (Drive) / has the `spreadsheets` scope (Sheets).
+
+| Tool | Description |
+|---|---|
+| `drive_list_files` | List a Drive folder (optionally recursive, capped) |
+| `drive_search` | Drive native query syntax search |
+| `drive_get_file` | Single-file metadata by ID |
+| `drive_download_to_python_storage` | Download binary content into python_storage (24 h dedup) |
+| `drive_export_to_python_storage` | Export a Google-native file (Doc/Sheet/Slide/Drawing) to txt/pdf/csv/… |
+| `drive_pickup_to_python_storage` | No-OAuth fallback: browser-session download + Downloads-folder watcher (visible only when OAuth is NOT connected and `plugins.google.driveDownloadViaPickup` is on) |
+| `sheets_get_metadata` | Workbook sheets: names, GIDs, dimensions |
+| `sheets_read_range` | Read cells (A1 notation) |
+| `sheets_write_range` | Overwrite a range — **never probes accounts** |
+| `sheets_append_rows` | Append rows — **never probes accounts** |
+
+**Multi-account semantics** (all of the above except pickup):
+
+- Optional `account` arg — email or label of a connected account; the
+  connected roster is appended to each tool description per turn
+  (`ToolSpec.dynamic_description`). Omitted → the settings default account.
+- **Reads** that 403/404 under a non-explicit account are retried across the
+  other connected, scope-qualified accounts in deterministic order (default
+  first, then creation order); the serving account's email comes back in the
+  result (`account`) and in the snapshot origin. 401s never probe.
+- **Writes** use exactly the selected account; a scope/permission failure is
+  a hard error naming which accounts do qualify.
+
 ## Host visibility
 
 `registry.visible_for_host(host)` filters the tool list based on each `ToolSpec.host_pattern`. Tools with `global_tool=True` or `host_pattern=None` are always visible. Plugin-contributed tools inherit the plugin's `host_patterns` from the manifest unless they declare their own.

@@ -9,7 +9,8 @@ and stores everything in one nested object:
       "models":   {"anthropic": "claude-sonnet-4-5-20250929"},
       "layout":   "chat-right",
       "theme":    "auto",
-      "googleOAuth": { "clientId": "...", "clientSecret": "...", "tokens": {...} },
+      "googleOAuth": { "defaultAccount": "acc_...", "accounts": { "acc_...": {
+          "label": "...", "clientId": "...", "clientSecret": "...", "tokens": {...} } } },
       "plugins": { "voitta-enterprise": { "mcp": { "url": "...", "api_key": "..." } } }
     }
 
@@ -234,14 +235,14 @@ def redacted_for_wire(s: UserSettings | None = None) -> dict[str, Any]:
     Includes the typed fields plus the nested ``plugins`` and
     ``googleOAuth`` slices so plugin panels can prefill — but never
     plaintext LLM api_keys (replaced by ``has_api_keys: {p: bool}``).
-    The ``googleOAuth.tokens`` blob is also redacted; the panel reads
-    connection status via ``/api/google/status`` separately.
+    Every per-account ``tokens`` blob under ``googleOAuth.accounts`` is
+    redacted down to its ``account_email``; the panel reads connection
+    status via ``/api/google/status`` separately.
     """
     s = s if s is not None else load()
     blob = raw_blob()
     keys = s.get("api_keys") or {}
-    g = dict(blob.get("googleOAuth") or {})
-    g.pop("tokens", None)
+    g = _redact_google_oauth(blob.get("googleOAuth"))
     return {
         "provider": s.get("provider", "anthropic"),
         "models": dict(s.get("models") or _DEFAULT_MODELS),
@@ -258,6 +259,28 @@ def redacted_for_wire(s: UserSettings | None = None) -> dict[str, Any]:
         # is per-user — resolves under the current-user contextvar.
         "agent_sdk": _agent_sdk_status(),
     }
+
+
+def _redact_google_oauth(raw: Any) -> dict[str, Any]:
+    """Strip token material from the googleOAuth blob (multi-account
+    shape; a not-yet-migrated legacy flat blob is handled too), keeping
+    each account's ``account_email`` so panels can display identity."""
+    g = dict(raw or {})
+    # Legacy flat shape — a plain top-level tokens blob.
+    legacy_tok = g.pop("tokens", None)
+    if isinstance(legacy_tok, dict) and legacy_tok.get("account_email"):
+        g["account_email"] = legacy_tok["account_email"]
+    accounts = g.get("accounts")
+    if isinstance(accounts, dict):
+        redacted_accounts: dict[str, Any] = {}
+        for aid, acct in accounts.items():
+            a = dict(acct or {})
+            tok = a.pop("tokens", None)
+            if isinstance(tok, dict) and tok.get("account_email"):
+                a["account_email"] = tok["account_email"]
+            redacted_accounts[aid] = a
+        g["accounts"] = redacted_accounts
+    return g
 
 
 def _agent_sdk_status() -> dict[str, Any]:

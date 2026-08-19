@@ -64,6 +64,30 @@ ctx.raw("handle")                 # load raw.json from snapshot, return parsed v
 ctx.ensure_local("scheme://...")  # download upstream artefact ref, return local path
 ```
 
+`drive://` refs may pin a Google account:
+`ctx.ensure_local("drive://<file_id>?account=roman%40agnitio.ai")`. Without
+the param the default account is used, with a read-probe fallback across the
+other connected accounts (Drive file IDs are globally unique).
+
+### Google Sheets (`ctx.sheets`)
+
+```python
+data = ctx.sheets.get(f"{sid}/values/Sheet1!A1:D20")   # raw Sheets API v4
+ctx.sheets.put(f"{sid}/values/Sheet1!A1", {...}, valueInputOption="USER_ENTERED")
+ctx.sheets.post(f"{sid}:batchUpdate", {"requests": [...]})
+meta = ctx.sheets.get_metadata(sid)
+```
+
+`ctx.sheets` is bound to the script's **pinned Google account** — the account
+email captured when the script was saved (`define_script` /`edit_script`
+optional `google_account` arg, email-or-label; omitted → the settings-default
+account's email at save time). The pin lives in the script's meta, so re-runs
+use the same account no matter what the default is changed to later. If the
+pinned account is missing, disconnected, or lacks the `spreadsheets` scope,
+any `ctx.sheets` use raises a hard error naming that account — there is no
+silent fall-through to another account. Legacy scripts without a pin resolve
+the default account at run time.
+
 ## Output: one format only
 
 Reports produce **one thing**: a raw HTML string. Return it from `build(ctx)`.
@@ -94,8 +118,8 @@ see [`08-pdf-export.md`](08-pdf-export.md).
 
 | Tool | Action |
 |---|---|
-| `define_script(name, code)` | Create; smoke-test first |
-| `edit_script(name, code)` | Replace source; smoke-test first |
+| `define_script(name, code, google_account?)` | Create; smoke-test first; pins the Google account email for `ctx.sheets` (default: current default account) |
+| `edit_script(name, edits, google_account?)` | Apply search-replace edits; smoke-test first; keeps the existing pin unless `google_account` re-pins |
 | `run_script(name, args?, wait_s?)` | Execute; dispatch HTML to pane |
 | `verify_script(name, code)` | Smoke-test without saving |
 | `get_script(name)` | Read source |

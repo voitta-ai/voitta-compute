@@ -8,7 +8,7 @@ The sixth (``drive_pickup_to_python_storage``) is a hybrid fallback
 that drives the user's logged-in browser to download a file and watches
 the Downloads folder — visible only when OAuth is **not** connected
 and the user has explicitly opted in via the
-``driveDownloadViaPickup`` flag in Settings.
+``plugins.google.driveDownloadViaPickup`` flag in Settings.
 
 Verb_noun naming, JSON envelopes with ``ok`` + uniform error fields,
 pagination via opaque ``cursor``, snapshot handles for content.
@@ -43,9 +43,14 @@ gets metadata + a python_storage handle; actual content reads happen
 in compute / report scripts via ``ctx.snapshot(handle)``. Keeps the
 LLM's context clean and forces the analysis to live in code.
 
-Auth: every call awaits ``google_oauth.get_access_token()`` which
-auto-refreshes if the access token is within 60 s of expiry. On 401,
-the error is surfaced with a hint to re-connect.
+Auth: multi-account. Every tool takes an optional ``account`` selector
+(email or label; the connected roster is appended to each description
+at list-build time). Omitted → the settings default. Reads that 403/404
+probe the other connected accounts in deterministic order (default
+first, then creation order) — Drive file IDs are globally unique, so a
+hit elsewhere is the same file; every probe hit is logged and the
+serving account is stamped into the result + snapshot origin. 401s
+never probe: one forced token refresh + retry, then surface.
 
 Read-only by design: ``drive.readonly`` scope only. There are no
 upload/share/move tools here, on purpose.
@@ -120,40 +125,34 @@ _FORMAT_OPTIONS = {
 # ---- low-level HTTP helpers ----------------------------------------------
 
 
+import logging as _logging  # noqa: E402
+
+_logger = _logging.getLogger(__name__)
+
+
 async def _drive_get(
     path: str,
     *,
+    account_id: str,
     params: dict[str, Any] | None = None,
-    stream: bool = False,
 ) -> Any:
-    """GET against Drive REST. Returns ``httpx.Response`` if ``stream``,
-    parsed JSON otherwise. On 401 retries ONCE after forced refresh."""
-    token = await google_oauth.get_access_token()
+    """GET against Drive REST as ``account_id``. Returns parsed JSON.
+    On 401 retries ONCE after a forced token refresh (the sanctioned
+    ``force_refresh`` path — never poke the settings blob)."""
+    token = await google_oauth.get_access_token(account_id)
     url = f"{DRIVE_API_BASE}{path}" if path.startswith("/") else f"{DRIVE_API_BASE}/{path}"
-    headers = {"Authorization": f"Bearer {token}"}
 
     async with httpx.AsyncClient(timeout=60.0) as client:
-        r = await client.get(url, params=params, headers=headers)
+        r = await client.get(
+            url, params=params, headers={"Authorization": f"Bearer {token}"}
+        )
         if r.status_code == 401:
-            # Force refresh + one retry. ``get_access_token`` won't
-            # refresh again because we may still be inside the grace
-            # window — clear tokens.expires_at to force it.
-            try:
-                # Simplest: set expires_at to 0 in the stored blob.
-                from app.services import user_settings as _us
-                blob = _us.read()
-                tok = (blob.get("googleOAuth") or {}).get("tokens") or {}
-                tok["expires_at"] = 0
-                blob["googleOAuth"]["tokens"] = tok
-                _us.write(blob)
-            except Exception:
-                pass
-            token = await google_oauth.get_access_token()
-            headers = {"Authorization": f"Bearer {token}"}
-            r = await client.get(url, params=params, headers=headers)
-        if stream:
-            # Caller handles non-200 themselves.
-            return r
+            token = await google_oauth.get_access_token(
+                account_id, force_refresh=True
+            )
+            r = await client.get(
+                url, params=params, headers={"Authorization": f"Bearer {token}"}
+            )
         if r.status_code != 200:
             raise _DriveError(r.status_code, r.text)
         return r.json()
@@ -168,6 +167,8 @@ class _DriveError(Exception):
 
 def _envelope_drive_error(exc: Exception) -> dict[str, Any]:
     """Map a thrown error into a uniform tool-result envelope."""
+    if isinstance(exc, google_oauth.UnknownAccount):
+        return {"ok": False, "error": "unknown_account", "message": str(exc)}
     if isinstance(exc, _DriveError):
         if exc.status in (401, 403):
             return {
@@ -176,8 +177,10 @@ def _envelope_drive_error(exc: Exception) -> dict[str, Any]:
                 "status": exc.status,
                 "message": str(exc),
                 "hint": (
-                    "Drive returned auth error. The user may need to "
-                    "re-connect Google Drive in the Settings panel."
+                    "Drive returned an auth error. The file may live in a "
+                    "different connected Google account (pass `account`), "
+                    "or the user may need to re-connect the account in the "
+                    "Settings panel."
                 ),
             }
         return {
@@ -187,6 +190,63 @@ def _envelope_drive_error(exc: Exception) -> dict[str, Any]:
             "message": str(exc),
         }
     return {"ok": False, "error": type(exc).__name__, "message": str(exc)}
+
+
+# ---- account selection + read probe ----------------------------------------
+
+
+def _resolve_account_arg(args: dict[str, Any]) -> tuple[str, bool]:
+    """Resolve the tool's optional ``account`` arg (email / label / id)
+    to an account id. Returns ``(account_id, explicit)``. Raises
+    :class:`google_oauth.UnknownAccount` on a bad selector or when no
+    default account exists."""
+    selector = (args.get("account") or "").strip() or None
+    return google_oauth.resolve_account(selector), selector is not None
+
+
+async def _with_read_probe(account_id: str, explicit: bool, op) -> tuple[Any, str]:
+    """Run ``await op(aid)`` as ``account_id``; on 403/404 — and only when
+    the caller did NOT explicitly pick an account — retry the other
+    connected Drive accounts in deterministic order (default first, then
+    creation order). Drive file IDs are globally unique, so a hit on
+    another account is the same file, not a lookalike.
+
+    READS ONLY. Never probe on 401 (an auth failure is not "wrong
+    account" — it must surface). Returns ``(result, account_id_used)``;
+    every fallback hit is logged so cross-account access is visible."""
+    try:
+        return await op(account_id), account_id
+    except _DriveError as exc:
+        if explicit or exc.status not in (403, 404):
+            raise
+        for other in google_oauth.connected_account_ids(google_oauth.DRIVE_SCOPE):
+            if other == account_id:
+                continue
+            try:
+                result = await op(other)
+            except _DriveError:
+                continue
+            _logger.info(
+                "drive read probe: %s returned %d; served by %s instead",
+                google_oauth.account_email(account_id) or account_id,
+                exc.status,
+                google_oauth.account_email(other) or other,
+            )
+            return result, other
+        raise exc
+
+
+# Shared schema for the optional per-call account selector. The roster
+# of connected accounts is appended to each tool's description at
+# list-build time via ``dynamic_description=google_oauth.describe_accounts``.
+_ACCOUNT_ARG_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Which connected Google account to use — email or label (the "
+        "tool description lists what's connected). Omit to use the "
+        "default account."
+    ),
+}
 
 
 # ---- drive_list_files ----------------------------------------------------
@@ -200,19 +260,37 @@ async def _drive_list_files(args: dict[str, Any], ctx: ToolCtx) -> Any:
     cursor = args.get("cursor") or None
     order_by = (args.get("order_by") or "modifiedTime desc").strip()
 
-    if recursive:
-        # Recursive walk — uses search-scoped queries. Cap to keep
-        # results bounded and fast.
-        return await _recursive_walk(folder_id, page_size=page_size, order_by=order_by)
+    try:
+        account_id, explicit = _resolve_account_arg(args)
 
-    # One-folder listing.
-    q = f"'{folder_id}' in parents and trashed = false"
-    return await _list_with_q(q, page_size=page_size, cursor=cursor, order_by=order_by)
+        if recursive:
+            # Recursive walk — uses search-scoped queries. Cap to keep
+            # results bounded and fast. Probe applies to non-root folders
+            # only: "root" exists in every account, so a probe would just
+            # list a different account's My Drive.
+            op = lambda aid: _recursive_walk(  # noqa: E731
+                folder_id, account_id=aid, page_size=page_size, order_by=order_by,
+            )
+        else:
+            q = f"'{folder_id}' in parents and trashed = false"
+            op = lambda aid: _list_with_q(  # noqa: E731
+                q, account_id=aid, page_size=page_size, cursor=cursor,
+                order_by=order_by,
+            )
+        if folder_id == "root":
+            result, used = await op(account_id), account_id
+        else:
+            result, used = await _with_read_probe(account_id, explicit, op)
+    except Exception as exc:
+        return _envelope_drive_error(exc)
+    result["account"] = google_oauth.account_email(used)
+    return result
 
 
 async def _list_with_q(
     q: str,
     *,
+    account_id: str,
     page_size: int,
     cursor: str | None,
     order_by: str,
@@ -230,10 +308,7 @@ async def _list_with_q(
     }
     if cursor:
         params["pageToken"] = cursor
-    try:
-        body = await _drive_get("/files", params=params)
-    except Exception as exc:
-        return _envelope_drive_error(exc)
+    body = await _drive_get("/files", account_id=account_id, params=params)
     files = body.get("files") or []
     return {
         "ok": True,
@@ -247,13 +322,15 @@ async def _list_with_q(
 async def _recursive_walk(
     root_id: str,
     *,
+    account_id: str,
     page_size: int,
     order_by: str,
     max_total: int = 5000,
 ) -> dict[str, Any]:
     """Breadth-first descent. Returns flat ``files`` list with each
     record carrying its parents. Capped at ``max_total`` to bound
-    cost + token spend."""
+    cost + token spend. Raises ``_DriveError`` on API failure so the
+    caller's probe/envelope logic sees it."""
     seen_folders: set[str] = set()
     queue: list[str] = [root_id]
     out: list[dict[str, Any]] = []
@@ -276,10 +353,7 @@ async def _recursive_walk(
             }
             if cursor:
                 params["pageToken"] = cursor
-            try:
-                body = await _drive_get("/files", params=params)
-            except Exception as exc:
-                return _envelope_drive_error(exc)
+            body = await _drive_get("/files", account_id=account_id, params=params)
             files = body.get("files") or []
             for f in files:
                 if len(out) >= max_total:
@@ -379,12 +453,14 @@ registry.register(
                         "'name', 'createdTime desc', 'folder,name'."
                     ),
                 },
+                "account": _ACCOUNT_ARG_SCHEMA,
             },
             "additionalProperties": False,
         },
         handler=_drive_list_files,
         side="server",
         visibility_check=google_oauth.is_connected,
+        dynamic_description=google_oauth.describe_accounts,
     )
 )
 
@@ -405,7 +481,19 @@ async def _drive_search(args: dict[str, Any], ctx: ToolCtx) -> Any:
         q = f"({query}) and trashed = false"
     else:
         q = query
-    return await _list_with_q(q, page_size=page_size, cursor=cursor, order_by=order_by)
+    # No probe here: a search that finds nothing returns an EMPTY list,
+    # not a 403/404, so there is no error signal to probe on. To search
+    # a specific other account, pass `account`.
+    try:
+        account_id, _explicit = _resolve_account_arg(args)
+        result = await _list_with_q(
+            q, account_id=account_id, page_size=page_size, cursor=cursor,
+            order_by=order_by,
+        )
+    except Exception as exc:
+        return _envelope_drive_error(exc)
+    result["account"] = google_oauth.account_email(account_id)
+    return result
 
 
 registry.register(
@@ -453,6 +541,7 @@ registry.register(
                 },
                 "cursor": {"type": "string"},
                 "order_by": {"type": "string", "default": "modifiedTime desc"},
+                "account": _ACCOUNT_ARG_SCHEMA,
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -460,6 +549,7 @@ registry.register(
         handler=_drive_search,
         side="server",
         visibility_check=google_oauth.is_connected,
+        dynamic_description=google_oauth.describe_accounts,
     )
 )
 
@@ -473,13 +563,23 @@ async def _drive_get_file(args: dict[str, Any], ctx: ToolCtx) -> Any:
         return {"ok": False, "error": "invalid_args", "message": "file_id required"}
     fields = (args.get("fields") or DEFAULT_FILE_FIELDS).strip()
     try:
-        body = await _drive_get(
-            f"/files/{file_id}",
-            params={"fields": fields, "supportsAllDrives": "true"},
+        account_id, explicit = _resolve_account_arg(args)
+        body, used = await _with_read_probe(
+            account_id,
+            explicit,
+            lambda aid: _drive_get(
+                f"/files/{file_id}",
+                account_id=aid,
+                params={"fields": fields, "supportsAllDrives": "true"},
+            ),
         )
     except Exception as exc:
         return _envelope_drive_error(exc)
-    return {"ok": True, "file": _trim_file(body) | {"raw_fields_requested": fields}}
+    return {
+        "ok": True,
+        "file": _trim_file(body) | {"raw_fields_requested": fields},
+        "account": google_oauth.account_email(used),
+    }
 
 
 registry.register(
@@ -502,6 +602,7 @@ registry.register(
                         "get more (e.g. 'permissions', 'capabilities')."
                     ),
                 },
+                "account": _ACCOUNT_ARG_SCHEMA,
             },
             "required": ["file_id"],
             "additionalProperties": False,
@@ -509,6 +610,7 @@ registry.register(
         handler=_drive_get_file,
         side="server",
         visibility_check=google_oauth.is_connected,
+        dynamic_description=google_oauth.describe_accounts,
     )
 )
 
@@ -516,42 +618,40 @@ registry.register(
 # ---- shared download core ------------------------------------------------
 
 
-async def _stream_to_path(url: str, params: dict[str, Any], dest: Path) -> int:
-    """Stream a Drive download/export response to ``dest``. Returns
-    bytes written. Auth handled by ``_drive_get(stream=True)``."""
-    token = await google_oauth.get_access_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    written = 0
+async def _stream_to_path(
+    url: str, params: dict[str, Any], dest: Path, *, account_id: str
+) -> int:
+    """Stream a Drive download/export response to ``dest`` as
+    ``account_id``. Returns bytes written. On 401 the stream is
+    RE-ISSUED once after a forced token refresh."""
+    token = await google_oauth.get_access_token(account_id)
     async with httpx.AsyncClient(timeout=300.0) as client:
-        async with client.stream("GET", url, params=params, headers=headers) as r:
-            if r.status_code == 401:
-                # one retry with forced refresh
-                try:
-                    from app.services import user_settings as _us
-                    blob = _us.read()
-                    tok = (blob.get("googleOAuth") or {}).get("tokens") or {}
-                    tok["expires_at"] = 0
-                    blob["googleOAuth"]["tokens"] = tok
-                    _us.write(blob)
-                except Exception:
-                    pass
-                token = await google_oauth.get_access_token()
-                headers = {"Authorization": f"Bearer {token}"}
-                # re-issue the stream
-                pass
-            if r.status_code != 200:
-                body_text = await r.aread()
-                raise _DriveError(r.status_code, body_text.decode("utf-8", errors="replace"))
-            with open(dest, "wb") as f:
-                async for chunk in r.aiter_bytes(chunk_size=64 * 1024):
-                    f.write(chunk)
-                    written += len(chunk)
-    return written
+        for attempt in (0, 1):
+            headers = {"Authorization": f"Bearer {token}"}
+            async with client.stream("GET", url, params=params, headers=headers) as r:
+                if r.status_code == 401 and attempt == 0:
+                    token = await google_oauth.get_access_token(
+                        account_id, force_refresh=True
+                    )
+                    continue  # re-issue the stream with the fresh token
+                if r.status_code != 200:
+                    body_text = await r.aread()
+                    raise _DriveError(
+                        r.status_code, body_text.decode("utf-8", errors="replace")
+                    )
+                written = 0
+                with open(dest, "wb") as f:
+                    async for chunk in r.aiter_bytes(chunk_size=64 * 1024):
+                        f.write(chunk)
+                        written += len(chunk)
+                return written
+    raise _DriveError(401, "still unauthorized after forced token refresh")
 
 
-async def _resolve_file_meta(file_id: str) -> dict[str, Any]:
+async def _resolve_file_meta(file_id: str, *, account_id: str) -> dict[str, Any]:
     body = await _drive_get(
         f"/files/{file_id}",
+        account_id=account_id,
         params={
             "fields": "id,name,mimeType,size,parents,owners(emailAddress,displayName),shared,modifiedTime,webViewLink",
             "supportsAllDrives": "true",
@@ -568,15 +668,18 @@ async def _resolve_file_meta(file_id: str) -> dict[str, Any]:
 _folder_cache: dict[str, dict[str, Any]] = {}
 
 
-async def _get_folder(folder_id: str) -> dict[str, Any] | None:
+async def _get_folder(folder_id: str, *, account_id: str) -> dict[str, Any] | None:
     """Return ``{id, name, parents}`` for a folder, or None if not
-    accessible. Caches on success."""
+    accessible. Caches on success (folder names/parents are identical
+    regardless of which account resolved them, so the cache stays keyed
+    by folder id alone)."""
     cached = _folder_cache.get(folder_id)
     if cached is not None:
         return cached
     try:
         body = await _drive_get(
             f"/files/{folder_id}",
+            account_id=account_id,
             params={"fields": "id,name,parents", "supportsAllDrives": "true"},
         )
     except Exception:
@@ -585,7 +688,7 @@ async def _get_folder(folder_id: str) -> dict[str, Any] | None:
     return body
 
 
-async def _resolve_drive_path(file_meta: dict[str, Any]) -> str:
+async def _resolve_drive_path(file_meta: dict[str, Any], *, account_id: str) -> str:
     """Build a human-readable Drive path: ``/My Drive/Folder A/Folder B/file.pdf``.
 
     ``file_meta`` must include ``name`` and ``parents``. Walks parents
@@ -603,7 +706,7 @@ async def _resolve_drive_path(file_meta: dict[str, Any]) -> str:
     chain: list[str] = []
     current_id = parents[0]
     for _ in range(12):
-        folder = await _get_folder(current_id)
+        folder = await _get_folder(current_id, account_id=account_id)
         if folder is None:
             chain.append("<folder?>")
             break
@@ -631,6 +734,10 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
     name_override = (args.get("name") or "").strip() or None
     force_refresh = bool(args.get("force_refresh", False))
     folder_name: str | None = args.get("folder_name") or None
+    try:
+        account_id, explicit = _resolve_account_arg(args)
+    except google_oauth.UnknownAccount as exc:
+        return _envelope_drive_error(exc)
 
     started = time.time()
 
@@ -682,7 +789,8 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
     _inflight[file_id] = fut
     try:
         result = await _do_drive_download(
-            file_id, name_override=name_override, started=started,
+            file_id, account_id=account_id, explicit=explicit,
+            name_override=name_override, started=started,
             folder_name=folder_name,
         )
         fut.set_result(result)
@@ -696,12 +804,19 @@ async def _drive_download(args: dict[str, Any], ctx: ToolCtx) -> Any:
 
 
 async def _do_drive_download(
-    file_id: str, *, name_override: str | None, started: float,
+    file_id: str, *, account_id: str, explicit: bool,
+    name_override: str | None, started: float,
     folder_name: str | None = None,
 ) -> dict[str, Any]:
-    # Need the metadata to know the filename + reject Google native formats.
+    # Need the metadata to know the filename + reject Google native
+    # formats. The read probe resolves WHICH account can see the file
+    # here, once; the stream below then uses that same account.
     try:
-        meta = await _resolve_file_meta(file_id)
+        meta, account_id = await _with_read_probe(
+            account_id,
+            explicit,
+            lambda aid: _resolve_file_meta(file_id, account_id=aid),
+        )
     except Exception as exc:
         return _envelope_drive_error(exc)
 
@@ -731,7 +846,9 @@ async def _do_drive_download(
     url = f"{DRIVE_API_BASE}/files/{file_id}"
     params = {"alt": "media", "supportsAllDrives": "true"}
     try:
-        bytes_written = await _stream_to_path(url, params, tmp_path)
+        bytes_written = await _stream_to_path(
+            url, params, tmp_path, account_id=account_id
+        )
     except Exception as exc:
         try:
             tmp_path.unlink()
@@ -739,11 +856,13 @@ async def _do_drive_download(
             pass
         return _envelope_drive_error(exc)
 
-    # Resolve account + path for the origin block. Both best-effort —
-    # if either lookup fails we still ingest the file with a partial
-    # origin (None'd fields) rather than fail the whole download.
-    drive_path = await _resolve_drive_path(meta)
-    account = (google_oauth._get_tokens() or {}).get("account_email")
+    # Resolve path for the origin block — best-effort: if the lookup
+    # fails we still ingest the file with a partial origin rather than
+    # fail the whole download. ``account`` is the email of the account
+    # that ACTUALLY served the bytes (probe included) — provenance
+    # doubles as routing for later account resolution.
+    drive_path = await _resolve_drive_path(meta, account_id=account_id)
+    account = google_oauth.account_email(account_id)
     owners = [
         {"email": o.get("emailAddress"), "name": o.get("displayName")}
         for o in (meta.get("owners") or [])
@@ -835,6 +954,7 @@ registry.register(
                     "type": "string",
                     "description": "Workspace folder to store the file in. Create with create_folder first.",
                 },
+                "account": _ACCOUNT_ARG_SCHEMA,
             },
             "required": ["file_id"],
             "additionalProperties": False,
@@ -842,6 +962,7 @@ registry.register(
         handler=_drive_download,
         side="server",
         visibility_check=google_oauth.is_connected,
+        dynamic_description=google_oauth.describe_accounts,
     )
 )
 
@@ -860,7 +981,12 @@ async def _drive_export(args: dict[str, Any], ctx: ToolCtx) -> Any:
     started = time.time()
 
     try:
-        meta = await _resolve_file_meta(file_id)
+        account_id, explicit = _resolve_account_arg(args)
+        meta, account_id = await _with_read_probe(
+            account_id,
+            explicit,
+            lambda aid: _resolve_file_meta(file_id, account_id=aid),
+        )
     except Exception as exc:
         return _envelope_drive_error(exc)
     mime_in = meta.get("mimeType") or ""
@@ -931,7 +1057,9 @@ async def _drive_export(args: dict[str, Any], ctx: ToolCtx) -> Any:
     url = f"{DRIVE_API_BASE}/files/{file_id}/export"
     params = {"mimeType": export_mime}
     try:
-        bytes_written = await _stream_to_path(url, params, tmp_path)
+        bytes_written = await _stream_to_path(
+            url, params, tmp_path, account_id=account_id
+        )
     except Exception as exc:
         try:
             tmp_path.unlink()
@@ -939,8 +1067,8 @@ async def _drive_export(args: dict[str, Any], ctx: ToolCtx) -> Any:
             pass
         return _envelope_drive_error(exc)
 
-    drive_path = await _resolve_drive_path(meta)
-    account = (google_oauth._get_tokens() or {}).get("account_email")
+    drive_path = await _resolve_drive_path(meta, account_id=account_id)
+    account = google_oauth.account_email(account_id)
     owners = [
         {"email": o.get("emailAddress"), "name": o.get("displayName")}
         for o in (meta.get("owners") or [])
@@ -1035,6 +1163,7 @@ registry.register(
                     "type": "string",
                     "description": "Workspace folder to store the export in. Create with create_folder first.",
                 },
+                "account": _ACCOUNT_ARG_SCHEMA,
             },
             "required": ["file_id"],
             "additionalProperties": False,
@@ -1042,6 +1171,7 @@ registry.register(
         handler=_drive_export,
         side="server",
         visibility_check=google_oauth.is_connected,
+        dynamic_description=google_oauth.describe_accounts,
     )
 )
 
@@ -1055,6 +1185,17 @@ registry.register(
 # the directory-watching mechanics and the unavoidable race conditions.
 
 
+def _google_plugin_setting(blob: dict[str, Any], key: str) -> Any:
+    """Read a google-plugin setting. Canonical home (what the Settings
+    panel writes) is ``plugins.google.<key>``; the top-level ``<key>``
+    is accepted as a legacy fallback for hand-edited settings files."""
+    plugins = blob.get("plugins")
+    google = plugins.get("google") if isinstance(plugins, dict) else None
+    if isinstance(google, dict) and key in google:
+        return google.get(key)
+    return blob.get(key)
+
+
 def _pickup_visible() -> bool:
     """Tool gate: pickup is only exposed when (a) OAuth is NOT connected
     AND (b) the user has explicitly enabled it in Settings. Both checks
@@ -1065,7 +1206,7 @@ def _pickup_visible() -> bool:
         blob = user_settings.read()
     except Exception:
         return False
-    return bool(blob.get("driveDownloadViaPickup"))
+    return bool(_google_plugin_setting(blob, "driveDownloadViaPickup"))
 
 
 _DEFAULT_PICKUP_DIR = "~/Downloads"
@@ -1109,7 +1250,7 @@ async def _drive_pickup(args: dict[str, Any], ctx: ToolCtx) -> Any:
 
     settings_blob = user_settings.read()
     dl_dir_str = (
-        (settings_blob.get("pickupDownloadsDir") or "").strip()
+        str(_google_plugin_setting(settings_blob, "pickupDownloadsDir") or "").strip()
         or _DEFAULT_PICKUP_DIR
     )
     dl_dir = drive_pickup.expand_dir(dl_dir_str)
@@ -1547,8 +1688,10 @@ registry.register(
             "    Use this when the user has manually downloaded the file.\n"
             "\n"
             "Visible only when (a) OAuth is not connected AND (b) the user "
-            "enabled `driveDownloadViaPickup` in Settings. Downloads dir "
-            "is configurable via `pickupDownloadsDir` (default `~/Downloads`).\n"
+            "enabled the pickup option in Settings → Google "
+            "(`plugins.google.driveDownloadViaPickup`). Downloads dir is "
+            "configurable via `plugins.google.pickupDownloadsDir` (default "
+            "`~/Downloads`).\n"
             "\n"
             "Caveats:\n"
             "  • Save-As dialog: if the user has Chrome's 'Ask where to "

@@ -10,6 +10,12 @@ Key set:
   • ``file_id`` — required. The Drive file id.
   • ``export``  — optional; presence means "this is a Google-native
                   type, export to this MIME". Absent ⇒ plain download.
+  • ``account`` — optional; the Google account EMAIL to fetch as
+                  (``drive://<id>?account=roman%40agnitio.ai``). Absent ⇒
+                  the settings-default account, with the download
+                  handler's read-probe fallback across the other
+                  connected accounts (Drive file ids are globally
+                  unique, so old account-less refs keep resolving).
 
 Registered via :func:`app.services.ensure_local.register` as an
 import-time side effect at the bottom of this module. If this plugin
@@ -45,14 +51,20 @@ async def resolve(ref: refs.Ref) -> Path:
 
     fake_ctx = ToolCtx(session_id="ensure_local")
 
+    account = ref.get("account")  # Google account email, if the ref pins one
+
     if export_format:
         # Translate the canonical "format" key into the tool handler's
         # ``format`` arg. The handler accepts either a short token
         # (``"csv"``, ``"pdf"``) or a full MIME (``"text/csv"``).
         args: dict[str, Any] = {"file_id": file_id, "format": export_format}
+        if account:
+            args["account"] = account
         result = await _drive_export(args, fake_ctx)
     else:
         args = {"file_id": file_id}
+        if account:
+            args["account"] = account
         result = await _drive_download(args, fake_ctx)
     if not result.get("ok"):
         raise RuntimeError(

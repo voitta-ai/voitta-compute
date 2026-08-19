@@ -49,10 +49,21 @@ class SheetsClient:
     Every method maps directly to an HTTP verb against
     ``sheets.googleapis.com/v4/spreadsheets/{path}``.
     Auth header is injected automatically from the stored OAuth token.
+
+    ``account`` pins which Google account this client acts as — the
+    script's pinned account email (captured when the script was saved),
+    so a saved script runs identically regardless of what the settings
+    default is on the day it re-runs. ``None`` = the settings default
+    (only used by contexts that have no pin).
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop | None = None,
+        account: str | None = None,
+    ) -> None:
         self._loop = loop
+        self._account = account
 
     def _run(self, coro) -> Any:
         if self._loop is not None and self._loop.is_running():
@@ -61,7 +72,7 @@ class SheetsClient:
 
     async def _headers(self) -> dict[str, str]:
         from app.services import google_oauth
-        token = await google_oauth.get_access_token()
+        token = await google_oauth.get_access_token(self._account)
         return {"Authorization": f"Bearer {token}"}
 
     # ------------------------------------------------------------------
@@ -172,15 +183,23 @@ class SheetsClient:
 # ---------------------------------------------------------------------------
 
 class _NullSheetsClient:
-    _MSG = (
-        "ctx.sheets is not available: Google OAuth 'spreadsheets' scope is not "
-        "active. Connect Google OAuth via the Google Drive settings panel, then "
-        "run the script on a docs.google.com page."
-    )
+    """Raises a named, actionable error on ANY use. The message says
+    exactly which account is the problem — a script pinned to a
+    disconnected account must fail loudly, never silently fall through
+    to whatever the default account is that day."""
+
+    def __init__(self, reason: str | None = None) -> None:
+        self._reason = reason or (
+            "ctx.sheets is not available: no connected Google account has "
+            "the 'spreadsheets' scope. Connect an account (or re-consent) "
+            "via Settings → Google."
+        )
 
     def __getattr__(self, name: str):
+        reason = self._reason
+
         def _raise(*args, **kwargs):
-            raise RuntimeError(self._MSG)
+            raise RuntimeError(reason)
         return _raise
 
 

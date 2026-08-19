@@ -1,30 +1,51 @@
-"""Routes powering the Google OAuth Settings flow.
+"""Routes powering the Google OAuth Settings flow (multi-account).
 
-* ``GET  /api/google/status``         — configured / connected / email
-* ``GET  /api/google/config``         — saved clientId/clientSecret (UI prefill)
-* ``POST /api/google/configure``      — persist clientId/clientSecret pair
-* ``POST /api/google/disconnect``     — revoke + clear saved tokens
-* ``GET  /api/google/oauth/start``    — 302 → Google's consent screen
-* ``GET  /api/google/oauth/callback`` — receive code, exchange, store, self-close popup
+* ``GET    /api/google/status``                   — ordered account list + default
+* ``GET    /api/google/config?account=<id>``      — saved label/clientId/clientSecret (UI prefill)
+* ``POST   /api/google/accounts``                 — create a named account {label, clientId, clientSecret}
+* ``POST   /api/google/accounts/{id}/configure``  — patch label / credentials
+* ``POST   /api/google/accounts/{id}/default``    — make this account the default
+* ``POST   /api/google/accounts/{id}/disconnect`` — revoke + clear that account's tokens
+* ``DELETE /api/google/accounts/{id}``            — revoke + remove the account entry
+* ``GET    /api/google/oauth/start?account=<id>`` — 302 → Google's consent screen
+* ``GET    /api/google/oauth/callback``           — receive code, exchange, store, self-close popup
 
-The flow runs on the localhost backend; the bookmarklet popup hits
-``/api/google/oauth/start`` and the callback closes itself once tokens
-are persisted. The chat pane polls ``/api/google/status`` to pick up
-the new state.
+The consent popup hits ``oauth/start``; the callback closes itself once
+tokens are persisted. The Settings panel polls ``/api/google/status`` to
+pick up the new state.
+
+Redirect URI: derived from the live request via ``url_for`` (so server
+deployments behind a real hostname work), overridable with the
+``GOOGLE_OAUTH_REDIRECT_URI`` env var. The exact value used on the
+authorize leg is pinned in the pending OAuth state and repeated on the
+token exchange — Google requires an exact match.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.services import google_oauth
+from app.services.current_user import get_current_email
+from app.services.google_oauth import UnknownAccount
 
 _logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/google")
+
+
+def _redirect_uri(request: Request) -> str:
+    """The callback URI for this deployment. Env override wins; else the
+    URI is derived from the incoming request so desktop (127.0.0.1) and
+    server (real hostname) both register the right value with Google."""
+    env = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
+    if env:
+        return env
+    return str(request.url_for("google_oauth_callback"))
 
 
 @router.get("/status")
@@ -33,57 +54,110 @@ async def google_status() -> dict:
 
 
 @router.get("/config")
-async def google_get_config() -> dict:
-    """Saved clientId/clientSecret. Localhost-only — same trust
-    boundary as ``GET /api/settings`` which already exposes the LLM
-    keys via the same socket."""
-    return google_oauth.get_client_config()
+async def google_get_config(account: str) -> dict:
+    """Saved label/clientId/clientSecret for one account. Authenticated /
+    localhost-only — same trust boundary as ``GET /api/settings`` which
+    already exposes the LLM keys via the same socket."""
+    try:
+        return google_oauth.get_client_config(account)
+    except UnknownAccount as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
-@router.post("/configure")
-async def google_set_config(request: Request) -> dict:
-    """Persist a new clientId/clientSecret. If a user was connected,
-    revoke + clear the old tokens (they were issued against the old
-    client and are no longer valid)."""
+async def _json_body(request: Request) -> dict:
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be an object")
-    cid = body.get("clientId")
-    csec = body.get("clientSecret")
+    return body
+
+
+@router.post("/accounts")
+async def google_create_account(request: Request) -> dict:
+    """Create a named account entry with its OAuth client credentials."""
+    body = await _json_body(request)
     try:
-        await google_oauth.set_client_credentials(cid or "", csec or "")
+        account_id = google_oauth.create_account(
+            str(body.get("label") or ""),
+            str(body.get("clientId") or ""),
+            str(body.get("clientSecret") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "id": account_id, **google_oauth.status()}
+
+
+@router.post("/accounts/{account_id}/configure")
+async def google_configure_account(account_id: str, request: Request) -> dict:
+    """Patch label / credentials. Changing credentials revokes + clears
+    that account's tokens (they were issued against the old client)."""
+    body = await _json_body(request)
+    kwargs: dict = {}
+    if "label" in body:
+        kwargs["label"] = str(body.get("label") or "")
+    if "clientId" in body:
+        kwargs["client_id"] = str(body.get("clientId") or "")
+    if "clientSecret" in body:
+        kwargs["client_secret"] = str(body.get("clientSecret") or "")
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    try:
+        await google_oauth.update_account(account_id, **kwargs)
+    except UnknownAccount as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True, **google_oauth.status()}
 
 
-@router.post("/disconnect")
-async def google_disconnect() -> dict:
-    """Revoke + clear saved tokens. Keeps the client_id/client_secret
-    (so reconnecting doesn't require re-pasting them)."""
+@router.post("/accounts/{account_id}/default")
+async def google_set_default(account_id: str) -> dict:
     try:
-        await google_oauth.disconnect()
+        google_oauth.set_default_account(account_id)
+    except UnknownAccount as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True, **google_oauth.status()}
+
+
+@router.post("/accounts/{account_id}/disconnect")
+async def google_disconnect(account_id: str) -> dict:
+    """Revoke + clear one account's tokens. Keeps the credentials so
+    reconnecting doesn't require re-pasting them."""
+    try:
+        await google_oauth.disconnect(account_id)
     except Exception as exc:
-        _logger.warning("disconnect failed: %s", exc)
+        _logger.warning("disconnect(%s) failed: %s", account_id, exc)
+    return {"ok": True, **google_oauth.status()}
+
+
+@router.delete("/accounts/{account_id}")
+async def google_delete_account(account_id: str) -> dict:
+    try:
+        await google_oauth.delete_account(account_id)
+    except UnknownAccount as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
     return {"ok": True, **google_oauth.status()}
 
 
 @router.get("/oauth/start")
-async def google_oauth_start():
-    """Begin the OAuth dance — redirect the popup to Google's consent
-    screen. The widget opens this URL; the callback closes the popup."""
-    if not google_oauth.is_configured():
+async def google_oauth_start(request: Request, account: str):
+    """Begin the OAuth dance for one account — redirect the popup to
+    Google's consent screen. The callback closes the popup."""
+    if not google_oauth.is_configured(account):
         return HTMLResponse(
             "<h2>Google OAuth not configured</h2>"
-            "<p>Open Settings → Google and paste a clientId / clientSecret "
-            "first, then retry.</p>",
+            "<p>Open Settings → Google, add this account's clientId / "
+            "clientSecret first, then retry.</p>",
             status_code=400,
         )
     try:
-        url, _state = google_oauth.build_authorize_url()
+        url, _state = google_oauth.build_authorize_url(
+            account,
+            redirect_uri=_redirect_uri(request),
+            user_email=get_current_email(),
+        )
     except Exception as exc:
         return HTMLResponse(f"<h2>Failed to build auth URL</h2><p>{exc}</p>", status_code=500)
     return RedirectResponse(url, status_code=302)
@@ -95,9 +169,8 @@ async def google_oauth_callback(
     state: str | None = None,
     error: str | None = None,
 ):
-    """Receive the authorization code, exchange for tokens, store,
-    and self-close. The Settings panel polls ``/api/google/status``
-    to pick up the new state."""
+    """Receive the authorization code, exchange for tokens for the
+    account pinned in the OAuth state, store, and self-close."""
 
     def _close_html(title: str, body: str, ok: bool) -> HTMLResponse:
         color = "#0a8a3a" if ok else "#b00020"
@@ -125,20 +198,34 @@ async def google_oauth_callback(
         return _close_html("Connection cancelled", f"Google returned: <code>{error}</code>.", ok=False)
     if not code or not state:
         return _close_html("Bad callback", "Missing code/state.", ok=False)
-    if not google_oauth.consume_state(state):
+    pending = google_oauth.consume_state(state)
+    if pending is None:
         return _close_html(
             "Invalid state",
             "The state token didn't match a pending OAuth request.",
             ok=False,
         )
+    # Server mode: the callback must land on the same user's settings
+    # file the flow started from. Both are None on desktop.
+    if pending.user_email != get_current_email():
+        return _close_html(
+            "Session mismatch",
+            "This OAuth flow was started by a different login session. "
+            "Retry Connect from Settings.",
+            ok=False,
+        )
     try:
-        tok = await google_oauth.exchange_code(code)
+        tok = await google_oauth.exchange_code(
+            code, pending.account_id, redirect_uri=pending.redirect_uri,
+        )
     except Exception as exc:
         return _close_html("Token exchange failed", str(exc)[:300], ok=False)
 
     email = tok.get("account_email") or "(unknown)"
+    label = google_oauth.account_label(pending.account_id)
     return _close_html(
-        "Google Drive connected",
-        f"Signed in as <b>{email}</b>. The Drive tools are now available to the LLM.",
+        "Google account connected",
+        f"Signed in as <b>{email}</b> ({label}). The Drive tools are now "
+        "available to the LLM.",
         ok=True,
     )

@@ -430,8 +430,12 @@ flowchart LR
   are OR'd in via [backend/app/services/host_activation.py](backend/app/services/host_activation.py)
   and may pin a **port** (`127.0.0.1:8756` matches only that port).
 - `visibility_check` covers state the LLM can't control — e.g. Drive tools
-  only appear when OAuth is connected; MCP tools only while their connector
-  status is `ok`.
+  only appear when at least one Google account is connected; MCP tools only
+  while their connector status is `ok`.
+- `dynamic_description` (optional callable, same per-turn evaluation as
+  `visibility_check`) appends runtime state to a tool's description — e.g.
+  the roster of connected Google accounts on every Drive/Sheets tool. A
+  raising callable degrades to the static description, never hides the tool.
 - Name collisions **log and skip** (keep the prior spec) rather than raise, so
   one bad plugin can't drop its siblings.
 - `dispatch()` wraps every handler with the activity tracker (tray glyph) and
@@ -505,8 +509,8 @@ A plugin is a directory under [plugins/](plugins/) with a `manifest.json`
 |--------|-------|--------------|
 | `default` | `*` | base Voitta system prompt (no tools) |
 | `ebay` | ebay.com | browser-side DOM scrapers (`ebay_scrape_search`, `ebay_scrape_item`, …) |
-| `google` (drive) | drive.google.com | Drive download tools, OAuth-gated (`visibility_check`), download-modal primitives, custom settings panel |
-| `google-sheets` | docs.google.com | Sheets tools (scripts separately get `ctx.sheets` when the OAuth spreadsheets scope is connected) |
+| `google` (drive) | drive.google.com | Drive download tools (multi-account: per-call `account` arg + read probe), OAuth-gated (`visibility_check`), download-modal primitives, custom settings panel (account list, add/connect/default/delete) |
+| `google-sheets` | docs.google.com | Sheets tools (multi-account, writes never probe); scripts separately get `ctx.sheets` bound to the script's pinned account |
 | `linkedin` | linkedin.com | browser-side page-context extraction |
 | `veed` | www.veed.io | reads composition/media/subtitle state from VEED's page context |
 | `voitta-enterprise` | enterprise.voitta.ai | branding + the `vre` MCP connector (§8) |
@@ -672,7 +676,7 @@ sequenceDiagram
 | Inputs | `ctx.args` (from `run_script(args=…)`) · `ctx.host` (page host — drives theming) |
 | Theme | `ctx.theme()` → the active plugin palette as CSS-variable dict, so reports match the host site's skin |
 | Data | `ctx.snapshot(handle)` · `ctx.file(handle, name?)` · `ctx.dataframe(handle)` (curves.pkl) · `ctx.raw(handle)` · `ctx.ensure_local(ref)` |
-| Sheets | `ctx.sheets` (Google Sheets client when OAuth scope present; null stub otherwise) |
+| Sheets | `ctx.sheets` — Google Sheets client bound to the script's **pinned account** (email captured at `define_script` time, stored in script meta; re-pin via `edit_script(google_account=…)`). Missing/disconnected/scope-less pin → hard error naming the account on first use; no pin → the settings-default account |
 
 ### Observability
 
@@ -789,7 +793,11 @@ One nested JSON blob, atomic-written (tmpfile + `os.replace`)
   "layout": "chat-right", "theme": "auto",
   "max_tool_iterations": 25, "max_tokens": 24576,
   "mcpDebugEnabled": false,
-  "googleOAuth": { "clientId": "…", "tokens": { } },
+  "googleOAuth": { "defaultAccount": "acc_1a2b3c4d",
+                   "accounts": { "acc_1a2b3c4d": { "label": "Work", "clientId": "…",
+                                                   "clientSecret": "…", "tokens": { } },
+                                 "acc_9e8f7a6b": { "label": "Personal", "clientId": "…",
+                                                   "clientSecret": "…" } } },
   "plugins": { "voitta-enterprise": { "mcp": {"api_keys": {"enterprise.voitta.ai": "vk_…",
                                                             "127.0.0.1:8756": "vk_…"}},
                                       "extra_hosts": ["127.0.0.1:8756"] } }
@@ -801,8 +809,10 @@ entry but **no `api_keys` entry** — its credential is the subscription OAuth
 token, stored separately (see below), never in `settings.json`.
 
 - Wire shape is **redacted**: `GET /api/settings` returns
-  `has_api_keys: {provider: bool}` instead of keys, and strips
-  `googleOAuth.tokens`. Keys are write-only. It also returns
+  `has_api_keys: {provider: bool}` instead of keys, and strips every
+  `googleOAuth.accounts.*.tokens` blob (each account keeps only its
+  `account_email`; a not-yet-migrated legacy flat blob is redacted too).
+  Keys are write-only. It also returns
   `agent_sdk: {available, has_token}` — whether the Claude Code engine is
   installed (gates the brain in the selector) and whether this user has a
   stored subscription token.
@@ -845,16 +855,69 @@ settings dir) serve both modes unchanged. The Chainlit JWT secret comes from
 `<USER_DATA_ROOT>/auth_secret`. Desktop mode also patches Chainlit's
 `resume_thread` to skip user-identity checks so threads resume without login.
 
-### Google OAuth (Drive / Sheets data access)
+### Google OAuth (Drive / Sheets data access) — multi-account
 
 Separate from server-mode *login* auth:
 [backend/app/routes/google.py](backend/app/routes/google.py) +
 [backend/app/services/google_oauth.py](backend/app/services/google_oauth.py)
-run a per-user consent flow for the Google plugins. The client id/secret are
-configured in the Google settings panel (stored under `googleOAuth` in
-settings.json), tokens persist server-side (redacted from the wire), refresh
-is automatic, and Drive/Sheets tools gate on connection state via
-`visibility_check` — they simply don't appear until OAuth is connected.
+run per-user consent flows for the Google plugins. The user registers any
+number of **named accounts** (Settings → Google), each with its own OAuth
+client credentials and its own grant; "add account" can copy an existing
+account's client id/secret (one-time value copy — one Google Cloud OAuth
+client may authorize many Google accounts).
+
+**Identity model** — three layers, each with one job:
+
+| Layer | Example | Role |
+|-------|---------|------|
+| `id` | `acc_1a2b3c4d` | random, immutable; dict key, token-cache key, HTTP param |
+| `email` | `roman@agnitio.ai` | set by the OAuth callback; **the durable identity** — script pins, `drive://…?account=` refs, snapshot origins all store the email. One connected email per account entry (enforced at token exchange) |
+| `label` | `Work` | freely renameable display / LLM alias; never stored in anything durable |
+
+**Selection at runtime** (everything funnels through
+`get_access_token(selector, force_refresh=)` — selector = id, email, or
+label, case-insensitive; `None` = the settings default):
+
+- **Tool calls (late binding):** every Drive/Sheets tool takes an optional
+  `account` arg; the roster of connected accounts (email, label, default
+  marker, missing-scopes marker) is appended to each tool description per
+  turn via `ToolSpec.dynamic_description`. No arg → default account.
+- **Read probe:** a read that 403/404s under a *non-explicit* account is
+  retried across the other connected, scope-qualified accounts in
+  deterministic order (default first, then creation order) — Drive file /
+  spreadsheet IDs are globally unique, so a hit elsewhere is the same file.
+  Every fallback hit is logged and the **serving** account's email is
+  stamped into the tool result and the snapshot origin. 401s never probe
+  (one forced token refresh + retry, then surface). **Writes never probe** —
+  wrong account on a Sheets write is a hard, named error.
+- **Code (early binding):** scripts pin the account **email at save time**
+  (`define_script`/`edit_script` optional `google_account` arg; default =
+  the default account's email) into script meta; `run_and_dispatch` passes
+  the pin to the sandbox, so re-runs are reproducible regardless of later
+  default changes. A pinned account that is missing/disconnected/scope-less
+  raises a hard error naming the account — never a silent fall-through.
+  `drive://<file_id>?account=<email>` refs pin the fetching account;
+  account-less legacy refs resolve via default + read probe.
+
+**Flow mechanics:** the OAuth `state` pins `{account_id, redirect_uri,
+user_email}`; the callback rejects cross-user replays (server mode) and
+repeats the exact redirect_uri on the token exchange. The redirect URI is
+derived from the live request (`url_for`), overridable with
+`GOOGLE_OAUTH_REDIRECT_URI` — so desktop (127.0.0.1) and server hostnames
+both work. Routes: `GET status` (ordered account list + default) ·
+`POST accounts` (create) · `POST accounts/{id}/configure|default|disconnect`
+· `DELETE accounts/{id}` · `GET oauth/start?account=` · `GET oauth/callback`.
+Changing an account's client credentials revokes + clears its tokens
+(label-only changes keep the grant).
+
+**Storage & compat:** tokens live per account under
+`googleOAuth.accounts.<id>.tokens` (redacted from the wire), cached in
+memory keyed `(settings_path, account_id)` — per-user isolation in server
+mode. The pre-multi-account flat blob (`googleOAuth.clientId/tokens`)
+migrates in place to a single account entry on first read, grant preserved.
+Tool visibility gates stay zero-arg ("any account connected / any account
+has the Sheets scope"); per-call scope checks run against the *resolved*
+account and name which accounts qualify on failure.
 
 ### Claude subscription brain: auth & sessions
 
@@ -1057,6 +1120,12 @@ capture stays recoverable. Retention is capped at the last 3 runs
   (briefcase → `build/voitta-compute/macos/app/Voitta Compute.app`;
   `--package`/`--release` produce a signed, notarised DMG under `dist/` and
   `--release` bumps the patch version in pyproject).
+- **Known pitfall**: `build_app.sh` picks `briefcase update` vs `create` by
+  testing `[ -d build ]` — a `build/` dir whose briefcase scaffold was
+  removed (post-clean state) makes `update` fail with `FileNotFoundError`
+  on `…/Contents/Resources/app` while the script still exits 0 (the error
+  is masked by the output pipe). Recovery:
+  `rm -rf build/voitta-compute && briefcase create macOS app && briefcase build macOS app`.
 - **Version**: [src/voitta_compute/_version.py](src/voitta_compute/_version.py);
   read at runtime by `installer.current_app_version()` and compared against
   `.deployed_version` to trigger the fresh-deploy wipe (§2).

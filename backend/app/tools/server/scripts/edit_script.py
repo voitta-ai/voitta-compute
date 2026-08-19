@@ -67,16 +67,31 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
     if err:
         return {"ok": False, "error": err}
 
-    result = await sandbox.smoke_test_async(name, candidate)
+    # Google account pin: preserved across edits; the optional
+    # ``google_account`` arg re-pins (validated against the configured
+    # accounts, stored as the durable email).
+    google_pin = store.read_meta(name).extra.get("google_account")
+    repin = (args.get("google_account") or "").strip() or None
+    if repin:
+        from app.tools.server.scripts.define_script import resolve_google_pin
+
+        google_pin, pin_err = resolve_google_pin(repin)
+        if pin_err:
+            return {"ok": False, "error": pin_err}
+
+    result = await sandbox.smoke_test_async(name, candidate, google_account=google_pin)
     if not result.ok:
         return {"ok": False, "error": result.error, "traceback": result.traceback}
 
     meta = store.write_script(name, candidate)
+    if repin and google_pin:
+        meta = store.update_meta(name, google_account=google_pin)
     return {
         "ok": True,
         "name": meta.name,
         "updated_at": meta.updated_at,
         "edits_applied": len(edits),
+        "google_account": google_pin,
     }
 
 
@@ -107,6 +122,13 @@ registry.register(
                         "required": ["find", "replace"],
                         "additionalProperties": False,
                     },
+                },
+                "google_account": {
+                    "type": "string",
+                    "description": (
+                        "Re-pin ctx.sheets to this Google account (email "
+                        "or label). Omit to keep the script's existing pin."
+                    ),
                 },
             },
             "required": ["name", "edits"],

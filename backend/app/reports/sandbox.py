@@ -94,16 +94,52 @@ def _execute(code: str, ctx: ScriptContext) -> RunResult:
     return RunResult(ok=True, result=result, ctx=ctx)
 
 
-def _make_sheets_client(loop: Optional[asyncio.AbstractEventLoop]) -> Any:
-    """Return a SheetsClient when the spreadsheets OAuth scope is active,
-    or a _NullSheetsClient stub otherwise. Import is guarded so a missing
-    plugin never breaks script execution on non-Sheets pages."""
+def _make_sheets_client(
+    loop: Optional[asyncio.AbstractEventLoop],
+    google_account: Optional[str] = None,
+) -> Any:
+    """Return a SheetsClient bound to the script's pinned Google account
+    (``google_account`` — an email captured when the script was saved),
+    or a _NullSheetsClient stub that raises a NAMED error on use.
+
+    Pin semantics are strict on purpose: a pinned account that is
+    missing / disconnected / scope-less yields a hard error naming that
+    account — never a silent fall-through to the current default (which
+    is how data ends up in the wrong Google account). Import is guarded
+    so a missing plugin never breaks script execution on non-Sheets pages."""
     try:
         from app.services import google_oauth
-        from voitta_sheets.client import NULL_SHEETS_CLIENT, SheetsClient
+        from voitta_sheets.client import SheetsClient, _NullSheetsClient
+
+        if google_account:
+            try:
+                account_id = google_oauth.resolve_account(google_account)
+            except google_oauth.UnknownAccount:
+                return _NullSheetsClient(
+                    f"ctx.sheets is not available: this script is pinned to "
+                    f"Google account {google_account!r}, which is no longer "
+                    f"configured. Reconnect it in Settings → Google, or "
+                    f"re-pin the script (edit_script with google_account=...)."
+                )
+            if not google_oauth.is_connected(account_id):
+                return _NullSheetsClient(
+                    f"ctx.sheets is not available: pinned Google account "
+                    f"{google_account!r} is not connected. Reconnect it in "
+                    f"Settings → Google."
+                )
+            if not google_oauth.has_sheets_scope(account_id):
+                return _NullSheetsClient(
+                    f"ctx.sheets is not available: pinned Google account "
+                    f"{google_account!r} lacks the 'spreadsheets' scope. "
+                    f"Reconnect it in Settings → Google to grant it."
+                )
+            return SheetsClient(loop=loop, account=google_account)
+
+        # No pin (legacy script or nothing connected at save time):
+        # the settings-default account, resolved at run time.
         if google_oauth.has_sheets_scope():
             return SheetsClient(loop=loop)
-        return NULL_SHEETS_CLIENT
+        return _NullSheetsClient()
     except Exception:
         try:
             from voitta_sheets.client import NULL_SHEETS_CLIENT
@@ -112,7 +148,12 @@ def _make_sheets_client(loop: Optional[asyncio.AbstractEventLoop]) -> Any:
             return None
 
 
-def smoke_test(slug: str, code: str, host: Optional[str] = None) -> RunResult:
+def smoke_test(
+    slug: str,
+    code: str,
+    host: Optional[str] = None,
+    google_account: Optional[str] = None,
+) -> RunResult:
     """Run ``build(ctx)`` once with a throwaway context.
 
     Used by ``define_script`` / ``edit_script`` to validate code BEFORE
@@ -125,7 +166,7 @@ def smoke_test(slug: str, code: str, host: Optional[str] = None) -> RunResult:
     frame blocked the loop for good (no asyncio timeout can preempt it).
     """
     ctx = ScriptContext(slug=slug, host=host)
-    ctx.sheets = _make_sheets_client(None)
+    ctx.sheets = _make_sheets_client(None, google_account)
     return _execute(code, ctx)
 
 
@@ -133,7 +174,10 @@ _SMOKE_TIMEOUT_S = 60  # max wall time for a define/edit validation run
 
 
 async def smoke_test_async(
-    slug: str, code: str, host: Optional[str] = None
+    slug: str,
+    code: str,
+    host: Optional[str] = None,
+    google_account: Optional[str] = None,
 ) -> RunResult:
     """Thread-offloaded, time-limited smoke test — safe on the event loop.
 
@@ -143,7 +187,7 @@ async def smoke_test_async(
     """
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(smoke_test, slug, code, host),
+            asyncio.to_thread(smoke_test, slug, code, host, google_account),
             timeout=_SMOKE_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
@@ -166,16 +210,21 @@ async def run(
     code: str,
     args: Optional[dict[str, Any]] = None,
     host: Optional[str] = None,
+    google_account: Optional[str] = None,
 ) -> RunResult:
     """Live run. Offloads script execution to a thread pool so the event
     loop stays responsive and ``ctx.ensure_local()`` can bridge async
-    resolvers back via ``run_coroutine_threadsafe``."""
+    resolvers back via ``run_coroutine_threadsafe``.
+
+    ``google_account`` is the script's pinned account email (from its
+    meta) — it makes re-runs reproducible regardless of the current
+    settings default."""
     try:
         loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
     ctx = ScriptContext(slug=slug, args=dict(args or {}), host=host, _loop=loop)
-    ctx.sheets = _make_sheets_client(loop)
+    ctx.sheets = _make_sheets_client(loop, google_account)
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(_execute, code, ctx),

@@ -78,6 +78,13 @@ class ToolSpec:
     # manipulate (e.g. "Drive tools only show when OAuth is connected").
     # Called on every turn — keep cheap.
     visibility_check: Callable[[], bool] | None = None
+    # Optional runtime SUFFIX for the description, evaluated at the same
+    # per-turn moment as visibility_check (schemas_for_host). Used for
+    # state the static description can't know at import time (e.g. the
+    # roster of connected Google accounts). Returns "" for "nothing to
+    # add"; exceptions fall back to the static description alone.
+    # Called on every turn — keep cheap.
+    dynamic_description: Callable[[], str] | None = None
     # Owning plugin, back-filled by the plugin loader / MCP refresh.
     # Lets user-added activation hosts (Settings → Plugins, stored at
     # ``plugins.<name>.extra_hosts``) widen this spec's host gate
@@ -192,11 +199,24 @@ class ToolRegistry:
         return [
             {
                 "name": s.name,
-                "description": s.description,
+                "description": self._describe(s),
                 "input_schema": s.input_schema,
             }
             for s in self.visible_for_host(host)
         ]
+
+    @staticmethod
+    def _describe(s: ToolSpec) -> str:
+        """Static description plus the dynamic suffix (if any). A raising
+        suffix callable degrades to the static description — a broken
+        roster must never hide a working tool."""
+        if s.dynamic_description is None:
+            return s.description
+        try:
+            return s.description + (s.dynamic_description() or "")
+        except Exception:
+            logger.exception("dynamic_description for %r raised", s.name)
+            return s.description
 
     async def dispatch(
         self, name: str, args: dict[str, Any], ctx: ToolCtx

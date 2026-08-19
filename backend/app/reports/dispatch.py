@@ -134,7 +134,12 @@ async def run_and_dispatch(
         return DispatchResult(ok=False, status="error", error=f"script {slug!r} not found")
 
     code = store.read_code(slug)
-    run = await sandbox.run(slug, code, args=args, host=host)
+    # The script's pinned Google account (email, captured at save time)
+    # decides which account ctx.sheets acts as — reproducible re-runs.
+    google_account = store.read_meta(slug).extra.get("google_account")
+    run = await sandbox.run(
+        slug, code, args=args, host=host, google_account=google_account,
+    )
     if not run.ok:
         store.update_meta(slug, last_ok=False, last_run_at=_now_iso())
         return DispatchResult(
