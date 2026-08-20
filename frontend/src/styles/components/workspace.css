@@ -359,6 +359,31 @@
   flex-shrink: 0;
 }
 
+/* Script-kind chips — a right-aligned column in the row grid. Words,
+   not emoji: legible at row size in both themes. Fixed width so chips
+   line up as a column across rows; color via currentColor so the
+   border always matches the text. */
+.ws-kind-chip {
+  flex-shrink: 0;
+  min-width: 52px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.6;
+  padding: 0 5px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0.95;
+}
+.ws-kind-report  { color: #4c8dd6; }
+.ws-kind-chat    { color: #3fa46a; }
+.ws-kind-job     { color: #c78a35; }
+.ws-kind-untyped { color: var(--voitta-text-muted); border-style: dashed; }
+.ws-kind-writes  { color: #c76a6a; min-width: 0; text-transform: none; }
+
 .ws-act {
   background: transparent;
   border: 1px solid transparent;
