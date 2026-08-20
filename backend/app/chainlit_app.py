@@ -497,11 +497,19 @@ async def _run_agent_sdk_turn(
     )
     from app.services.agent_sdk.onboarding import handle_auth_error
 
+    # Attachments: the engine can't take content blocks over this path,
+    # but its Read tool views images (and PDFs/text) natively — so
+    # persist each attachment into the project's uploads tree and hand
+    # the engine the file paths in the prompt.
+    user_text = user_msg.content
     if user_msg.elements:
-        await cl.Message(
-            content="ℹ️ Attachments aren't supported by the Claude (subscription) "
-            "brain yet — sending the text only.",
-        ).send()
+        attach_lines, skipped = _persist_attachments_for_engine(user_msg.elements)
+        if attach_lines:
+            user_text = (user_text + "\n\n" if user_text else "") + "\n".join(attach_lines)
+        if skipped:
+            await cl.Message(
+                content="ℹ️ Couldn't read attachment(s): " + ", ".join(skipped),
+            ).send()
 
     # System prompt is composed from applicable plugins, exactly as the
     # API-provider path does.
@@ -528,7 +536,7 @@ async def _run_agent_sdk_turn(
 
     try:
         result = await run_agent_sdk_turn(
-            user_text=user_msg.content,
+            user_text=user_text,
             system=system,
             model=model,
             resume_session_id=resume_id,
@@ -549,7 +557,7 @@ async def _run_agent_sdk_turn(
         # Hand off to the in-chat token-onboarding flow. On success it resumes
         # the original turn; on cancel it returns without sending.
         await handle_auth_error(
-            user_text=user_msg.content,
+            user_text=user_text,
             system=system,
             model=model,
             resume_session_id=resume_id,
@@ -561,6 +569,54 @@ async def _run_agent_sdk_turn(
 
 
 # ----- helpers ------------------------------------------------------------
+
+
+def _persist_attachments_for_engine(elements: list[Any]) -> tuple[list[str], list[str]]:
+    """Persist chat attachments to the active project's uploads tree and
+    return ``(prompt_lines, skipped_names)``.
+
+    Chainlit spools incoming elements to session-temp files that may not
+    outlive the session — copying into ``uploads/attachments/`` keeps the
+    path valid for engine-session resumes. Every file type is passed
+    through: the engine's Read tool views images/PDFs/text natively, and
+    anything else is still addressable by path from Bash/compute.
+    """
+    import re
+    import secrets
+    import shutil as _shutil
+
+    from app.services.projects import project_data_root
+
+    dest_dir = Path(project_data_root()) / "uploads" / "attachments"
+    lines: list[str] = []
+    skipped: list[str] = []
+    for el in elements:
+        name = getattr(el, "name", None) or "attachment"
+        mime = getattr(el, "mime", None) or "application/octet-stream"
+        src = getattr(el, "path", None)
+        content = getattr(el, "content", None)
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)[-80:] or "attachment"
+            dest = dest_dir / f"{secrets.token_hex(4)}-{safe}"
+            if src:
+                _shutil.copyfile(src, dest)
+            elif isinstance(content, (bytes, bytearray)):
+                dest.write_bytes(bytes(content))
+            else:
+                skipped.append(name)
+                continue
+            size_kb = max(1, dest.stat().st_size // 1024)
+            hint = "view it with the Read tool" if (
+                mime.startswith("image/")
+                or mime == "application/pdf"
+                or mime.startswith("text/")
+            ) else "a file on disk — use Read or run_compute as appropriate"
+            lines.append(f"[Attached: {dest} ({mime}, {size_kb} KB) — {hint}]")
+        except Exception:
+            logger.exception("could not persist attachment %r", name)
+            skipped.append(name)
+    return lines, skipped
 
 
 def _element_to_image_block(el: Any) -> dict[str, Any] | None:
