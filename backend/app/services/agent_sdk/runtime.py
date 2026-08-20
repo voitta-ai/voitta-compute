@@ -38,6 +38,7 @@ try:
         PermissionResultAllow,
         PermissionResultDeny,
         ResultMessage,
+        StreamEvent,
         SystemMessage,
         TextBlock,
         ThinkingBlock,
@@ -51,6 +52,7 @@ except ImportError:  # SDK not installed yet
     AssistantMessage = ClaudeAgentOptions = PermissionResultAllow = None  # type: ignore
     PermissionResultDeny = ResultMessage = SystemMessage = TextBlock = None  # type: ignore
     ThinkingBlock = ToolResultBlock = ToolUseBlock = UserMessage = query = None  # type: ignore
+    StreamEvent = None  # type: ignore
 
     class CLINotFoundError(Exception):  # type: ignore
         """Placeholder so the except clause is valid when the SDK is absent."""
@@ -133,19 +135,6 @@ def _tool_result_text(content: Any) -> str:
                 parts.append(str(blk))
         return "\n".join(parts)
     return str(content)
-
-
-def _usage_tokens(usage: Any) -> int:
-    """Sum the token counts in an SDK usage dict (0 if absent/odd-shaped)."""
-    if not isinstance(usage, dict):
-        return 0
-    total = 0
-    for k in ("input_tokens", "output_tokens",
-              "cache_read_input_tokens", "cache_creation_input_tokens"):
-        v = usage.get(k)
-        if isinstance(v, (int, float)):
-            total += int(v)
-    return total
 
 
 def _is_auth_failure(msg: ResultMessage) -> bool:
@@ -353,6 +342,11 @@ def _build_options(
         # behaviour fully defined by our system prompt + tool surface.
         setting_sources=None,
         permission_mode="default",
+        # Raw API stream events (thinking/text deltas, live usage) — consumed
+        # as TELEMETRY ONLY by the status ticker (phase + counters). Chat
+        # content still renders exclusively from complete messages, so a
+        # delta can never double-append prose.
+        include_partial_messages=True,
     )
 
 
@@ -397,7 +391,11 @@ async def run_agent_sdk_turn(
     steps: dict[str, cl.Step] = {}
     session_id: str | None = resume_session_id
     result_msg: ResultMessage | None = None
-    tokens = 0  # accumulated across AssistantMessage.usage — shown live
+    # Live telemetry: the loop mutates `t` (plain assignments), the ticker
+    # renders it — single writer on the status step is preserved.
+    from app.services.agent_sdk.turn_status import TurnStatus
+
+    t = TurnStatus()
 
     # One slick, self-animating status line — the only "busy" element. A
     # background ticker spins it and ticks the elapsed/token counters once a
@@ -416,12 +414,7 @@ async def run_agent_sdk_turn(
         i = 0
         try:
             while True:
-                elapsed = int(time.monotonic() - t0)
-                tail = f" · {tokens:,} tokens" if tokens else ""
-                if wait_state["asking"]:
-                    status.output = f"❓ Waiting for your answer… · {elapsed}s{tail}"
-                else:
-                    status.output = f"{_SPIN[i % len(_SPIN)]} Working… · {elapsed}s{tail}"
+                status.output = t.line(_SPIN[i % len(_SPIN)], wait_state["asking"])
                 await status.update()
                 i += 1
                 await asyncio.sleep(1)
@@ -455,8 +448,14 @@ async def run_agent_sdk_turn(
             # push the ceiling out (and restore it) — see _ask_user_question.
             deadline[0] = _turn_deadline
             async for message in agen:
+                if StreamEvent is not None and isinstance(message, StreamEvent):
+                    # Telemetry only — phases + live counters for the status
+                    # line. Chat content renders exclusively from complete
+                    # messages below, so deltas can never double-append.
+                    t.on_stream_event(getattr(message, "event", None) or {})
+                    continue
                 if isinstance(message, AssistantMessage):
-                    tokens += _usage_tokens(getattr(message, "usage", None))
+                    t.on_usage(getattr(message, "usage", None))
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             # Assistant prose — preambles between tool calls AND
@@ -476,6 +475,7 @@ async def run_agent_sdk_turn(
                         elif isinstance(block, ToolUseBlock):
                             await _flush_text()
                             name = (block.name or "").removeprefix(f"mcp__{MCP_SERVER_NAME}__")
+                            t.on_tool_start(name or "tool")
                             step = cl.Step(name=name or "tool", type="tool")
                             try:
                                 import json as _json
@@ -490,6 +490,7 @@ async def run_agent_sdk_turn(
                     blocks = content if isinstance(content, list) else []
                     for block in blocks:
                         if isinstance(block, ToolResultBlock):
+                            t.on_tool_result()
                             step = steps.get(block.tool_use_id)
                             if step is not None:
                                 step.output = _truncate(_tool_result_text(block.content))
@@ -562,8 +563,9 @@ async def run_agent_sdk_turn(
             pass
 
     logger.info(
-        "agent_sdk turn end: session=%s tokens=%d elapsed=%.0fs timed_out=%s",
-        session_id or "-", tokens, time.monotonic() - t0, timed_out,
+        "agent_sdk turn end: session=%s elapsed=%.0fs timed_out=%s · %s",
+        session_id or "-", time.monotonic() - t0, timed_out,
+        t.summary() or "no telemetry",
     )
     if timed_out:
         mins = int(_TURN_TIMEOUT_S // 60)
