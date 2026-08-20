@@ -79,6 +79,7 @@ async def handle_auth_error(
     model: str | None,
     resume_session_id: str | None,
     ctx: ToolCtx,
+    image_blocks: list | None = None,
 ) -> None:
     """Run the onboarding flow, then resume the original turn on success."""
     # Imported here to avoid an import cycle (runtime imports nothing from us).
@@ -117,6 +118,7 @@ async def handle_auth_error(
             model=model,
             resume_session_id=resume_session_id,
             ctx=ctx,
+            image_blocks=image_blocks,
         )
         if result.session_id:
             cl.user_session.set("agent_sdk_session_id", result.session_id)

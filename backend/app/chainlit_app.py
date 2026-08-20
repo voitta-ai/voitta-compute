@@ -497,15 +497,30 @@ async def _run_agent_sdk_turn(
     )
     from app.services.agent_sdk.onboarding import handle_auth_error
 
-    # Attachments: the engine can't take content blocks over this path,
-    # but its Read tool views images (and PDFs/text) natively — so
-    # persist each attachment into the project's uploads tree and hand
-    # the engine the file paths in the prompt.
+    # Attachments — API-flow parity for images: each image becomes a
+    # base64 content block in the user message itself (downscaled to the
+    # API's limits when needed), so the model sees it instantly with no
+    # tool round-trip. Non-image files (PDF, CSV, …) are persisted into
+    # the project's uploads tree and handed over as file paths — the
+    # engine's Read/Bash/compute take it from there.
     user_text = user_msg.content
+    image_blocks: list[dict[str, Any]] = []
     if user_msg.elements:
-        attach_lines, skipped = _persist_attachments_for_engine(user_msg.elements)
-        if attach_lines:
-            user_text = (user_text + "\n\n" if user_text else "") + "\n".join(attach_lines)
+        images = [e for e in user_msg.elements
+                  if (getattr(e, "mime", None) or "").startswith("image/")]
+        others = [e for e in user_msg.elements if e not in images]
+        skipped: list[str] = []
+        for el in images:
+            block = _element_to_image_block(el)
+            if block is not None:
+                image_blocks.append(_shrink_image_block(block))
+            else:
+                skipped.append(getattr(el, "name", None) or "image")
+        if others:
+            attach_lines, more_skipped = _persist_attachments_for_engine(others)
+            skipped += more_skipped
+            if attach_lines:
+                user_text = (user_text + "\n\n" if user_text else "") + "\n".join(attach_lines)
         if skipped:
             await cl.Message(
                 content="ℹ️ Couldn't read attachment(s): " + ", ".join(skipped),
@@ -541,6 +556,7 @@ async def _run_agent_sdk_turn(
             model=model,
             resume_session_id=resume_id,
             ctx=ctx,
+            image_blocks=image_blocks or None,
         )
         if result.session_id:
             cl.user_session.set("agent_sdk_session_id", result.session_id)
@@ -562,6 +578,7 @@ async def _run_agent_sdk_turn(
             model=model,
             resume_session_id=resume_id,
             ctx=ctx,
+            image_blocks=image_blocks or None,
         )
     except Exception as exc:  # surface, don't crash the socket
         logger.exception("agent_sdk turn failed")
@@ -617,6 +634,61 @@ def _persist_attachments_for_engine(elements: list[Any]) -> tuple[list[str], lis
             logger.exception("could not persist attachment %r", name)
             skipped.append(name)
     return lines, skipped
+
+
+# Anthropic image limits: hard-rejects >8000px or >5 MB; anything with a
+# long edge >1568px is downscaled server-side anyway (and billed before
+# the downscale on the API). Normalising to ≤1568px/WebP locally keeps
+# every attachment comfortably inside the limits at no vision cost.
+_IMG_MAX_EDGE = 1568
+_IMG_MAX_BYTES = 4 * 1024 * 1024  # stay clear of the 5 MB hard limit
+
+
+def _shrink_image_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Downscale/re-encode an image block to fit the API's limits.
+
+    No-op for images already small enough. On any Pillow failure the
+    original block is returned — an oversized image then fails loudly at
+    the API rather than silently dropping the attachment."""
+    try:
+        src = block["source"]
+        raw = base64.b64decode(src["data"])
+        from io import BytesIO
+
+        from PIL import Image
+
+        img = Image.open(BytesIO(raw))
+        long_edge = max(img.size)
+        if long_edge <= _IMG_MAX_EDGE and len(raw) <= _IMG_MAX_BYTES:
+            return block
+        if long_edge > _IMG_MAX_EDGE:
+            scale = _IMG_MAX_EDGE / long_edge
+            img = img.resize(
+                (max(1, round(img.width * scale)), max(1, round(img.height * scale))),
+                Image.LANCZOS,
+            )
+        # WebP keeps screenshots crisp at a fraction of PNG size; drop
+        # alpha only if WebP can't take the mode as-is.
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGBA" if "A" in img.mode else "RGB")
+        buf = BytesIO()
+        img.save(buf, format="WEBP", quality=85, method=4)
+        out = buf.getvalue()
+        logger.info(
+            "attachment image normalised: %d KB %s → %d KB webp (%dx%d)",
+            len(raw) // 1024, src.get("media_type"), len(out) // 1024, *img.size,
+        )
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/webp",
+                "data": base64.b64encode(out).decode("ascii"),
+            },
+        }
+    except Exception:
+        logger.exception("image shrink failed — sending original")
+        return block
 
 
 def _element_to_image_block(el: Any) -> dict[str, Any] | None:

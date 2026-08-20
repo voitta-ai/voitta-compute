@@ -163,15 +163,29 @@ def _is_auth_failure(msg: ResultMessage) -> bool:
     return any(h in blob for h in _AUTH_HINTS)
 
 
-async def user_prompt_stream(text: str) -> AsyncIterator[dict[str, Any]]:
+async def user_prompt_stream(
+    text: str,
+    image_blocks: list[dict[str, Any]] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
     """One-shot streaming-input prompt.
 
     Streaming-input mode (an ``AsyncIterable`` prompt) is required whenever a
     ``can_use_tool`` callback is set — the SDK rejects a plain string. We yield
     exactly one user message and finish, which closes the input stream so the
     engine completes the turn.
+
+    ``image_blocks`` (Anthropic ``{"type": "image", "source": …}`` dicts) are
+    sent inline in the same user message — identical to the API-key brains'
+    flow, so the model sees attached images immediately, no tool round-trip.
     """
-    yield {"type": "user", "message": {"role": "user", "content": text}}
+    if image_blocks:
+        content: str | list[dict[str, Any]] = [
+            *([{"type": "text", "text": text}] if text else []),
+            *image_blocks,
+        ]
+    else:
+        content = text
+    yield {"type": "user", "message": {"role": "user", "content": content}}
 
 
 # Engine built-in tools the brain may use *alongside* the bridged Voitta suite.
@@ -349,8 +363,12 @@ async def run_agent_sdk_turn(
     model: str | None,
     resume_session_id: str | None,
     ctx: ToolCtx,
+    image_blocks: list[dict[str, Any]] | None = None,
 ) -> TurnResult:
     """Run one turn; stream output to Chainlit; return the session id.
+
+    ``image_blocks``: attached images as Anthropic base64 image blocks,
+    sent inline in the user message (API-flow parity — instant vision).
 
     Raises :class:`AgentSdkUnavailable` if the engine isn't installed and
     :class:`AgentSdkAuthError` if the subscription token is missing/expired/
@@ -420,7 +438,7 @@ async def run_agent_sdk_turn(
     # Hold the generator explicitly so we can guarantee it's closed on every
     # exit path — closing it tears down the SDK transport + engine subprocess,
     # so a stuck turn can't linger.
-    agen = query(prompt=user_prompt_stream(user_text), options=options)
+    agen = query(prompt=user_prompt_stream(user_text, image_blocks), options=options)
     timed_out = False
     logger.info(
         "agent_sdk turn start: resume=%s model=%s prompt_chars=%d",
