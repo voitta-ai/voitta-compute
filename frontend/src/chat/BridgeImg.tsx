@@ -23,9 +23,11 @@ interface Props {
   backendOrigin: string;
   alt?: string;
   className?: string;
+  onClick?: () => void;
+  title?: string;
 }
 
-export default function BridgeImg({ url, backendOrigin, alt, className }: Props) {
+export default function BridgeImg({ url, backendOrigin, alt, className, onClick, title }: Props) {
   const resolved = resolveUrl(url, backendOrigin);
   const [src, setSrc] = useState(BRIDGE ? "" : resolved);
 
@@ -52,5 +54,5 @@ export default function BridgeImg({ url, backendOrigin, alt, className }: Props)
   }, [resolved]);
 
   if (!src) return null;
-  return <img className={className} src={src} alt={alt || ""} />;
+  return <img className={className} src={src} alt={alt || ""} onClick={onClick} title={title} />;
 }

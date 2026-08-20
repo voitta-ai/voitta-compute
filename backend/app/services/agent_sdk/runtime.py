@@ -177,9 +177,13 @@ async def user_prompt_stream(text: str) -> AsyncIterator[dict[str, Any]]:
 # Engine built-in tools the brain may use *alongside* the bridged Voitta suite.
 # Bash is enabled deliberately: the engine reaches for it naturally, and letting
 # it run a command in its pinned per-user workspace cwd is better UX than a hard
-# refusal. The rest of the engine's native tools (file/web/…) stay denied, so
-# the Voitta MCP tools remain the primary surface.
-_ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash",)
+# refusal. Read is enabled because it is the engine's only way to VIEW images —
+# chat attachments are persisted to the project's uploads tree and handed over
+# as file paths (see chainlit_app._persist_attachments_for_engine); with Bash
+# already allowed, Read grants no filesystem access Bash didn't have. The rest
+# of the engine's native tools (write/edit/web/…) stay denied, so the Voitta
+# MCP tools remain the primary surface.
+_ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash", "Read")
 
 # Engine tools that are allowed but never pass through unattended — each one is
 # intercepted in ``can_use_tool`` and satisfied by our own UI flow.

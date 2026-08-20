@@ -1,9 +1,50 @@
 // One row in the chat: user/assistant message bubble or tool step.
 // Class names match styles/components/messages.css.
 
+import { useEffect, useState } from "react";
 import { type IMessageElement, type IStep } from "@chainlit/react-client";
 import Markdown from "./Markdown";
 import BridgeImg from "./BridgeImg";
+
+// ---- image zoom ----------------------------------------------------------
+// Chat images render as thumbnails (attachments) or inline figures; every
+// one opens a full-size lightbox on click. Esc or any click dismisses.
+
+function Lightbox({
+  url, backendOrigin, alt, onClose,
+}: { url: string | undefined; backendOrigin: string; alt?: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div className="img-lightbox" role="dialog" aria-label={alt || "image"} onClick={onClose}>
+      <BridgeImg url={url} backendOrigin={backendOrigin} alt={alt} />
+    </div>
+  );
+}
+
+function ZoomableImg({
+  url, backendOrigin, alt, className,
+}: { url: string | undefined; backendOrigin: string; alt?: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <BridgeImg
+        className={className}
+        url={url}
+        backendOrigin={backendOrigin}
+        alt={alt}
+        title="Click to view full size"
+        onClick={() => setOpen(true)}
+      />
+      {open && (
+        <Lightbox url={url} backendOrigin={backendOrigin} alt={alt} onClose={() => setOpen(false)} />
+      )}
+    </>
+  );
+}
 
 interface Props {
   step: IStep;
@@ -19,7 +60,7 @@ export default function StepView({ step, elements, backendOrigin }: Props) {
         {images.length > 0 && (
           <div className="msg-attachments">
             {images.map((el) => (
-              <BridgeImg
+              <ZoomableImg
                 key={el.id}
                 className="msg-attachment"
                 url={el.url}
@@ -111,7 +152,7 @@ function ElementView({
   if (element.type === "image" && element.url) {
     return (
       <figure className="rich-image">
-        <BridgeImg url={element.url} backendOrigin={backendOrigin} alt={element.name || ""} />
+        <ZoomableImg url={element.url} backendOrigin={backendOrigin} alt={element.name || ""} />
         {element.name ? <figcaption>{element.name}</figcaption> : null}
       </figure>
     );

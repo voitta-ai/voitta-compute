@@ -1,3 +1,45 @@
+/* ─── chat image thumbnails + lightbox ───────────────────────────────────── */
+/* Attachments echoed on a user message render as small thumbnails — a
+   full-size drop crowds the whole pane. Click opens the lightbox. */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.msg-attachment {
+  max-height: 96px;
+  max-width: 160px;
+  width: auto;
+  border-radius: 6px;
+  border: 1px solid var(--voitta-border);
+  cursor: zoom-in;
+  object-fit: cover;
+}
+/* Inline figures (script/tool images) keep their size but are zoomable. */
+.rich-image img {
+  cursor: zoom-in;
+}
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000; /* above the drawer, which floats over host pages */
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.img-lightbox img {
+  max-width: 94vw;
+  max-height: 94vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  box-shadow: 0 10px 48px rgba(0, 0, 0, 0.55);
+}
+
 /* ─── messages ───────────────────────────────────────────────────────────── */
 .messages {
   flex: 1;
