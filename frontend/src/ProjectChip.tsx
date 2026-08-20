@@ -50,15 +50,37 @@ export default function ProjectChip({ backendOrigin, onSwitched }: Props) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  // Close on outside click.
+  // Close on outside click / focus loss / mouse-out. Three layers because
+  // the widget lives among iframes: document mousedown misses clicks that
+  // land inside the chat iframe or on the host page, window blur catches
+  // those (clicking an iframe blurs this window), and mouseleave (with a
+  // short grace delay so skimming the edge doesn't dismiss) covers plain
+  // mouse-away.
+  const closeTimer = useRef<number | null>(null);
+  const cancelClose = useCallback(() => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  }, []);
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimer.current = window.setTimeout(() => setOpen(false), 300);
+  }, [cancelClose]);
   useEffect(() => {
-    if (!open) return;
+    if (!open) { cancelClose(); return; }
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onBlur = () => setOpen(false);
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("blur", onBlur);
+      cancelClose();
+    };
+  }, [open, cancelClose]);
 
   async function post(path: string, body?: unknown, method = "POST") {
     setBusy(true);
@@ -121,7 +143,15 @@ export default function ProjectChip({ backendOrigin, onSwitched }: Props) {
   const active = data?.projects.find((p) => p.slug === data.active);
 
   return (
-    <div ref={rootRef} style={{ position: "relative", display: "inline-flex" }}>
+    <div
+      ref={rootRef}
+      style={{ position: "relative", display: "inline-flex" }}
+      // Grace-delayed close on mouse-away; re-enter cancels. Suspended
+      // while the create field is open — drifting the cursor out must
+      // not eat a half-typed project name.
+      onMouseLeave={() => { if (open && !creating) scheduleClose(); }}
+      onMouseEnter={cancelClose}
+    >
       <button
         className="hbtn project-chip"
         type="button"
