@@ -203,10 +203,29 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
         """Upsert thread. In no-auth (desktop) mode, link to the hardcoded
         local user when none is given. In server mode Chainlit passes the
         authenticated user's id, so we leave it untouched for native
-        per-user ownership."""
+        per-user ownership.
+
+        Project scoping: every metadata upsert stamps the ACTIVE project
+        slug (once — an existing tag is never overwritten, so a thread
+        stays in the project it was born in even if the user switches
+        mid-conversation). Threads with no tag predate projects and are
+        treated as legacy by list_threads."""
         await self.ensure_schema()
         if user_id is None and not _auth_enabled():
             user_id = self._local_user_id
+        if metadata is not None and "project" not in metadata:
+            try:
+                existing = await self.get_thread(thread_id=thread_id)
+                prior = (existing or {}).get("metadata") or {}
+                prior = _loads(prior, {}) if isinstance(prior, str) else prior
+            except Exception:
+                prior = {}
+            if isinstance(prior, dict) and prior.get("project"):
+                metadata = {**metadata, "project": prior["project"]}
+            else:
+                from app.services.projects import active_project
+
+                metadata = {**metadata, "project": active_project()}
         await super().update_thread(
             thread_id=thread_id,
             name=name,
@@ -249,8 +268,29 @@ class SQLiteDataLayer(SQLAlchemyDataLayer):
     ) -> PaginatedResponse:
         """List threads. No-auth (desktop): scope to the local user. Server
         mode: Chainlit's native route already sets filters.userId to the
-        authenticated user, so we don't override it."""
+        authenticated user, so we don't override it.
+
+        Project scoping: only the ACTIVE project's threads are returned —
+        a thread's ``metadata.project`` tag must match (untagged threads
+        predate projects and belong to legacy). Post-filter in Python:
+        metadata is a JSON string column, and thread lists are small at
+        this product's scale."""
         await self.ensure_schema()
         if not filters.userId and not _auth_enabled():
             filters.userId = self._local_user_id
-        return await super().list_threads(pagination, filters)
+        resp = await super().list_threads(pagination, filters)
+        try:
+            from app.services.projects import LEGACY_SLUG, active_project
+
+            active = active_project()
+            kept = []
+            for t in resp.data:
+                md = t.get("metadata") if isinstance(t, dict) else None
+                md = _loads(md, {}) if isinstance(md, str) else (md or {})
+                slug = md.get("project") or LEGACY_SLUG
+                if slug == active:
+                    kept.append(t)
+            resp.data = kept
+        except Exception:
+            pass  # a filter failure must never hide the thread list entirely
+        return resp

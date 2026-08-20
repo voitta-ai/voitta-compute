@@ -398,8 +398,9 @@ def list_scripts(*, root: Path | None = None) -> list[Meta]:
     """List all scripts from root and all folders.
 
     Each ``Meta`` entry has ``folder_name`` set (``None`` for root scripts).
-    When *root* is given (test override), only that tree is scanned
-    and ``folder_name`` is always ``None``.
+    When *root* is given (test override / cross-project read), only that
+    tree is scanned: flat scripts plus its ``folders/*`` subtrees (the
+    folder name is reported on each foldered entry).
     """
     if root is not None:
         base = root
@@ -407,7 +408,7 @@ def list_scripts(*, root: Path | None = None) -> list[Meta]:
             return []
         out: list[Meta] = []
         for entry in sorted(base.iterdir()):
-            if not entry.is_dir() or entry.name.startswith("."):
+            if not entry.is_dir() or entry.name.startswith(".") or entry.name == "folders":
                 continue
             if not (entry / CODE_FILENAME).is_file():
                 continue
@@ -415,6 +416,22 @@ def list_scripts(*, root: Path | None = None) -> list[Meta]:
                 out.append(read_meta(entry.name, root=root))
             except Exception:
                 continue
+        folders_base = base / "folders"
+        if folders_base.is_dir():
+            for folder_dir in sorted(folders_base.iterdir()):
+                if not folder_dir.is_dir():
+                    continue
+                for entry in sorted(folder_dir.iterdir()):
+                    if not entry.is_dir() or entry.name.startswith("."):
+                        continue
+                    if not (entry / CODE_FILENAME).is_file():
+                        continue
+                    try:
+                        m = read_meta(entry.name, root=folder_dir)
+                        m.folder_name = folder_dir.name
+                        out.append(m)
+                    except Exception:
+                        continue
         return out
 
     out = []

@@ -63,17 +63,18 @@ META_VALUE_CAP = 20
 # subdir means the namespace at the top is meaningful (cache vs
 # durable code) rather than a soup of mixed kinds.
 #
-# These are UserPath proxies: in server mode they resolve under the
-# current user's folder (USER_DATA_ROOT/users/<slug>/…) per request/turn;
-# in desktop/dev (no current user) they resolve to plain USER_DATA_ROOT,
-# unchanged. Every ``STORAGE_ROOT / x`` / ``.mkdir()`` / ``.iterdir()``
-# call site keeps working untouched. See app.services.current_user.
-from app.services.current_user import UserPath, user_data_root  # noqa: E402
+# These are UserPath proxies: each resolves per access under the ACTIVE
+# PROJECT of the current user (…/projects/<project>/python_storage/…) —
+# per-user scoping in server mode comes through the same chain. Every
+# ``STORAGE_ROOT / x`` / ``.mkdir()`` / ``.iterdir()`` call site keeps
+# working untouched. See app.services.current_user + app.services.projects.
+from app.services.current_user import UserPath  # noqa: E402
+from app.services.projects import project_data_root  # noqa: E402
 
-STORAGE_ROOT = UserPath(lambda: user_data_root() / "python_storage" / "cache")
+STORAGE_ROOT = UserPath(lambda: project_data_root() / "python_storage" / "cache")
 
 # Folder container inside the cache root.
-FOLDERS_ROOT = UserPath(lambda: user_data_root() / "python_storage" / "cache" / "folders")
+FOLDERS_ROOT = UserPath(lambda: project_data_root() / "python_storage" / "cache" / "folders")
 
 
 def _validate_folder_name(name: str) -> None:

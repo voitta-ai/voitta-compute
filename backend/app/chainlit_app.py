@@ -178,9 +178,13 @@ def data_layer():
     from app.config import USER_DATA_ROOT
     from app.data.local_storage import LocalStorageClient
     from app.data.sqlite_layer import SQLiteDataLayer
-    from app.services.current_user import UserPath, user_data_root
+    from app.services.current_user import UserPath
+    from app.services.projects import project_data_root
 
-    upload_dir = UserPath(lambda: user_data_root() / "uploads")
+    # Uploads are PROJECT-scoped (attachments belong to the work they
+    # were shared for); the conversations DB stays global — threads are
+    # scoped by metadata tagging in the data layer instead.
+    upload_dir = UserPath(lambda: project_data_root() / "uploads")
     db_path = str(USER_DATA_ROOT / "conversations.sqlite")
     storage = LocalStorageClient(upload_dir=upload_dir)
     return SQLiteDataLayer(db_path=db_path, storage_provider=storage)
@@ -189,6 +193,25 @@ def data_layer():
 # can rely on the registry being initialised. Re-import (uvicorn
 # --reload) picks up manifest edits without a manual restart.
 load_all()
+
+
+def _compose_system_prompt(host: str | None) -> str:
+    """System prompt = applicable plugins' prompts + the active project
+    block (which project is live, its PROJECT.md notes, and the
+    project_remember affordance). Shared by both brain paths."""
+    parts: list[str] = []
+    for plugin in for_host(host):
+        if plugin.system_prompt:
+            parts.append(plugin.system_prompt.rstrip())
+    try:
+        from app.services.projects import system_prompt_block
+
+        block = system_prompt_block()
+        if block:
+            parts.append(block)
+    except Exception:
+        logger.exception("project system-prompt block failed")
+    return "\n\n".join(parts)
 
 
 def _apply_current_user() -> str | None:
@@ -428,11 +451,7 @@ async def _run_message_turn(user_msg: cl.Message, email: str | None) -> None:
     except Exception:
         _sid = None
     logger.info("on_message: host=%r session=%s", host, _sid)
-    parts: list[str] = []
-    for plugin in for_host(host):
-        if plugin.system_prompt:
-            parts.append(plugin.system_prompt.rstrip())
-    system = "\n\n".join(parts)
+    system = _compose_system_prompt(host)
 
     session_id: str | None
     try:
@@ -487,11 +506,7 @@ async def _run_agent_sdk_turn(
     # System prompt is composed from applicable plugins, exactly as the
     # API-provider path does.
     host = cl.user_session.get("host")
-    parts: list[str] = []
-    for plugin in for_host(host):
-        if plugin.system_prompt:
-            parts.append(plugin.system_prompt.rstrip())
-    system = "\n\n".join(parts)
+    system = _compose_system_prompt(host)
 
     try:
         session_id = cl.context.session.id  # type: ignore[attr-defined]

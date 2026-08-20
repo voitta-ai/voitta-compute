@@ -300,6 +300,15 @@ export default function WorkspacePanel({ backendOrigin, embedded, onClose, onOpe
 
   useEffect(() => { fetchWorkspace(); }, [fetchWorkspace]);
 
+  // Refetch when the active project changes (dispatched by ProjectChip) —
+  // the panel lists the ACTIVE project's scripts/data, so a switch while
+  // it is mounted must not leave the old project's items on screen.
+  useEffect(() => {
+    const h = () => { void fetchWorkspace(); };
+    window.addEventListener("voitta-project-switched", h);
+    return () => window.removeEventListener("voitta-project-switched", h);
+  }, [fetchWorkspace]);
+
   // ─── preview ──────────────────────────────────────────────────────────────
   const fileUrl = useCallback((handle: string, filename: string) =>
     `${backendOrigin}/api/workspace/data/${handle}/files/${encodeURIComponent(filename)}`,

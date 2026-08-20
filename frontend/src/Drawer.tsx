@@ -15,6 +15,7 @@ import SettingsView from "./SettingsView";
 import CallFnRouter from "./lib/CallFnRouter";
 import ReportPane from "./report/ReportPane";
 import ThreadPicker from "./ThreadPicker";
+import ProjectChip from "./ProjectChip";
 import { activeTabState, reportCollapsedState, workspaceTabOpenState } from "./report/state";
 
 type View = "chat" | "settings";
@@ -368,6 +369,19 @@ export default function Drawer({ backendOrigin }: Props) {
           {auth.email && <UserMenu email={auth.email} onLogout={auth.logout} />}
           {view === "chat" && (
             <>
+              <ProjectChip
+                backendOrigin={backendOrigin}
+                onSwitched={() => {
+                  // Same gesture as "+ new conversation": the new project's
+                  // thread history + workspace mount fresh. Project is fixed
+                  // per thread — a conversation never straddles projects.
+                  clear();
+                  setThreadIdToResume(undefined);
+                  setSelectedThreadId(null);
+                  setNewConvKey((k) => k + 1);
+                  window.dispatchEvent(new Event("voitta-project-switched"));
+                }}
+              />
               <button
                 className="hbtn"
                 type="button"

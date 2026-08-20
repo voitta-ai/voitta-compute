@@ -146,6 +146,9 @@ pass through normally.
 | `define_script(name, code, google_account?, kind?)` | Create; smoke-test first; pins the Google account email for `ctx.sheets` (default: current default account); `kind` declared or inferred from smoke |
 | `edit_script(name, edits, google_account?, kind?)` | Apply search-replace edits; smoke-test first; keeps existing pin/kind unless re-declared (`kind` re-declare also resets recorded effects) |
 | `run_script(name, args?, wait_s?, confirm?)` | Execute; dispatch HTML to pane; `confirm: true` required for scripts that write to Google Sheets |
+| `list_scripts(project?)` / `get_script(name, project?)` | Default: active project; `project` reads another project (read-only) |
+| `copy_from_project(project, script, new_name?)` | Copy a script (+ its kind/effects/account pin) into the active project |
+| `project_remember(text)` | Append a durable note to the active project's PROJECT.md (injected into every future conversation) |
 | `verify_script(name, code)` | Smoke-test without saving |
 | `get_script(name)` | Read source |
 | `get_script_errors(name)` | Read last runtime errors |

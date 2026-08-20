@@ -20,12 +20,16 @@ def scripts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A temp ``scripts/`` root, swapped into the paths module."""
     root = tmp_path / "scripts"
     root.mkdir()
+    folders = root / "folders"
     monkeypatch.setattr(paths, "SCRIPTS_DIR", root)
+    monkeypatch.setattr(paths, "SCRIPTS_FOLDERS_DIR", folders)
     # ``store`` reads SCRIPTS_DIR at call time via module attr — but
-    # ``store`` imported it once, so we patch there too.
+    # ``store`` imported it once, so we patch there too. Both constants,
+    # or list_scripts() walks the developer's REAL foldered scripts.
     from app.reports import store
 
     monkeypatch.setattr(store, "SCRIPTS_DIR", root)
+    monkeypatch.setattr(store, "SCRIPTS_FOLDERS_DIR", folders)
     return root
 
 

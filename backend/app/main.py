@@ -253,8 +253,10 @@ from app.routes.reports import router as reports_router
 from app.routes.settings import router as settings_router
 from app.routes.workspace import router as workspace_router
 from app.routes.agent_sdk import router as agent_sdk_router
+from app.routes.projects import router as projects_router
 
 app.include_router(auth_router)
+app.include_router(projects_router)
 app.include_router(reports_router)
 app.include_router(html_report_router)
 app.include_router(settings_router)
@@ -1467,8 +1469,8 @@ from fastapi import HTTPException as _HTTPException
 
 @app.get("/api/uploads/{key:path}", include_in_schema=False)
 async def serve_upload(key: str) -> FileResponse:
-    from app.services.current_user import user_data_root
-    base = (user_data_root() / "uploads").resolve()
+    from app.services.projects import project_data_root
+    base = (project_data_root() / "uploads").resolve()
     target = (base / key).resolve()
     # Path-traversal guard: target must stay inside this user's uploads dir.
     if not str(target).startswith(str(base) + "/") and target != base:

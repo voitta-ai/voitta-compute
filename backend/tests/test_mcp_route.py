@@ -126,9 +126,12 @@ def test_sessions_registry_records_window_messages() -> None:
 
 def test_mcp_debug_toggle_round_trip(tmp_path, monkeypatch) -> None:
     """The kill-switch helpers round-trip through the settings file."""
-    cfg = tmp_path / "settings.json"
-    monkeypatch.setattr(user_settings, "SETTINGS_PATH", cfg)
-    monkeypatch.setattr(user_settings, "SETTINGS_DIR", tmp_path)
+    # user_settings resolves its path per call via _settings_dir() →
+    # USER_CONFIG_DIR (desktop) — point that at the tmp dir.
+    monkeypatch.setattr(user_settings, "USER_CONFIG_DIR", tmp_path)
+    from app.services import current_user
+
+    current_user.set_current_email(None)
 
     assert user_settings.mcp_debug_enabled() is False
     user_settings.set_mcp_debug_enabled(True)

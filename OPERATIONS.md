@@ -896,6 +896,45 @@ settings dir) serve both modes unchanged. The Chainlit JWT secret comes from
 `<USER_DATA_ROOT>/auth_secret`. Desktop mode also patches Chainlit's
 `resume_thread` to skip user-identity checks so threads resume without login.
 
+### Projects (workspace isolation + memory)
+
+A **project** ([backend/app/services/projects.py](backend/app/services/projects.py))
+is a named root under `USER_DATA_ROOT[/users/<u>]/projects/<slug>/` owning the
+four scoped trees — `scripts/`, `python_storage/`, `scripts_state/`,
+`uploads/` — plus `PROJECT.md` (memory) and `project.json` (display name).
+Global (never project-scoped): settings.json, auth_secret,
+conversations.sqlite, `claude_code/`, logs, voice.
+
+- **Mechanism**: `project_data_root()` inserts one segment below
+  `user_data_root()` — the UserPath lazy-resolution trick one level deeper.
+  Only the four trees' resolvers point at it (paths.py, python_storage,
+  uploads dir + uploads route).
+- **Active project**: `settings.json.activeProject` (per-user for free),
+  2 s TTL cache; switch via `POST /api/projects/active`. Routes:
+  `GET/POST /api/projects`, `PATCH/DELETE /api/projects/{slug}`. Delete =
+  **archive** into `legacy/_archived/<slug>` (never destroys); Legacy is
+  undeletable.
+- **Legacy adoption**: first `project_data_root()` on a pre-projects data
+  root moves the four trees into `projects/legacy/` once (lock + marker =
+  legacy's project.json). Lazy ⇒ works per-user in server mode.
+- **Threads**: one global conversations.sqlite; the data layer stamps
+  `metadata.project` on thread upsert (first write wins — a thread stays in
+  its birth project) and `list_threads` post-filters by the active slug
+  (untagged = legacy). Uploads for old threads live in Legacy, consistent
+  because old threads *are* Legacy.
+- **Memory**: `PROJECT.md` injected into every system prompt (both brain
+  paths via `_compose_system_prompt`), appended by the `project_remember`
+  tool; 64 KB tail-cap.
+- **Cross-project access is explicit and read-only**: `list_scripts` /
+  `get_script` take a `project` arg; `copy_from_project` is the one
+  sanctioned cross-project write (copies a script + its kind/effects/
+  google_account meta into the active project). Run/write tools never take
+  a project arg.
+- **FE**: `ProjectChip` in the drawer header (name + dropdown: switch /
+  inline create / delete); switching re-keys the chat pane (project is
+  fixed per thread) and fires `voitta-project-switched` so the workspace
+  pane refetches.
+
 ### Google OAuth (Drive / Sheets data access) — multi-account
 
 Separate from server-mode *login* auth:
