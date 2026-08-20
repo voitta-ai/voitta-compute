@@ -668,6 +668,47 @@ sequenceDiagram
     RS-->>A: {ok, status: ready|no-render|errored|timeout|error, elapsed_ms, inventory?}
 ```
 
+### Script typing: declared kind + observed effects
+
+Every script's meta carries two axes
+([script_typing.py](backend/app/reports/script_typing.py)):
+
+- **`kind`** — the *declared* contract: `report` (returns HTML) · `chat`
+  (emits inline) · `job` (side effects are the point). Set at
+  `define_script` (explicit `kind` arg wins, else inferred from the
+  dry-run smoke outcome), re-declarable via `edit_script(kind=…)`.
+  Legacy scripts are `None` until classified (seeded to `report` if
+  `last_kind == "html"`, else stamped on their first run).
+- **`effects`** — *observed* facts, recorded from every smoke + live run
+  as a **sticky union** (`renders_html`, `emits_inline`,
+  `writes_external`; bits only turn on — a conditional writer must stay
+  gated after a run that happened not to write). The only reset is an
+  explicit `kind` re-declare on `edit_script`, which re-baselines to
+  that edit's smoke observation.
+
+Consequences wired into the runtime:
+
+- **Smoke tests dry-run external writes** — `RecordingSheetsClient`
+  stubs `put`/`post` with shape-correct synthetic responses at
+  define/edit time (a script must never touch Google before it's saved)
+  while still recording `writes_external`, so a sheets-writing script
+  is gated from birth.
+- **`kind: report` returning `None` is a named error**, not a silent
+  `no-render` — the largest source of "ran fine, showed nothing".
+- **Confirm gate**: `run_script` on a script with sticky
+  `writes_external` (or an unclassified legacy script whose source
+  mentions `ctx.sheets`) returns `status: "needs-confirmation"` until
+  called with `confirm: true` — the tool description mandates asking
+  the user first (soft gate, same trust model as `sheets_write_range`).
+  Exempt: scripts defined/edited in the same session within ~10 min
+  (in-memory latch; single-process). The workspace pane's run button is
+  ungated — the human sees the `✍ sheets` badge.
+- **Drift** (declared vs observed disagreement) is computed at read
+  time — never stored — and surfaced as ⚠ in `list_scripts` and the
+  workspace pane (`script_kind`, `effects`, `drift` fields; named
+  `script_kind` on the wire because `kind` is the item-type
+  discriminator there).
+
 ### The `ctx` API ([backend/app/reports/ctx.py](backend/app/reports/ctx.py))
 
 | Surface | Calls |
@@ -676,7 +717,7 @@ sequenceDiagram
 | Inputs | `ctx.args` (from `run_script(args=…)`) · `ctx.host` (page host — drives theming) |
 | Theme | `ctx.theme()` → the active plugin palette as CSS-variable dict, so reports match the host site's skin |
 | Data | `ctx.snapshot(handle)` · `ctx.file(handle, name?)` · `ctx.dataframe(handle)` (curves.pkl) · `ctx.raw(handle)` · `ctx.ensure_local(ref)` |
-| Sheets | `ctx.sheets` — Google Sheets client bound to the script's **pinned account** (email captured at `define_script` time, stored in script meta; re-pin via `edit_script(google_account=…)`). Missing/disconnected/scope-less pin → hard error naming the account on first use; no pin → the settings-default account |
+| Sheets | `ctx.sheets` — Google Sheets client bound to the script's **pinned account** (email captured at `define_script` time, stored in script meta; re-pin via `edit_script(google_account=…)`). Missing/disconnected/scope-less pin → hard error naming the account on first use; no pin → the settings-default account. Wrapped in a `RecordingSheetsClient`: writes set `effects.writes_external`; **smoke tests always dry-run writes** (shape-correct synthetic responses — a script never touches Google at define/edit time) |
 
 ### Observability
 

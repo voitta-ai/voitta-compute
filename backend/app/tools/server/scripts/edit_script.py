@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.reports import sandbox, store
+from app.reports import sandbox, script_typing, store
 from app.reports.slug import InvalidSlug, validate_slug
 from app.tools.registry import ToolCtx, ToolSpec, registry
 
@@ -70,7 +70,8 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
     # Google account pin: preserved across edits; the optional
     # ``google_account`` arg re-pins (validated against the configured
     # accounts, stored as the durable email).
-    google_pin = store.read_meta(name).extra.get("google_account")
+    prior_meta = store.read_meta(name)
+    google_pin = prior_meta.extra.get("google_account")
     repin = (args.get("google_account") or "").strip() or None
     if repin:
         from app.tools.server.scripts.define_script import resolve_google_pin
@@ -79,18 +80,43 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
         if pin_err:
             return {"ok": False, "error": pin_err}
 
+    # Kind: preserved unless explicitly re-declared. An explicit
+    # re-declare is ALSO the only sanctioned effects reset — sticky
+    # union otherwise (a conditional writer must stay gated even after
+    # an edit whose smoke didn't reach the write path).
+    redeclared_kind: str | None = (args.get("kind") or "").strip() or None
+    if redeclared_kind and redeclared_kind not in script_typing.KINDS:
+        return {
+            "ok": False,
+            "error": f"`kind` must be one of {list(script_typing.KINDS)}",
+        }
+
     result = await sandbox.smoke_test_async(name, candidate, google_account=google_pin)
     if not result.ok:
         return {"ok": False, "error": result.error, "traceback": result.traceback}
 
     meta = store.write_script(name, candidate)
+    smoke_effects = script_typing.observed_effects(result.result, result.ctx)
+    if redeclared_kind:
+        kind = redeclared_kind
+        effects = smoke_effects                      # explicit re-declare: reset
+    else:
+        kind = prior_meta.kind or script_typing.infer_kind(
+            result.result, len(result.ctx.inline) if result.ctx else 0
+        )
+        effects = script_typing.merge_effects(prior_meta.effects, smoke_effects)
+    patch: dict[str, Any] = {"kind": kind, "effects": effects}
     if repin and google_pin:
-        meta = store.update_meta(name, google_account=google_pin)
+        patch["google_account"] = google_pin
+    meta = store.update_meta(name, **patch)
+    script_typing.mark_recently_edited(_ctx.session_id, name)
     return {
         "ok": True,
         "name": meta.name,
         "updated_at": meta.updated_at,
         "edits_applied": len(edits),
+        "kind": kind,
+        "effects": effects,
         "google_account": google_pin,
     }
 
@@ -128,6 +154,17 @@ registry.register(
                     "description": (
                         "Re-pin ctx.sheets to this Google account (email "
                         "or label). Omit to keep the script's existing pin."
+                    ),
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["report", "chat", "job"],
+                    "description": (
+                        "Re-declare the script type. Omit to keep the "
+                        "existing declaration. NOTE: an explicit re-declare "
+                        "also resets the recorded effects (the confirm gate) "
+                        "to this edit's smoke observation — use it after "
+                        "removing a Sheets write to lift the gate."
                     ),
                 },
             },

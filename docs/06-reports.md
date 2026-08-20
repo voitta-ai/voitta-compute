@@ -110,17 +110,42 @@ The HTML is served at `/api/html-report?id=<slug>` and rendered in a same-origin
 If you need a **PDF file** as a deliverable, build it directly with `fpdf2` —
 see [`08-pdf-export.md`](08-pdf-export.md).
 
+## Script kinds & effects
+
+Every script carries a declared **kind** and observed **effects** in its meta:
+
+- `kind: "report"` — `build(ctx)` returns an HTML string. Returning `None`
+  is a **named error** (not a silent no-render).
+- `kind: "chat"` — returns `None`, emits via `ctx.text/image/json`.
+- `kind: "job"` — side effects are the point (data manipulation, Sheets
+  writes); no visual output expected.
+
+Declare via `define_script(kind=…)` or let it be inferred from the smoke
+run; re-declare via `edit_script(kind=…)`. Effects (`renders_html`,
+`emits_inline`, `writes_external`) are recorded from every run as a sticky
+union — an explicit `kind` re-declare is the only reset.
+
+**Confirm gate:** `run_script` on a script whose effects include
+`writes_external` returns `status: "needs-confirmation"` until re-called
+with `confirm: true` — ask the user first; re-running repeats the write.
+Scripts you defined/edited in the same session run without the confirm.
+
 ## Smoke testing
 
 `define_script` and `edit_script` run a smoke test (`sandbox.smoke_test()`) before persisting the code. The script must not crash during a bare `build(ctx)` call. If it does, the error is returned to the model without saving.
+
+Smoke tests **dry-run external writes**: `ctx.sheets.put/post` return
+shape-correct synthetic responses (`{"dryRun": true, …}`) instead of hitting
+Google — a script never performs a real write at define/edit time. Reads
+pass through normally.
 
 ## Script tools summary
 
 | Tool | Action |
 |---|---|
-| `define_script(name, code, google_account?)` | Create; smoke-test first; pins the Google account email for `ctx.sheets` (default: current default account) |
-| `edit_script(name, edits, google_account?)` | Apply search-replace edits; smoke-test first; keeps the existing pin unless `google_account` re-pins |
-| `run_script(name, args?, wait_s?)` | Execute; dispatch HTML to pane |
+| `define_script(name, code, google_account?, kind?)` | Create; smoke-test first; pins the Google account email for `ctx.sheets` (default: current default account); `kind` declared or inferred from smoke |
+| `edit_script(name, edits, google_account?, kind?)` | Apply search-replace edits; smoke-test first; keeps existing pin/kind unless re-declared (`kind` re-declare also resets recorded effects) |
+| `run_script(name, args?, wait_s?, confirm?)` | Execute; dispatch HTML to pane; `confirm: true` required for scripts that write to Google Sheets |
 | `verify_script(name, code)` | Smoke-test without saving |
 | `get_script(name)` | Read source |
 | `get_script_errors(name)` | Read last runtime errors |

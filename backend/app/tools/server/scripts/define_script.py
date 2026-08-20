@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.reports import sandbox, store
+from app.reports import sandbox, script_typing, store
 from app.reports.slug import InvalidSlug, validate_slug
 from app.services import google_oauth
 from app.tools.registry import ToolCtx, ToolSpec, registry
@@ -53,6 +53,12 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
     name = args.get("name") or ""
     code = args.get("code") or ""
     folder_name: str | None = args.get("folder_name") or None
+    declared_kind: str | None = (args.get("kind") or "").strip() or None
+    if declared_kind and declared_kind not in script_typing.KINDS:
+        return {
+            "ok": False,
+            "error": f"`kind` must be one of {list(script_typing.KINDS)}",
+        }
     if not isinstance(code, str) or not code.strip():
         return {"ok": False, "error": "`code` must be a non-empty string"}
     try:
@@ -90,13 +96,26 @@ async def _handler(args: dict[str, Any], _ctx: ToolCtx) -> dict[str, Any]:
                 "still can't be created, call create_folder first."
             ) if folder_name else None,
         }
+    # Classify: explicit kind wins; else infer from the smoke outcome.
+    # Effects observed during the (dry-run) smoke are persisted — a
+    # sheets-writing script is gated from birth, not from first run.
+    smoke_effects = script_typing.observed_effects(result.result, result.ctx)
+    kind = declared_kind or script_typing.infer_kind(
+        result.result, len(result.ctx.inline) if result.ctx else 0
+    )
+    patch: dict[str, Any] = {"kind": kind, "effects": smoke_effects}
     if google_pin:
-        meta = store.update_meta(name, google_account=google_pin)
+        patch["google_account"] = google_pin
+    meta = store.update_meta(name, **patch)
+    script_typing.mark_recently_edited(_ctx.session_id, name)
     return {
         "ok": True,
         "name": meta.name,
         "folder_name": meta.folder_name,
         "created_at": meta.created_at,
+        "kind": kind,
+        "kind_source": "declared" if declared_kind else "inferred",
+        "effects": smoke_effects,
         "google_account": google_pin,
         "smoke": {"log_lines": result.ctx.log_lines if result.ctx else []},
     }
@@ -135,6 +154,17 @@ registry.register(
                         "Google account (email or label) ctx.sheets should "
                         "act as, pinned into the script's meta. Omit to pin "
                         "the current default account."
+                    ),
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["report", "chat", "job"],
+                    "description": (
+                        "Declared script type: 'report' (build(ctx) returns "
+                        "an HTML string for the report pane), 'chat' (emits "
+                        "via ctx.text/image/json), 'job' (side effects are "
+                        "the point — data manipulation, Sheets writes). "
+                        "Omit to infer from the smoke run."
                     ),
                 },
             },

@@ -69,6 +69,10 @@ class ScriptContext:
     # attribute access always gives a readable RuntimeError rather than
     # AttributeError.
     sheets: Any = field(default=None, repr=False)
+    # Observed side effects of this run, written by instrumented clients
+    # (RecordingSheetsClient sets ``writes_external``). The dispatcher
+    # merges these into the script's persistent meta after each run.
+    effects: dict[str, Any] = field(default_factory=dict)
 
     # ---- inline emitters -------------------------------------------
 

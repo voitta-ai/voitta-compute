@@ -56,6 +56,13 @@ async def set_active_tab(payload: ActiveTabPayload) -> dict:
 def _script_item(meta) -> dict:
     slug = meta.name
     label = slug.replace("-", " ").replace("_", " ")
+    # NB: "kind" here is the workspace item-type discriminator
+    # ("script" | "data") — the script's DECLARED type ships as
+    # "script_kind" to avoid colliding with it.
+    from app.reports import script_typing
+
+    script_kind = getattr(meta, "kind", None)
+    effects = getattr(meta, "effects", None) or {}
     return {
         "kind": "script",
         "id": slug,
@@ -64,6 +71,10 @@ def _script_item(meta) -> dict:
         "last_run_at": meta.last_run_at,
         "last_ok": meta.last_ok,
         "last_kind": meta.last_kind,
+        "script_kind": script_kind,
+        "effects": effects,
+        # Computed, never stored — can't go stale.
+        "drift": script_typing.drift(script_kind, effects),
         "title": getattr(meta, "title", None) or label,
         "folder_name": getattr(meta, "folder_name", None),
     }

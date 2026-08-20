@@ -36,6 +36,10 @@ def patched_chainlit(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     monkeypatch.setattr(
         dispatch.cl, "CopilotFunction", FakeCopilotFunction, raising=True
     )
+    # These tests exercise the CHAT path (ship via call_fn). Without a
+    # live Chainlit session the dispatcher would detect no context and
+    # take the REST path, never touching CopilotFunction.
+    monkeypatch.setattr(dispatch, "_cl_context_active", lambda: True)
     return acall
 
 
@@ -52,7 +56,16 @@ async def test_run_and_dispatch_html_happy(
     store.write_script("hello", code)
 
     async def simulate_fe():
+        # The FE only posts a render event after receiving the
+        # show_html_report call_fn — and wait_for() only sees events
+        # recorded after the waiter registers. Poll the mock so the
+        # simulated event fires strictly after dispatch reached the
+        # ship stage, like the real FE does.
         import asyncio
+        for _ in range(200):
+            if patched_chainlit.call_count:
+                break
+            await asyncio.sleep(0.005)
         await asyncio.sleep(0.01)
         render_events.record(RenderEvent(slug="hello", kind="ready"))
 

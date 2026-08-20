@@ -15,6 +15,15 @@ interface ScriptItem {
   last_run_at: string | null;
   last_ok: boolean | null;
   last_kind: string | null;
+  // Declared script type ("report" | "chat" | "job"; null = legacy
+  // unclassified). Named script_kind because `kind` is this wire
+  // shape's item-type discriminator.
+  script_kind: string | null;
+  // Observed side effects (sticky union): renders_html, emits_inline,
+  // writes_external.
+  effects: Record<string, boolean> | null;
+  // Declared-vs-observed disagreement, computed server-side.
+  drift: string | null;
   folder_name: string | null;
 }
 
@@ -122,6 +131,16 @@ function sourceLabel(source: string | null): string | null {
   if (!source) return null;
   const map: Record<string, string> = { vre: "VRE", drive: "Drive", web: "Web", video_seek: "VEED" };
   return map[source] ?? source;
+}
+
+// Declared script type → row glyph + hover label.
+function scriptKindGlyph(k: string | null): { glyph: string; label: string } {
+  switch (k) {
+    case "report": return { glyph: "📊", label: "report — renders HTML in the report pane" };
+    case "chat":   return { glyph: "💬", label: "chat — emits inline messages" };
+    case "job":    return { glyph: "⚙️", label: "job — side effects (data manipulation)" };
+    default:        return { glyph: "❔", label: "unclassified — will be typed on next run" };
+  }
 }
 
 // ─── icons ────────────────────────────────────────────────────────────────────
@@ -435,11 +454,32 @@ export default function WorkspacePanel({ backendOrigin, embedded, onClose, onOpe
 
   // ─── row renderers ────────────────────────────────────────────────────────
   function renderScriptRow(s: ScriptItem) {
+    const kindInfo = scriptKindGlyph(s.script_kind);
+    const writes = !!s.effects?.writes_external;
     return (
       <li key={s.slug} className="ws-row">
         <ScriptIcon />
         <StatusDot ok={s.last_ok} />
+        <span className="ws-kind-glyph" title={kindInfo.label} aria-label={kindInfo.label}>
+          {kindInfo.glyph}
+        </span>
         <span className="ws-row-name" title={s.title}>{s.title}</span>
+        {writes && (
+          <span
+            className="ws-badge ws-badge-writes"
+            title="Writes to Google Sheets — re-runs prompt for confirmation"
+            style={{ fontSize: 10, border: "1px solid currentColor", borderRadius: 3,
+                     padding: "0 3px", opacity: 0.8, whiteSpace: "nowrap" }}
+          >
+            ✍ sheets
+          </span>
+        )}
+        {s.drift && (
+          <span className="ws-badge ws-badge-drift" title={`Drift: ${s.drift}`}
+            style={{ fontSize: 11 }}>
+            ⚠
+          </span>
+        )}
         <span className="ws-row-meta">{fmtDate(s.last_run_at)}</span>
         {folders.length > 0 && (
           <div className="ws-move-wrap">

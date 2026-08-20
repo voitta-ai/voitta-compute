@@ -179,6 +179,75 @@ class SheetsClient:
 
 
 # ---------------------------------------------------------------------------
+# Recording / dry-run wrapper
+# ---------------------------------------------------------------------------
+
+
+def _synth_response(method: str, path: str, body: dict | None) -> dict:
+    """Shape-correct synthetic response for a dry-run write, so scripts
+    that parse the write response survive smoke testing. Path-sniffed:
+    batchUpdate / append / plain values PUT each get their real shape."""
+    rng = (body or {}).get("range") or ""
+    if ":batchUpdate" in path:
+        return {"spreadsheetId": path.split(":", 1)[0], "replies": [], "dryRun": True}
+    if ":append" in path:
+        return {
+            "spreadsheetId": path.split("/", 1)[0],
+            "updates": {
+                "updatedRange": rng, "updatedRows": 0,
+                "updatedColumns": 0, "updatedCells": 0,
+            },
+            "dryRun": True,
+        }
+    return {
+        "spreadsheetId": path.split("/", 1)[0],
+        "updatedRange": rng, "updatedRows": 0,
+        "updatedColumns": 0, "updatedCells": 0,
+        "dryRun": True,
+    }
+
+
+class RecordingSheetsClient:
+    """Wraps a real :class:`SheetsClient` (composition, NOT subclassing —
+    ``get_metadata`` internally calls ``self.get``, which under composition
+    stays on the inner client and records nothing, correctly).
+
+    * Reads (``get`` / ``get_metadata``) pass straight through.
+    * Writes (``put`` / ``post``) set ``effects["writes_external"] = True``
+      and, when ``dry_run``, return a shape-correct synthetic response
+      instead of hitting Google. Smoke tests always run dry — a script
+      must never perform an external write at define/edit time.
+    """
+
+    def __init__(self, inner: SheetsClient, effects: dict, dry_run: bool) -> None:
+        self._inner = inner
+        self._effects = effects
+        self._dry_run = dry_run
+
+    # -- reads: pass through ------------------------------------------------
+
+    def get(self, path: str, **params) -> dict:
+        return self._inner.get(path, **params)
+
+    def get_metadata(self, spreadsheet_id: str) -> dict:
+        return self._inner.get_metadata(spreadsheet_id)
+
+    # -- writes: record (+ stub when dry) ------------------------------------
+
+    def put(self, path: str, body: dict | None = None, **params) -> dict:
+        self._effects["writes_external"] = True
+        if self._dry_run:
+            return _synth_response("PUT", path, body)
+        return self._inner.put(path, body, **params)
+
+    def post(self, path: str, body: dict | None = None, **params) -> dict:
+        self._effects["writes_external"] = True
+        if self._dry_run:
+            return _synth_response("POST", path, body)
+        return self._inner.post(path, body, **params)
+
+
+# ---------------------------------------------------------------------------
 # Null guard
 # ---------------------------------------------------------------------------
 

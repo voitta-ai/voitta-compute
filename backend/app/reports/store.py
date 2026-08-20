@@ -54,6 +54,17 @@ class Meta:
     # detect.py sniffer can produce. ``None`` until then.
     last_kind: Optional[str] = None
     last_ok: Optional[bool] = None
+    # Declared contract: "report" (returns HTML) | "chat" (emits inline)
+    # | "job" (side effects are the point). None = unclassified (legacy
+    # script authored before typing existed). Set at define_script
+    # (explicit arg or inferred from the smoke run), re-declarable via
+    # edit_script.
+    kind: Optional[str] = None
+    # Observed side effects — STICKY UNION across runs (bits only ever
+    # turn on; the sole reset is an explicit kind re-declare on
+    # edit_script). Keys: renders_html, emits_inline, writes_external.
+    # writes_external gates run_script behind a confirm.
+    effects: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     # None when at root; folder name string when foldered.
     folder_name: Optional[str] = field(default=None)
@@ -275,6 +286,8 @@ def read_meta(slug: str, *, root: Path | None = None) -> Meta:
         last_run_at=data.get("last_run_at"),
         last_kind=data.get("last_kind"),
         last_ok=data.get("last_ok"),
+        kind=data.get("kind"),
+        effects=data.get("effects") if isinstance(data.get("effects"), dict) else {},
         extra={k: v for k, v in data.items() if k not in _META_FIELDS},
         folder_name=folder,
     )
@@ -288,6 +301,8 @@ _META_FIELDS = {
     "last_run_at",
     "last_kind",
     "last_ok",
+    "kind",
+    "effects",
 }
 
 

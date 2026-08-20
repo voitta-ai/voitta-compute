@@ -97,10 +97,19 @@ def _execute(code: str, ctx: ScriptContext) -> RunResult:
 def _make_sheets_client(
     loop: Optional[asyncio.AbstractEventLoop],
     google_account: Optional[str] = None,
+    *,
+    effects: Optional[dict] = None,
+    dry_run: bool = False,
 ) -> Any:
     """Return a SheetsClient bound to the script's pinned Google account
     (``google_account`` — an email captured when the script was saved),
     or a _NullSheetsClient stub that raises a NAMED error on use.
+
+    Real clients are wrapped in a RecordingSheetsClient: writes set
+    ``effects["writes_external"]`` and — when ``dry_run`` (smoke tests) —
+    are stubbed with shape-correct synthetic responses instead of hitting
+    Google. A script must never perform an external write at define/edit
+    time. Null stubs pass through UNwrapped so their named errors surface.
 
     Pin semantics are strict on purpose: a pinned account that is
     missing / disconnected / scope-less yields a hard error naming that
@@ -109,7 +118,16 @@ def _make_sheets_client(
     so a missing plugin never breaks script execution on non-Sheets pages."""
     try:
         from app.services import google_oauth
-        from voitta_sheets.client import SheetsClient, _NullSheetsClient
+        from voitta_sheets.client import (
+            RecordingSheetsClient,
+            SheetsClient,
+            _NullSheetsClient,
+        )
+
+        def _wrap(client: SheetsClient) -> Any:
+            return RecordingSheetsClient(
+                client, effects if effects is not None else {}, dry_run
+            )
 
         if google_account:
             try:
@@ -133,12 +151,12 @@ def _make_sheets_client(
                     f"{google_account!r} lacks the 'spreadsheets' scope. "
                     f"Reconnect it in Settings → Google to grant it."
                 )
-            return SheetsClient(loop=loop, account=google_account)
+            return _wrap(SheetsClient(loop=loop, account=google_account))
 
         # No pin (legacy script or nothing connected at save time):
         # the settings-default account, resolved at run time.
         if google_oauth.has_sheets_scope():
-            return SheetsClient(loop=loop)
+            return _wrap(SheetsClient(loop=loop))
         return _NullSheetsClient()
     except Exception:
         try:
@@ -166,7 +184,12 @@ def smoke_test(
     frame blocked the loop for good (no asyncio timeout can preempt it).
     """
     ctx = ScriptContext(slug=slug, host=host)
-    ctx.sheets = _make_sheets_client(None, google_account)
+    # Smoke tests ALWAYS dry-run external writes — a script must never
+    # touch Google at define/edit time. Effects land on ctx.effects so
+    # the caller can classify + persist them.
+    ctx.sheets = _make_sheets_client(
+        None, google_account, effects=ctx.effects, dry_run=True
+    )
     return _execute(code, ctx)
 
 
@@ -224,7 +247,9 @@ async def run(
     except RuntimeError:
         loop = None
     ctx = ScriptContext(slug=slug, args=dict(args or {}), host=host, _loop=loop)
-    ctx.sheets = _make_sheets_client(loop, google_account)
+    ctx.sheets = _make_sheets_client(
+        loop, google_account, effects=ctx.effects, dry_run=False
+    )
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(_execute, code, ctx),

@@ -232,9 +232,13 @@ echo "[build_app] staged code_sources_version.txt + gitmodules (no source copy)"
 BRIEFCASE="$VENV/bin/briefcase"
 
 echo "[build_app] briefcase update (or create on first run)…"
-if [ -d "$ROOT/build" ]; then
+# Test for the actual generated bundle, NOT just build/ — a build dir
+# whose briefcase scaffold was removed (post-clean state) makes `update`
+# fail with FileNotFoundError while the pipe masks the exit code.
+if [ -d "$ROOT/build/voitta-compute/macos/app/Voitta Compute.app" ]; then
   "$BRIEFCASE" update macOS app 2>&1 | grep -v "^$" | sed 's/^/  /'
 else
+  rm -rf "$ROOT/build/voitta-compute"
   "$BRIEFCASE" create macOS app 2>&1 | grep -v "^$" | sed 's/^/  /'
 fi
 

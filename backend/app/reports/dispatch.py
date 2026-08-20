@@ -134,9 +134,17 @@ async def run_and_dispatch(
         return DispatchResult(ok=False, status="error", error=f"script {slug!r} not found")
 
     code = store.read_code(slug)
+    meta = store.read_meta(slug)
     # The script's pinned Google account (email, captured at save time)
     # decides which account ctx.sheets acts as — reproducible re-runs.
-    google_account = store.read_meta(slug).extra.get("google_account")
+    google_account = meta.extra.get("google_account")
+    # Lazy legacy seed: a pre-typing script that has rendered HTML before
+    # is a report. (Chat/job can't be told apart retroactively — left
+    # unclassified until their first run under this code.)
+    declared_kind = meta.kind
+    if declared_kind is None and meta.last_kind == "html":
+        declared_kind = "report"
+
     run = await sandbox.run(
         slug, code, args=args, host=host, google_account=google_account,
     )
@@ -150,20 +158,50 @@ async def run_and_dispatch(
     assert run.ctx is not None
     in_chat = _cl_context_active()
 
+    # Observed effects — sticky union into meta (see script_typing).
+    from app.reports import script_typing
+
+    effects = script_typing.merge_effects(
+        meta.effects, script_typing.observed_effects(run.result, run.ctx)
+    )
+    kind_patch: dict[str, Any] = {"effects": effects}
+    if meta.kind is None:
+        # First run under typed code: stamp the classification.
+        kind_patch["kind"] = declared_kind or script_typing.infer_kind(
+            run.result, len(run.ctx.inline)
+        )
+
     inline_items = [{"kind": i.kind, "payload": i.payload} for i in run.ctx.inline]
 
     if in_chat:
         await emit_inline(run.ctx)
 
     if run.result is None:
-        store.update_meta(slug, last_ok=True, last_run_at=_now_iso(), last_kind=None)
+        if declared_kind == "report":
+            # A declared report that renders nothing is a FAILURE, not a
+            # silent "no-render" — the largest source of "ran fine,
+            # showed nothing" confusion.
+            store.update_meta(
+                slug, last_ok=False, last_run_at=_now_iso(), **kind_patch,
+            )
+            return DispatchResult(
+                ok=False, status="error", inline=inline_items or None,
+                error=(
+                    f"script {slug!r} is declared kind='report' but build(ctx) "
+                    "returned no HTML. Return an HTML string, or re-declare "
+                    "the script via edit_script(kind='chat'|'job')."
+                ),
+            )
+        store.update_meta(
+            slug, last_ok=True, last_run_at=_now_iso(), last_kind=None, **kind_patch,
+        )
         return DispatchResult(ok=True, status="no-render", inline=inline_items or None)
 
     render_id = uuid.uuid4().hex
     try:
         payload = render_html(run.result, slug=slug, render_id=render_id)
     except (TypeError, ValueError) as exc:
-        store.update_meta(slug, last_ok=False, last_run_at=_now_iso())
+        store.update_meta(slug, last_ok=False, last_run_at=_now_iso(), **kind_patch)
         return DispatchResult(
             ok=False, status="error", error=str(exc),
             errors=[{"message": str(exc), "detail": {
@@ -187,6 +225,7 @@ async def run_and_dispatch(
 
     store.update_meta(
         slug, last_ok=result.ok, last_run_at=_now_iso(), last_kind="html",
+        **kind_patch,
     )
     return result
 
