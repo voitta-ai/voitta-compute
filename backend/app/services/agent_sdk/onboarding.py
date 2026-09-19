@@ -99,7 +99,15 @@ async def handle_auth_error(
     store_token(token)
     probe = cl.Message(content="⏳ Validating your Claude token…")
     await probe.send()
-    if not await validate_token():
+    try:
+        verdict = await validate_token()
+    except Exception:
+        # Belt and braces: the probe owns its own failure modes, but an escaping
+        # exception here would strand the "⏳ Validating…" message and skip the
+        # resume below — the one outcome onboarding must never produce.
+        logger.exception("token probe raised; treating as inconclusive")
+        verdict = "inconclusive"
+    if verdict == "auth_failed":
         clear_token()
         probe.content = (
             "⚠️ That token didn't authenticate. It may be mistyped or expired — "
@@ -107,7 +115,16 @@ async def handle_auth_error(
         )
         await probe.update()
         return
-    probe.content = "✅ Claude subscription connected."
+    if verdict == "inconclusive":
+        # Keep the token: the probe reached no verdict (slow engine start, no
+        # result message), and a token that got this far is usually good. The
+        # resume below raises AgentSdkAuthError and re-prompts if it isn't.
+        probe.content = (
+            "⚠️ Couldn't confirm the token in time — saved it and carrying on. "
+            "If it turns out to be wrong you'll be asked for a new one."
+        )
+    else:
+        probe.content = "✅ Claude subscription connected."
     await probe.update()
 
     # Resume the original turn now that we're authenticated.

@@ -40,6 +40,10 @@ DOCS_DIR = Path(_os.environ.get("VOITTA_DOCS_DIR") or REPO_ROOT / "docs")
 PLUGINS_DIR = Path(_os.environ.get("VOITTA_PLUGINS_DIR") or REPO_ROOT / "plugins")
 LIBS_DIR = Path(_os.environ.get("VOITTA_LIBS_DIR") or REPO_ROOT / "lib-sources")
 RAG_DIR = Path(_os.environ.get("VOITTA_RAG_DIR") or REPO_ROOT / "rag")
+# Third-party plugin docs fetched at install time (see installer.sync_plugin_docs).
+PLUGIN_DOCS_DIR = Path(
+    _os.environ.get("VOITTA_PLUGIN_DOCS_DIR") or REPO_ROOT / "plugin-docs"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1032,19 @@ def assemble_docs_chunks() -> list[Chunk]:
             print(f"  {md.relative_to(base)}: {len(cs)} chunks")
     else:
         print("plugins: no plugin docs found (optional — skipping)")
+
+    # Third-party docs a plugin pulled in at install time. Kept outside
+    # plugins/ because the launcher re-seeds that tree on every start.
+    if PLUGIN_DOCS_DIR.is_dir():
+        fetched = sorted(p for p in PLUGIN_DOCS_DIR.rglob("*.md") if p.is_file())
+        if fetched:
+            n_plugins = len({p.relative_to(PLUGIN_DOCS_DIR).parts[0] for p in fetched})
+            print(
+                f"plugin-docs: {len(fetched)} markdown file(s) "
+                f"across {n_plugins} plugin(s)"
+            )
+            for md in fetched:
+                chunks.extend(chunk_prose(md, PLUGIN_DOCS_DIR))
     return chunks
 
 

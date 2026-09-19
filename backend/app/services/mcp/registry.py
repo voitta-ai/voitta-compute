@@ -63,6 +63,13 @@ class MCPServerDecl:
     # ``url_setting`` / ``url_template`` must be declared; an explicit
     # settings URL wins over the template when both resolve.
     url_template: str | None = None
+    # Fixed endpoint baked into the manifest, for connectors that talk to
+    # one vendor-hosted server rather than a per-instance deployment
+    # (e.g. Runpod's https://mcp.getrunpod.io/). Neither of the other two
+    # fits such a server: ``url_template`` requires ``{host}``, and
+    # ``url_setting`` would make the user type a URL that never varies.
+    # A user-set ``url_setting`` still wins, so it stays overridable.
+    url: str | None = None
     # Future: transport variants. Today only "streamable-http".
     transport: str = "streamable-http"
 
@@ -88,13 +95,18 @@ class MCPServerDecl:
             raise ValueError("mcp_servers entry missing required field 'id'")
         url_setting = str(raw.get("url_setting") or "").strip() or None
         url_template = str(raw.get("url_template") or "").strip() or None
-        if not url_setting and not url_template:
+        url_fixed = str(raw.get("url") or "").strip() or None
+        if not url_setting and not url_template and not url_fixed:
             raise ValueError(
-                f"mcp_servers[{cid}] needs 'url_setting' or 'url_template'"
+                f"mcp_servers[{cid}] needs 'url', 'url_setting' or 'url_template'"
             )
         if url_template and "{host}" not in url_template:
             raise ValueError(
                 f"mcp_servers[{cid}].url_template must contain '{{host}}'"
+            )
+        if url_fixed and "://" not in url_fixed:
+            raise ValueError(
+                f"mcp_servers[{cid}].url must be absolute (got {url_fixed!r})"
             )
         auth = raw.get("auth") or {}
         token_setting: str | None = None
@@ -134,6 +146,7 @@ class MCPServerDecl:
             host_patterns=host_patterns,
             token_map_setting=token_map_setting,
             url_template=url_template,
+            url=url_fixed,
             transport=transport,
         )
 
@@ -304,13 +317,16 @@ def _fill_template(template: str, host: str) -> str:
 def endpoint_for(conn: MCPConnector, host: str | None = None) -> str | None:
     """Resolve the connector's endpoint for a call originating on ``host``.
 
-    Precedence: explicit settings URL → template filled with the page
-    host → the URL the last successful refresh used. The last leg keeps
-    host-less callers working (the vre:// resolver, background jobs).
+    Precedence: explicit settings URL → manifest's fixed URL → template
+    filled with the page host → the URL the last successful refresh used.
+    The last leg keeps host-less callers working (the vre:// resolver,
+    background jobs).
     """
     explicit = _read_url(conn.decl)
     if explicit:
         return explicit
+    if conn.decl.url:
+        return conn.decl.url
     if conn.decl.url_template and host:
         return _fill_template(conn.decl.url_template, host)
     return conn.active_url
@@ -319,14 +335,17 @@ def endpoint_for(conn: MCPConnector, host: str | None = None) -> str | None:
 def _candidate_urls(decl: MCPServerDecl) -> list[str]:
     """Endpoints a refresh should try, in order.
 
-    Explicit settings URL first, then the template applied to each
-    activation host: manifest ``host_patterns`` (skipping wildcards)
-    followed by the user's extra hosts (Settings → Plugins).
+    Explicit settings URL first, then the manifest's fixed ``url``, then
+    the template applied to each activation host: manifest
+    ``host_patterns`` (skipping wildcards) followed by the user's extra
+    hosts (Settings → Plugins).
     """
     urls: list[str] = []
     explicit = _read_url(decl)
     if explicit:
         urls.append(explicit)
+    if decl.url and decl.url not in urls:
+        urls.append(decl.url)
     if decl.url_template:
         hosts = [p for p in decl.host_patterns if p and "*" not in p]
         try:

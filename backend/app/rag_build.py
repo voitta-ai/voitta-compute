@@ -79,8 +79,13 @@ def _docs_content_hash() -> str:
     Mirrors the file selection in ``assemble_docs_chunks()``:
     - all .md files under DOCS_DIR
     - all .md files under PLUGINS_DIR/<plugin>/docs/
+    - all .md files under PLUGIN_DOCS_DIR (fetched at install time)
+
+    The last one is what makes a freshly-cloned plugin docs repo trigger a
+    re-index: the hash changes, the stamp no longer matches, and build_all()
+    rebuilds the docs corpus on the launch that fetched it.
     """
-    from app.config import DOCS_DIR, PLUGINS_DIR
+    from app.config import DOCS_DIR, PLUGIN_DOCS_DIR, PLUGINS_DIR
 
     h = hashlib.sha256()
     pairs: list[tuple[str, Path]] = []
@@ -97,6 +102,11 @@ def _docs_content_hash() -> str:
                 for f in sorted(docs_dir.rglob("*.md")):
                     if f.is_file():
                         pairs.append((str(f.relative_to(PLUGINS_DIR.parent)), f))
+
+    if PLUGIN_DOCS_DIR.is_dir():
+        for f in sorted(PLUGIN_DOCS_DIR.rglob("*.md")):
+            if f.is_file():
+                pairs.append((str(f.relative_to(PLUGIN_DOCS_DIR.parent)), f))
 
     for rel, f in pairs:
         h.update(rel.encode())
@@ -173,16 +183,19 @@ def _run_build(corpus: str, progress_cb: ProgressCb) -> bool:
     import io
     import runpy
 
-    from app.config import PROJECT_ROOT, DOCS_DIR, PLUGINS_DIR, RAG_DIR
+    from app.config import (
+        PROJECT_ROOT, DOCS_DIR, PLUGIN_DOCS_DIR, PLUGINS_DIR, RAG_DIR,
+    )
 
     libs_dir = PROJECT_ROOT.parent / "lib-sources"
     script = _find_build_rag_script()
 
     os.environ.update({
-        "VOITTA_DOCS_DIR":    str(DOCS_DIR),
-        "VOITTA_PLUGINS_DIR": str(PLUGINS_DIR),
-        "VOITTA_LIBS_DIR":    str(libs_dir),
-        "VOITTA_RAG_DIR":     str(RAG_DIR),
+        "VOITTA_DOCS_DIR":        str(DOCS_DIR),
+        "VOITTA_PLUGINS_DIR":     str(PLUGINS_DIR),
+        "VOITTA_PLUGIN_DOCS_DIR": str(PLUGIN_DOCS_DIR),
+        "VOITTA_LIBS_DIR":        str(libs_dir),
+        "VOITTA_RAG_DIR":         str(RAG_DIR),
     })
 
     class _Capture(io.RawIOBase):

@@ -1409,6 +1409,17 @@ def main() -> None:
     if _bundle_fe.is_dir():
         os.environ.setdefault("VOITTA_FRONTEND_DIST", str(_bundle_fe))
 
+    # Recover the user's real PATH. Launched from Finder/Dock we inherit
+    # launchd's bare /usr/bin:/bin:/usr/sbin:/sbin — no login shell runs, so
+    # pyenv, Homebrew, nvm and ~/.local/bin are all invisible, and python3
+    # resolves to macOS's 3.9. Must run before the installer (it shells out to
+    # pip and git) and before anything caches a shutil.which() result.
+    try:
+        from app.shell_env import augment_path
+        augment_path()
+    except Exception:
+        log.exception("shell PATH augmentation raised")
+
     # Wipe userbase/ + rag/ when the app version has changed.
     try:
         from app.installer import ensure_fresh_deploy
@@ -1506,20 +1517,36 @@ def _run_first_time_setup(log: logging.Logger) -> None:
                 AppHelper.callAfter(__import__("rumps").quit_application)
                 return
 
-        # Phase 2 — Source libraries (shallow-clone submodules)
+        # Phase 2 — Source libraries (shallow-clone submodules) + plugin docs
         win.start_phase(2, "Cloning source libraries…")
-        from app.installer import clone_lib_sources, lib_sources_need_update
+        from app.installer import (
+            clone_lib_sources,
+            lib_sources_need_update,
+            sync_plugin_docs,
+        )
 
+        lib_failed = False
         if not lib_sources_need_update():
-            win.skip_phase(2, "Already up to date")
+            win.log("lib-sources: already up to date")
         else:
-            src_ok = clone_lib_sources(lambda msg: win.log(msg))
-            if src_ok:
-                win.finish_phase(2)
-            else:
+            if not clone_lib_sources(lambda msg: win.log(msg)):
                 import app.installer as _inst2
                 log.warning("lib-sources clone failed: %s", _inst2.last_failure_detail)
-                win.fail_phase(2, "Clone failed — RAG code corpus unavailable")
+                lib_failed = True
+
+        # Third-party docs declared by plugin manifests. Must run before the
+        # RAG phase: it is what makes freshly-fetched docs change the docs
+        # content hash, which is what un-skips the index build below.
+        try:
+            sync_plugin_docs(lambda msg: win.log(msg))
+        except Exception:
+            log.exception("plugin-docs sync raised")
+            win.log("plugin-docs: sync failed — continuing without them")
+
+        if lib_failed:
+            win.fail_phase(2, "Clone failed — RAG code corpus unavailable")
+        else:
+            win.finish_phase(2)
 
         # Phase 3 — RAG indexes
         win.start_phase(3, "Indexing documentation and source code…")

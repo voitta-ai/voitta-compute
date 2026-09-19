@@ -41,6 +41,7 @@ def _connector_to_dict(conn: MCPConnector) -> dict[str, Any]:
         "id": d.id,
         "url_setting": d.url_setting,
         "url_template": d.url_template,
+        "url": d.url,
         "token_setting": d.token_setting,
         "tool_prefix": d.tool_prefix,
         "status": conn.status,

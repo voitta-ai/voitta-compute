@@ -42,6 +42,9 @@ export interface PluginConnectorStatus {
   // page host; this is the probe/fallback endpoint.
   active_url?: string | null;
   url_template?: string | null;
+  // Fixed vendor endpoint baked into the manifest (no {host} to fill,
+  // nothing for the user to configure) — e.g. Runpod's hosted server.
+  url?: string | null;
   // Per-endpoint probe results (one per activation host for template
   // connectors) from the last refresh.
   endpoints?: ConnectorEndpointStatus[];

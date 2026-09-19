@@ -190,8 +190,9 @@ def _register_mcp_servers(plugin_name: str, host_patterns: list[str], manifest: 
             continue
         register_connector(decl)
         logger.info(
-            "plugin %s: registered MCP connector %r (url_setting=%s)",
-            plugin_name, decl.id, decl.url_setting,
+            "plugin %s: registered MCP connector %r (endpoint=%s)",
+            plugin_name, decl.id,
+            decl.url or decl.url_template or f"setting:{decl.url_setting}",
         )
 
 

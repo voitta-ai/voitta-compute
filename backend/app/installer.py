@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import importlib.util
 import io
 import json
 import os
@@ -28,7 +29,11 @@ from typing import Any, Callable
 
 # (import-name, pip-spec)
 _CORE_HEAVY_PACKAGES: list[tuple[str, str]] = [
-    ("fastmcp",    "fastmcp>=2.0"),
+    # Capped below 4.0: fastmcp 4.x requires a newer `mcp` than chainlit 2.11.1
+    # (installed right after) allows, so pip backtracks to mcp 1.30.0 — which
+    # lacks `AuthorizationCodeResult` and makes `fastmcp.Client` fail to import,
+    # killing the backend on first launch. Lift when chainlit's mcp pin catches up.
+    ("fastmcp",    "fastmcp>=2.0,<4"),
     ("chainlit",   "chainlit==2.11.1"),
     ("anthropic",  "anthropic>=0.39"),
     ("openai",     "openai>=1.50"),
@@ -356,6 +361,166 @@ def clone_lib_sources(progress_cb: "Callable[[str], None]") -> bool:
     return True
 
 
+def _load_plugin_manifests() -> "list[tuple[str, Path, dict]]":
+    """Return (plugin_name, plugin_dir, manifest) for every deployed plugin."""
+    import json as _json
+
+    from app.config import PLUGINS_DIR
+
+    out: list[tuple[str, Path, dict]] = []
+    if not PLUGINS_DIR.is_dir():
+        return out
+    for mf in sorted(PLUGINS_DIR.glob("**/manifest.json")):
+        try:
+            manifest = _json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        name = manifest.get("name") or mf.parent.name
+        out.append((str(name), mf.parent, manifest))
+    return out
+
+
+def _run_docs_transform(
+    plugin_dir: Path, spec: str, src: Path, dst: Path
+) -> int:
+    """Import ``spec`` ("module.py:function") from the plugin and run it.
+
+    The callable takes (src_dir, dst_dir) and returns the number of files
+    written. Transforms live with the plugin, so a plugin that ships docs in
+    some other source format brings its own converter rather than teaching
+    the installer about it.
+    """
+    import importlib.util
+
+    mod_name, _, fn_name = spec.partition(":")
+    fn_name = fn_name or "convert_tree"
+    mod_path = plugin_dir / mod_name
+    if not mod_path.is_file():
+        raise FileNotFoundError(f"transform module not found: {mod_path}")
+
+    ispec = importlib.util.spec_from_file_location(
+        f"_plugin_docs_transform_{plugin_dir.name}", mod_path
+    )
+    if ispec is None or ispec.loader is None:
+        raise ImportError(f"cannot load transform: {mod_path}")
+    module = importlib.util.module_from_spec(ispec)
+    ispec.loader.exec_module(module)
+    fn = getattr(module, fn_name, None)
+    if not callable(fn):
+        raise AttributeError(f"{mod_path}: no callable {fn_name!r}")
+    return int(fn(src, dst) or 0)
+
+
+def sync_plugin_docs(progress_cb: "Callable[[str], None]") -> bool:
+    """Fetch third-party docs declared by plugin manifests, at install time.
+
+    A plugin opts in with::
+
+        "docs_repo": {
+          "url": "https://github.com/runpod/docs.git",
+          "ref": "main",
+          "transform": "convert.py:convert_tree"
+        }
+
+    The checkout lands in ``plugin-docs-src/<plugin>/`` and the indexable
+    markdown in ``plugin-docs/<plugin>/`` — both siblings of plugins/, which
+    the launcher re-seeds on every start. ``transform`` is optional; without
+    it the repo's own .md files are copied across as-is.
+
+    Non-fatal by design: docs are an enhancement, so a failure here logs and
+    returns True rather than blocking the install. Returns False only if a
+    transform corrupts state badly enough that indexing should be skipped.
+    """
+    import shutil as _shutil
+    import subprocess as _sp
+    import traceback
+
+    from app.config import PLUGIN_DOCS_DIR, PLUGIN_DOCS_SRC_DIR
+
+    wanted = [
+        (name, pdir, m["docs_repo"])
+        for name, pdir, m in _load_plugin_manifests()
+        if isinstance(m.get("docs_repo"), dict) and m["docs_repo"].get("url")
+    ]
+    if not wanted:
+        return True
+
+    if not _can_reach_pypi():
+        progress_cb("plugin-docs: offline — skipping (docs will index next launch)")
+        return True
+
+    for name, plugin_dir, spec in wanted:
+        url = str(spec["url"])
+        ref = str(spec.get("ref") or "HEAD")
+        src = PLUGIN_DOCS_SRC_DIR / name
+        dst = PLUGIN_DOCS_DIR / name
+        head_file = src / ".git" / "HEAD"
+
+        try:
+            if head_file.exists():
+                progress_cb(f"plugin-docs: updating {name}…")
+                _sp.run(["git", "fetch", "--depth=1", "origin", ref],
+                        cwd=src, check=True, capture_output=True)
+                _sp.run(["git", "checkout", "--force", "FETCH_HEAD"],
+                        cwd=src, check=True, capture_output=True)
+            else:
+                progress_cb(f"plugin-docs: cloning {name} from {url}…")
+                if src.exists():
+                    _shutil.rmtree(src, ignore_errors=True)
+                src.parent.mkdir(parents=True, exist_ok=True)
+                _sp.run(
+                    ["git", "clone", "--depth=1", "--no-tags",
+                     "--branch", ref, url, str(src)],
+                    check=True, capture_output=True,
+                )
+        except _sp.CalledProcessError as exc:
+            err = (exc.stderr.decode()[:300] if exc.stderr else str(exc)).strip()
+            progress_cb(f"plugin-docs: {name} fetch failed — {err}")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            progress_cb(f"plugin-docs: {name} fetch failed — {exc}")
+            continue
+
+        # Rebuild the converted tree from scratch so pages deleted upstream
+        # don't linger and keep getting indexed.
+        tmp = dst.with_name(dst.name + ".new")
+        _shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
+            transform = spec.get("transform")
+            if transform:
+                n = _run_docs_transform(plugin_dir, str(transform), src, tmp)
+            else:
+                n = 0
+                for md in sorted(src.rglob("*.md")):
+                    rel = md.relative_to(src)
+                    out = tmp / rel
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    _shutil.copy2(md, out)
+                    n += 1
+        except Exception as exc:  # noqa: BLE001
+            _shutil.rmtree(tmp, ignore_errors=True)
+            progress_cb(f"plugin-docs: {name} transform failed — {exc}")
+            for ln in traceback.format_exc().splitlines()[-4:]:
+                if ln.strip():
+                    progress_cb(f"plugin-docs:   {ln.strip()}")
+            continue
+
+        if not n:
+            _shutil.rmtree(tmp, ignore_errors=True)
+            progress_cb(f"plugin-docs: {name} produced no markdown — skipping")
+            continue
+
+        # Swap in only after a successful build, so a mid-transform crash
+        # leaves the previous good tree in place.
+        _shutil.rmtree(dst, ignore_errors=True)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp.replace(dst)
+        progress_cb(f"plugin-docs: {name} ready ({n} markdown file(s))")
+
+    return True
+
+
 def force_rebuild_stamps() -> None:
     """Wipe install + RAG stamps so the next setup run does everything fresh.
 
@@ -413,6 +578,45 @@ def _tail_lines(text: str, n: int) -> str:
     return "\n".join(lines[-n:])
 
 
+def _is_phantom(mod) -> bool:
+    """True if ``mod`` is a ``sys.modules`` leftover whose files are deleted.
+
+    ``ensure_fresh_deploy`` wipes ``userbase/`` on a version bump, but anything
+    imported earlier in this same process survives in ``sys.modules``. A plain
+    ``importlib.import_module`` probe then returns that phantom and the package
+    is skipped as "already installed" — it never gets reinstalled, and the
+    first import of a *submodule* (which was never cached) fails at runtime.
+    That is a real incident: an early import of ``agent_sdk.config`` pulled in
+    chainlit, the wipe deleted it, the installer skipped it, and uvicorn died
+    on ``chainlit.server``.
+
+    Only a module with a ``__file__`` that no longer exists counts. Namespace
+    packages legitimately have ``__file__ is None``, so those are checked
+    through ``__path__`` instead and otherwise trusted.
+    """
+    f = getattr(mod, "__file__", None)
+    if f:
+        return not Path(f).exists()
+    paths = list(getattr(mod, "__path__", None) or [])
+    return bool(paths) and not any(Path(p).exists() for p in paths)
+
+
+def _resolvable(import_name: str) -> bool:
+    """Cheap check that ``import_name`` still exists, without executing it.
+
+    Used to audit the state file's claims. ``find_spec`` consults the loaded
+    module when there is one, so a phantom is screened out the same way as in
+    the probe below.
+    """
+    try:
+        mod = sys.modules.get(import_name)
+        if mod is not None:
+            return not _is_phantom(mod)
+        return importlib.util.find_spec(import_name) is not None
+    except (ImportError, AttributeError, ValueError):
+        return False
+
+
 def install_all(progress_cb: ProgressCb) -> bool:
     """Install every package whose import probe fails and isn't in the state file.
 
@@ -425,10 +629,17 @@ def install_all(progress_cb: ProgressCb) -> bool:
     state = installed_set()
     todo: list[tuple[str, str]] = []
     for import_name, spec in HEAVY_PACKAGES:
-        if import_name in state:
+        # The state file is a fast path, not the truth: a run that recorded a
+        # package as installed and then lost it (an interrupted wipe, a
+        # phantom slipping through) would otherwise skip it on every launch
+        # forever, with no way back short of a version bump.
+        if import_name in state and _resolvable(import_name):
             continue
+        state.discard(import_name)
         try:
-            importlib.import_module(import_name)
+            mod = importlib.import_module(import_name)
+            if _is_phantom(mod):
+                raise ImportError(f"{import_name} cached but files are gone")
             state.add(import_name)
             continue
         except ImportError:

@@ -1,0 +1,39 @@
+{
+  "name": "runpod",
+  "version": "0.3.0",
+  "description": "Runpod cloud GPU platform — indexes the official Runpod documentation into the RAG docs corpus, and exposes the full Runpod REST API (Pods, Serverless endpoints, clusters, volumes, templates, billing) via Runpod's hosted MCP server. UNRESTRICTED: the agent can create, start, stop and delete infrastructure, which incurs charges.",
+  "host_patterns": ["runpod.io", "console.runpod.io", "docs.runpod.io"],
+  "docs_dir": "docs",
+  "docs_repo": {
+    "url": "https://github.com/runpod/docs.git",
+    "ref": "main",
+    "transform": "convert.py:convert_tree"
+  },
+
+  "mcp_servers": [
+    {
+      "id": "api",
+      "url": "https://mcp.getrunpod.io/",
+      "auth": {
+        "type": "bearer",
+        "token_setting": "plugins.runpod.api.api_key"
+      },
+      "tool_prefix": "runpod_",
+      "transport": "streamable-http"
+    }
+  ],
+
+  "settings_schema": {
+    "title": "Runpod · API",
+    "fields": [
+      {
+        "key": "plugins.runpod.api.api_key",
+        "type": "secret",
+        "label": "Runpod API key",
+        "placeholder": "rpa_…",
+        "help": "Mint one at console.runpod.io → Settings → API Keys. The full API surface is exposed, so this key's permissions decide what the agent can do: a read/write key lets it create, start, stop and delete pods, endpoints and clusters — operations that cost money. Use a read-only key to keep it to reporting. The key is sent as a bearer token to Runpod's hosted MCP server (https://mcp.getrunpod.io/) and never leaves this machine otherwise."
+      }
+    ],
+    "status_probe": "mcp:api"
+  }
+}

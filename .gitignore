@@ -18,6 +18,12 @@ frontend/dist/
 # package from git.
 /rag/
 
+# Third-party docs a plugin declares via manifest `docs_repo`. Fetched and
+# converted at install time (see installer.sync_plugin_docs), so both trees
+# are rebuildable and neither belongs in git.
+/plugin-docs/
+/plugin-docs-src/
+
 # Chainlit session/translations cache
 .chainlit/
 .files/
