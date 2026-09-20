@@ -242,6 +242,23 @@ else
   "$BRIEFCASE" create macOS app 2>&1 | grep -v "^$" | sed 's/^/  /'
 fi
 
+# `briefcase update` refreshes the code but NOT Info.plist — only `create`
+# writes that. So every plain build following an earlier one (a --release, say)
+# ships a bundle whose Finder-visible version is the OLD one, while _version.py
+# inside it is current. Harmless to the wipe logic (which reads _version.py) but
+# it makes the app lie about which build it is. Stamp it here, BEFORE
+# `briefcase build` — that step ad-hoc signs the bundle, so editing Info.plist
+# afterwards would invalidate the signature it just applied.
+_PLIST="$ROOT/build/voitta-compute/macos/app/Voitta Compute.app/Contents/Info.plist"
+if [ -f "$_PLIST" ]; then
+  for _key in CFBundleShortVersionString CFBundleVersion; do
+    /usr/libexec/PlistBuddy -c "Set :$_key $VERSION" "$_PLIST" 2>/dev/null \
+      || /usr/libexec/PlistBuddy -c "Add :$_key string $VERSION" "$_PLIST" 2>/dev/null \
+      || true
+  done
+  echo "[build_app] Info.plist stamped: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$_PLIST" 2>/dev/null)"
+fi
+
 echo "[build_app] briefcase build…"
 "$BRIEFCASE" build macOS app 2>&1 | grep -v "^$" | sed 's/^/  /'
 

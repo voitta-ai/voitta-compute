@@ -8,9 +8,10 @@ and reopen it. The new/continued session id is captured from the terminal
 and thread for the next turn.
 
 Tools are the registry suite, bridged in-process (see :mod:`.bridge`), plus a
-small allowlist of engine built-ins (``Bash``) gated by ``can_use_tool``; the
-rest of the engine's native filesystem/web tools are denied, so Voitta's tools
-stay the primary surface.
+small allowlist of engine built-ins — ``Bash``, ``Read``, ``WebSearch`` and
+``WebFetch`` (see ``_ALLOWED_ENGINE_TOOLS``). The engine's mutating native tools
+(``Write``/``Edit``/``NotebookEdit``/…) are denied by ``can_use_tool``, so the
+Voitta tools stay the primary surface for anything that changes state.
 """
 
 from __future__ import annotations
@@ -183,13 +184,32 @@ async def user_prompt_stream(
 # refusal. Read is enabled because it is the engine's only way to VIEW images —
 # chat attachments are persisted to the project's uploads tree and handed over
 # as file paths (see chainlit_app._persist_attachments_for_engine); with Bash
-# already allowed, Read grants no filesystem access Bash didn't have. The rest
-# of the engine's native tools (write/edit/web/…) stay denied, so the Voitta
-# MCP tools remain the primary surface.
-_ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash", "Read")
+# already allowed, Read grants no filesystem access Bash didn't have.
+# WebSearch and WebFetch are enabled because the engine reaches for them
+# constantly — they are how it checks current facts and reads a page the user
+# pasted — and the alternative is the model being told mid-turn that a tool it
+# can plainly see is "not available in this assistant". Note WebFetch feeds
+# fetched page text to the model, so a hostile page is untrusted input; the
+# engine's own prompting treats it that way. The remaining native tools
+# (Write/Edit/NotebookEdit/…) stay denied, so the Voitta MCP tools remain the
+# primary surface for anything that mutates state.
+#
+# Everything listed here is spliced into ``allowed_tools``, which AUTO-APPROVES
+# it: the SDK never consults ``can_use_tool`` for a tool allowed outright (it
+# warns about this — CanUseToolShadowedWarning). So this tuple is the real
+# grant, and the matching branch in ``can_use_tool`` is belt-and-braces for
+# callers that narrow ``allowed_tools``.
+_ALLOWED_ENGINE_TOOLS: tuple[str, ...] = ("Bash", "Read", "WebSearch", "WebFetch")
 
-# Engine tools that are allowed but never pass through unattended — each one is
-# intercepted in ``can_use_tool`` and satisfied by our own UI flow.
+# Engine tools we mean to intercept and satisfy through our own chat UI.
+#
+# CAVEAT: the interception does not currently fire. AskUserQuestion is
+# special-cased inside the engine and never reaches ``can_use_tool`` — verified
+# both with and without it in ``allowed_tools``, the callback is not invoked
+# either way, and the engine instead reports "the question prompt didn't go
+# through" because headless mode has no TUI to render it in. Gating it needs a
+# PreToolUse hook rather than ``can_use_tool``; until then ``_ask_user_question``
+# below is unreachable.
 _INTERACTIVE_ENGINE_TOOLS: tuple[str, ...] = ("AskUserQuestion",)
 
 
