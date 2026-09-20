@@ -1,18 +1,17 @@
-"""Which engine built-in tools the subscription brain grants.
+"""Which engine built-in tools the subscription brain grants and withholds.
 
-Two mechanisms decide this, and only one of them is live per tool:
+Three mechanisms, and only some are real boundaries:
 
-* ``allowed_tools`` — ``_build_options`` splices ``_ALLOWED_ENGINE_TOOLS`` in,
-  and an entry there AUTO-APPROVES the tool: the SDK never consults
-  ``can_use_tool`` for it (it warns as much — ``CanUseToolShadowedWarning``).
-  This is the real grant, so it is tested through ``_build_options``, not by
-  poking the callback.
-* ``can_use_tool`` — only reached for tools *absent* from ``allowed_tools``,
-  where it supplies the denial. That path is live: the "<tool> is not available
-  in this assistant" message users saw for WebSearch/WebFetch came from it.
+* ``allowed_tools`` — ``_ALLOWED_ENGINE_TOOLS`` spliced in by ``_build_options``.
+  An entry here AUTO-APPROVES: the SDK never consults ``can_use_tool`` for it.
+* ``disallowed_tools`` — ``_DISALLOWED_ENGINE_TOOLS``. The only gate that binds
+  subagents: a subagent's tool calls never reach ``can_use_tool`` at all, and
+  with the callback as the sole denial a subagent wrote a file to disk
+  unobserved (verified live). This is the security boundary.
+* ``can_use_tool`` — reached only for tools in neither list. Second layer.
 
-Getting the split wrong either strands a turn (the model is told a tool it can
-plainly see is unavailable) or hands it a mutating tool we meant to withhold.
+Getting the split wrong either strands a turn (the model is told a visible tool
+is unavailable) or hands a mutating tool to a context we cannot see.
 """
 
 from __future__ import annotations
@@ -22,17 +21,15 @@ import pytest
 from app.services.agent_sdk import runtime
 from app.services.agent_sdk.runtime import (
     _ALLOWED_ENGINE_TOOLS,
-    _INTERACTIVE_ENGINE_TOOLS,
+    _DISALLOWED_ENGINE_TOOLS,
     _build_options,
     _make_can_use_tool,
 )
 from app.tools.registry import ToolCtx
 
-WITHHELD = ["Write", "Edit", "NotebookEdit", "MultiEdit"]
-
-
-def _can_use():
-    return _make_can_use_tool(cl_ctx=None, wait_state={}, deadline=[None])
+MUTATING = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+PUBLISHING = ["Artifact"]
+FAN_OUT = ["Agent", "Task", "Workflow", "ScheduleWakeup"]
 
 
 def _options(host: str | None = None):
@@ -41,77 +38,78 @@ def _options(host: str | None = None):
         model=None,
         resume=None,
         ctx=ToolCtx(session_id="s", host=host, email="t@example.com", extras={}),
-        can_use_tool=_can_use(),
+        can_use_tool=_make_can_use_tool(),
     )
 
 
-# -- the grant tuple ----------------------------------------------------------
+# -- the grant ----------------------------------------------------------------
 
 @pytest.mark.parametrize("tool", ["Bash", "Read", "WebSearch", "WebFetch"])
 def test_tool_is_granted(tool: str) -> None:
     assert tool in _ALLOWED_ENGINE_TOOLS
-
-
-@pytest.mark.parametrize("tool", WITHHELD)
-def test_mutating_engine_tools_stay_withheld(tool: str) -> None:
-    """State changes go through the Voitta MCP surface, not the engine's own."""
-    assert tool not in _ALLOWED_ENGINE_TOOLS
-
-
-# -- the live mechanism: what reaches ClaudeAgentOptions ----------------------
-
-@pytest.mark.parametrize("tool", ["Bash", "Read", "WebSearch", "WebFetch"])
-def test_granted_tools_reach_allowed_tools(tool: str) -> None:
-    """The auto-approval path — this is what actually enables the tool.
-
-    Asserting on the callback instead would test shadowed code: the SDK skips
-    ``can_use_tool`` for anything listed here.
-    """
     assert tool in _options().allowed_tools
 
 
-@pytest.mark.parametrize("tool", WITHHELD)
-def test_withheld_tools_never_reach_allowed_tools(tool: str) -> None:
-    assert tool not in _options().allowed_tools
+def test_no_tool_is_both_allowed_and_disallowed() -> None:
+    assert not set(_ALLOWED_ENGINE_TOOLS) & set(_DISALLOWED_ENGINE_TOOLS)
 
 
-def test_voitta_mcp_tools_are_still_exposed() -> None:
-    """The engine grant must not crowd out the plugin surface.
+# -- the boundary -------------------------------------------------------------
 
-    Regression guard: ``allowed_tools`` is one flat list, so a mistake in the
-    splice could drop the ``mcp__voitta__*`` entries and silently reduce the
-    assistant to engine built-ins.
-    """
+@pytest.mark.parametrize("tool", MUTATING + PUBLISHING + FAN_OUT)
+def test_tool_is_structurally_disallowed(tool: str) -> None:
+    """``disallowed_tools`` is what subagents obey; the callback is not."""
+    assert tool in _DISALLOWED_ENGINE_TOOLS
+    opts = _options()
+    assert tool in opts.disallowed_tools
+    assert tool not in opts.allowed_tools
+
+
+def test_fan_out_is_closed_so_only_the_main_agent_can_ask() -> None:
+    """The ask tool cannot tell a subagent from the main agent (no caller
+    identity reaches a tool handler). The guarantee comes from there being no
+    subagent to ask from — every fan-out tool must be withheld, not just one:
+    when ``Agent`` alone was blocked the model reached for ``Workflow``."""
+    for tool in FAN_OUT:
+        assert tool in _options().disallowed_tools
+
+
+def test_voitta_mcp_tools_are_still_exposed_and_include_ask() -> None:
     import app.tools.load  # noqa: F401  — side-effect: registers built-in tools
 
     allowed = list(_options().allowed_tools)
-    mcp = [t for t in allowed if t.startswith(f"mcp__{runtime.MCP_SERVER_NAME}__")]
+    prefix = f"mcp__{runtime.MCP_SERVER_NAME}__"
+    mcp = [t for t in allowed if t.startswith(prefix)]
     assert len(mcp) >= 10, f"expected the Voitta tool surface, got {len(mcp)}"
+    assert f"{prefix}ask_user_question" in mcp
     engine = [t for t in allowed if not t.startswith("mcp__")]
-    assert set(engine) == set(_ALLOWED_ENGINE_TOOLS) | set(_INTERACTIVE_ENGINE_TOOLS)
+    assert set(engine) == set(_ALLOWED_ENGINE_TOOLS)
 
 
-# -- the live callback path: denial of anything not granted -------------------
+def test_engine_ask_user_question_is_blocked_in_favour_of_ours() -> None:
+    """The engine's own AskUserQuestion is an interactive-TUI tool that does
+    nothing headless. The model reaches for that name first; blocking it
+    structurally sends it straight to the Voitta tool."""
+    opts = _options()
+    assert "AskUserQuestion" not in opts.allowed_tools
+    assert "AskUserQuestion" in opts.disallowed_tools
+
+
+# -- the second layer ---------------------------------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool", WITHHELD)
-async def test_callback_denies_withheld_tools(tool: str) -> None:
-    """Reached because these are absent from ``allowed_tools``.
-
-    The message is the one users hit for WebSearch/WebFetch before they were
-    granted, which is what proves this branch executes in production.
-    """
+@pytest.mark.parametrize("tool", MUTATING + PUBLISHING + FAN_OUT + ["SomeFutureTool"])
+async def test_callback_denies_anything_not_granted(tool: str) -> None:
     from claude_agent_sdk import PermissionResultDeny
 
-    res = await _can_use()(tool, {}, None)
+    res = await _make_can_use_tool()(tool, {}, None)
     assert isinstance(res, PermissionResultDeny)
     assert res.message == f"{tool} is not available in this assistant"
 
 
 @pytest.mark.asyncio
 async def test_callback_allows_bridged_voitta_tools() -> None:
-    """Fallback for callers that narrow ``allowed_tools``; matched by prefix."""
     from claude_agent_sdk import PermissionResultAllow
 
     name = f"mcp__{runtime.MCP_SERVER_NAME}__rag_query"
-    assert isinstance(await _can_use()(name, {}, None), PermissionResultAllow)
+    assert isinstance(await _make_can_use_tool()(name, {}, None), PermissionResultAllow)

@@ -86,6 +86,10 @@ def _result_to_mcp_content(payload: Any) -> list[dict[str, Any]]:
 def _make_tool(spec, ctx: ToolCtx):
     """Wrap one registry ToolSpec as an SDK MCP tool bound to ``ctx``."""
 
+    # Per-spec override for tools that legitimately outlive the default —
+    # ask_user_question waits on a human, and 150 s would cut the wait short.
+    limit_s = spec.timeout_s if spec.timeout_s else _TOOL_TIMEOUT_S
+
     async def _handler(args: dict[str, Any]) -> dict[str, Any]:
         # The SDK passes the validated input dict; dispatch through the same
         # registry path the main loop uses so behaviour is identical. Bounded by
@@ -94,14 +98,14 @@ def _make_tool(spec, ctx: ToolCtx):
         try:
             res = await asyncio.wait_for(
                 registry.dispatch(spec.name, dict(args or {}), ctx),
-                timeout=_TOOL_TIMEOUT_S,
+                timeout=limit_s,
             )
         except (TimeoutError, asyncio.TimeoutError):
-            logger.warning("agent_sdk tool %s timed out after %.0fs", spec.name, _TOOL_TIMEOUT_S)
+            logger.warning("agent_sdk tool %s timed out after %.0fs", spec.name, limit_s)
             err = {
                 "kind": "timeout",
                 "message": (
-                    f"tool {spec.name!r} exceeded {int(_TOOL_TIMEOUT_S)}s and was "
+                    f"tool {spec.name!r} exceeded {int(limit_s)}s and was "
                     "aborted — try a smaller request or a different approach"
                 ),
             }

@@ -90,6 +90,11 @@ class ToolSpec:
     # ``plugins.<name>.extra_hosts``) widen this spec's host gate
     # without touching ``host_pattern``.
     plugin_name: str | None = None
+    # Wall-clock cap for one call, in seconds, for dispatch paths that bound
+    # tools (the agent-sdk bridge does; the API-key loop does not). ``None``
+    # means the path's default. Set it on tools that legitimately outlive
+    # that default — ask_user_question waits on a human, not a computation.
+    timeout_s: float | None = None
 
 
 class ToolRegistry:
