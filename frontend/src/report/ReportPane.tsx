@@ -1,8 +1,9 @@
 // Report pane chrome: dynamic tab bar, body, collapse handle.
 // Positioning owned by Drawer's root data-layout; CSS in report.css.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRecoilState, useSetRecoilState } from "recoil";
+import type { ActiveReport } from "./types";
 import {
   activeTabState,
   reportCollapsedState,
@@ -32,6 +33,7 @@ export default function ReportPane({
   const [collapsed, setCollapsed] = useRecoilState(reportCollapsedState);
   const [loading] = useRecoilState(reportLoadingState);
   const setCollapsedOnly = useSetRecoilState(reportCollapsedState);
+  const [downloading, setDownloading] = useState(false);
 
   const hasTabs = workspaceOpen || reports.length > 0;
 
@@ -60,6 +62,50 @@ export default function ReportPane({
     if (workspaceOpen) return "workspace";
     return reports[0]?.render_id ?? "workspace";
   })();
+
+  // The report behind the focused tab, if the focused tab is a report.
+  const activeReport = reports.find((r) => r.render_id === validTab) ?? null;
+
+  // Fetch the offline zip with the auth cookie and hand it to the browser
+  // as a download. A plain <a href download> cannot carry credentials on
+  // the bridge, and the export can legitimately 404 once the backend's
+  // render cache has evicted the body — surface that message rather than
+  // failing silently.
+  async function downloadReport(r: ActiveReport) {
+    setDownloading(true);
+    try {
+      const qs = new URLSearchParams({ id: r.name, render_id: r.render_id });
+      if (r.title) qs.set("title", r.title);
+      const resp = await fetch(`${backendOrigin}/api/html-report/export?${qs}`, {
+        credentials: "include",
+      });
+      if (!resp.ok) {
+        let detail = `${resp.status} ${resp.statusText}`;
+        try { detail = (await resp.json()).detail ?? detail; } catch { /* keep status */ }
+        window.alert(`Couldn't export this report: ${detail}`);
+        return;
+      }
+      const disposition = resp.headers.get("content-disposition") ?? "";
+      const filename =
+        /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${r.name}-${r.render_id.slice(0, 8)}.zip`;
+      const url = URL.createObjectURL(await resp.blob());
+      try {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        // Give the click a tick to start before the URL goes away.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    } catch (err) {
+      window.alert(`Couldn't export this report: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   function closeTab(id: string) {
     if (id === "workspace") {
@@ -145,6 +191,22 @@ export default function ReportPane({
             ))}
           </nav>
           <span className="spacer" />
+          {activeReport && (
+            <button
+              className="hbtn report-download"
+              type="button"
+              title="Download as self-contained web page (.zip)"
+              aria-label={`Download ${activeReport.title ?? activeReport.name}`}
+              disabled={downloading}
+              onClick={() => void downloadReport(activeReport)}
+            >
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12v2h10v-2"
+                  fill="none" stroke="currentColor" strokeWidth="1.5"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
           <button
             className="hbtn"
             type="button"
