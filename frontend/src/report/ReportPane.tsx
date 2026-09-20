@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRecoilState, useSetRecoilState } from "recoil";
 import type { ActiveReport } from "./types";
+import { reportLabel } from "./labels";
 import {
   activeTabState,
   reportCollapsedState,
@@ -37,6 +38,21 @@ export default function ReportPane({
 
   const hasTabs = workspaceOpen || reports.length > 0;
 
+  // Derive a safe active tab: if current activeTab is stale/null, fall back.
+  // Computed ahead of the hooks below: a hook that named `validTab` in a
+  // dependency array while it was still declared further down would throw on
+  // the temporal dead zone. Only the existing effect's *callback* body read
+  // it late enough to be safe, which is a sharp edge to leave lying around.
+  const validTab: string = (() => {
+    if (activeTab === "workspace" && workspaceOpen) return "workspace";
+    if (activeTab && reports.some((r) => r.render_id === activeTab)) return activeTab;
+    if (workspaceOpen) return "workspace";
+    return reports[0]?.render_id ?? "workspace";
+  })();
+
+  // The report behind the focused tab, if the focused tab is a report.
+  const activeReport = reports.find((r) => r.render_id === validTab) ?? null;
+
   // Report active tab to backend so the LLM can query it
   const lastReportedTab = useRef<string | null>(null);
   useEffect(() => {
@@ -53,18 +69,15 @@ export default function ReportPane({
     }).catch(() => {/* ignore */});
   });
 
+  // Once the strip is crowded enough to scroll, selecting a tab that sits
+  // off-screen has to bring it into view or the selection looks like a no-op.
+  const activeTabRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [validTab, reports.length, workspaceOpen]);
+
+  // Every hook has run by here, so the early return is safe.
   if (!hasTabs) return null;
-
-  // Derive a safe active tab: if current activeTab is stale/null, fall back.
-  const validTab: string = (() => {
-    if (activeTab === "workspace" && workspaceOpen) return "workspace";
-    if (activeTab && reports.some((r) => r.render_id === activeTab)) return activeTab;
-    if (workspaceOpen) return "workspace";
-    return reports[0]?.render_id ?? "workspace";
-  })();
-
-  // The report behind the focused tab, if the focused tab is a report.
-  const activeReport = reports.find((r) => r.render_id === validTab) ?? null;
 
   // Fetch the offline zip with the auth cookie and hand it to the browser
   // as a download. A plain <a href download> cannot carry credentials on
@@ -75,7 +88,10 @@ export default function ReportPane({
     setDownloading(true);
     try {
       const qs = new URLSearchParams({ id: r.name, render_id: r.render_id });
-      if (r.title) qs.set("title", r.title);
+      // Decoded, so the zip's README carries "Supply & Cost" rather than the
+      // raw "Supply &amp; Cost" the script happened to escape.
+      const label = reportLabel(r);
+      if (label) qs.set("title", label);
       const resp = await fetch(`${backendOrigin}/api/html-report/export?${qs}`, {
         credentials: "include",
       });
@@ -168,11 +184,12 @@ export default function ReportPane({
             {reports.map((r) => (
               <button
                 key={r.render_id}
+                ref={validTab === r.render_id ? activeTabRef : undefined}
                 className={`report-tab${validTab === r.render_id ? " active" : ""}`}
                 type="button"
                 onClick={() => setActiveTab(r.render_id)}
                 aria-selected={validTab === r.render_id}
-                title={r.title ?? r.name}
+                title={reportLabel(r)}
               >
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
                   <rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
@@ -180,11 +197,11 @@ export default function ReportPane({
                   <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                   <line x1="5" y1="10.5" x2="8.5" y2="10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                <span className="tab-label">{r.title ?? r.name}</span>
+                <span className="tab-label">{reportLabel(r)}</span>
                 <span
                   className="tab-close"
                   role="button"
-                  aria-label={`Close ${r.title ?? r.name}`}
+                  aria-label={`Close ${reportLabel(r)}`}
                   onClick={(e) => { e.stopPropagation(); closeTab(r.render_id); }}
                 >×</span>
               </button>
@@ -196,7 +213,7 @@ export default function ReportPane({
               className="hbtn report-download"
               type="button"
               title="Download as self-contained web page (.zip)"
-              aria-label={`Download ${activeReport.title ?? activeReport.name}`}
+              aria-label={`Download ${reportLabel(activeReport)}`}
               disabled={downloading}
               onClick={() => void downloadReport(activeReport)}
             >
